@@ -1,0 +1,675 @@
+{
+  "version": 8,
+  "countries": {
+    "vo": "凛霜部族·沃尔加德",
+    "ig": "烬海共和国·伊格尼斯",
+    "sy": "翡翠森庭·西尔瓦尼斯",
+    "za": "沙渊苏丹国·扎哈拉",
+    "au": "圣辉教国·奥雷利亚",
+    "ma": "潮歌联邦·玛瑞纳",
+    "du": "暮铁公国·杜尔卡姆",
+    "ta": "雷鸣高原·塔尔贡",
+    "as": "星穹议会·阿斯特拉",
+    "ze": "长风王国·泽菲尔",
+    "no": "永夜王朝·诺克提斯",
+    "ch": "时砂遗国·克罗尼亚",
+    "so": "梦沼联邦·索姆尼娅",
+    "ab": "深渊王座·阿比斯",
+    "mo": "骸骨圣所·莫尔塔",
+    "dr": "龙脊盟约·德拉科尼亚",
+    "ci": "灰誓团·辛德拉"
+  },
+  "pools": {
+    "default": {
+      "name": "基础卡池",
+      "cats": [
+        {
+          "id": "cin01",
+          "name": "斩",
+          "rarity": "normal",
+          "country": "ci",
+          "job_path": [
+            "武者学徒",
+            "战士",
+            "天诛剑士"
+          ],
+          "trait_desc": "晴·平原",
+          "intro": "入团前的名字已被剑刃抹去，只剩\"斩\"。出剑极快，话也极少，是团里最安静的执行者。",
+          "trait_affinity": {
+            "weather": "晴",
+            "terrain": "平原"
+          }
+        },
+        {
+          "id": "cin02",
+          "name": "壁",
+          "rarity": "normal",
+          "country": "ci",
+          "job_path": [
+            "武者学徒",
+            "战士",
+            "天垣卫士"
+          ],
+          "trait_desc": "雪·山地",
+          "intro": "本名无人知晓，\"壁\"是他守过的最后一道城。沉默寡言，站在他身后便觉心安。",
+          "trait_affinity": {
+            "weather": "雪",
+            "terrain": "山地"
+          }
+        },
+        {
+          "id": "cin03",
+          "name": "悍",
+          "rarity": "normal",
+          "country": "ci",
+          "job_path": [
+            "武者学徒",
+            "战士",
+            "天罡斗士"
+          ],
+          "trait_desc": "雷暴·古战场",
+          "intro": "战场上吼得最响的那个，\"悍\"字由此而来。性格暴烈，对同伴却格外护短。",
+          "trait_affinity": {
+            "weather": "雷暴",
+            "terrain": "古战场"
+          }
+        },
+        {
+          "id": "cin04",
+          "name": "翼",
+          "rarity": "normal",
+          "country": "ci",
+          "job_path": [
+            "武者学徒",
+            "骑士",
+            "天空骑士"
+          ],
+          "trait_desc": "大风·天空",
+          "intro": "据说曾是某国王子，加入灰誓团后只留下\"翼\"这个代号。向往自由，最讨厌被束缚。",
+          "trait_affinity": {
+            "weather": "大风",
+            "terrain": "天空"
+          }
+        },
+        {
+          "id": "cin05",
+          "name": "骥",
+          "rarity": "normal",
+          "country": "ci",
+          "job_path": [
+            "武者学徒",
+            "骑士",
+            "铁蹄骑士"
+          ],
+          "trait_desc": "晴·平原",
+          "intro": "战马是他唯一的伙伴，\"骥\"既是马名也是他的代号。沉稳可靠，从不丢下战友。",
+          "trait_affinity": {
+            "weather": "晴",
+            "terrain": "平原"
+          }
+        },
+        {
+          "id": "cin06",
+          "name": "翎",
+          "rarity": "normal",
+          "country": "ci",
+          "job_path": [
+            "武者学徒",
+            "弓箭手",
+            "弓骑士"
+          ],
+          "trait_desc": "阴·森林",
+          "intro": "箭无虚发，\"翎\"取自他射出的第一支箭羽。孤傲冷静，习惯独自行动。",
+          "trait_affinity": {
+            "weather": "阴",
+            "terrain": "森林"
+          }
+        },
+        {
+          "id": "cin07",
+          "name": "霄",
+          "rarity": "normal",
+          "country": "ci",
+          "job_path": [
+            "武者学徒",
+            "弓箭手",
+            "破云猎手"
+          ],
+          "trait_desc": "大风·山地",
+          "intro": "能在云层之上追踪猎物，\"霄\"是他的猎场。敏锐多疑，从不相信天上掉馅饼。",
+          "trait_affinity": {
+            "weather": "大风",
+            "terrain": "山地"
+          }
+        },
+        {
+          "id": "cin08",
+          "name": "影",
+          "rarity": "normal",
+          "country": "ci",
+          "job_path": [
+            "武者学徒",
+            "弓箭手",
+            "穿林猎手"
+          ],
+          "trait_desc": "雾·森林",
+          "intro": "穿梭林间无声无息，\"影\"是猎物最后看到的东西。内向寡言，对森林了如指掌。",
+          "trait_affinity": {
+            "weather": "雾",
+            "terrain": "森林"
+          }
+        },
+        {
+          "id": "cin09",
+          "name": "祈",
+          "rarity": "normal",
+          "country": "ci",
+          "job_path": [
+            "法师学徒",
+            "光法师",
+            "圣光祭司"
+          ],
+          "trait_desc": "圣光降临·神殿",
+          "intro": "入团时立誓不再用本名，\"祈\"是他每日的祷告。温柔慈悲，坚信光不会放弃任何人。",
+          "trait_affinity": {
+            "weather": "圣光降临",
+            "terrain": "神殿"
+          }
+        },
+        {
+          "id": "cin10",
+          "name": "辉",
+          "rarity": "normal",
+          "country": "ci",
+          "job_path": [
+            "法师学徒",
+            "光法师",
+            "圣光裁决者"
+          ],
+          "trait_desc": "晴·神殿",
+          "intro": "以光为刃审判罪恶，\"辉\"是他挥剑时的模样。刚正不阿，眼里揉不得沙子。",
+          "trait_affinity": {
+            "weather": "晴",
+            "terrain": "神殿"
+          }
+        },
+        {
+          "id": "cin11",
+          "name": "冥",
+          "rarity": "normal",
+          "country": "ci",
+          "job_path": [
+            "法师学徒",
+            "暗法师",
+            "死灵法师"
+          ],
+          "trait_desc": "血月·诅咒之地",
+          "intro": "与亡者对话太久，活人的名字反而忘了，\"冥\"成了唯一的称呼。阴冷孤僻，却从不伤害无辜。",
+          "trait_affinity": {
+            "weather": "血月",
+            "terrain": "诅咒之地"
+          }
+        },
+        {
+          "id": "cin12",
+          "name": "咒",
+          "rarity": "normal",
+          "country": "ci",
+          "job_path": [
+            "法师学徒",
+            "暗法师",
+            "暗蚀法师"
+          ],
+          "trait_desc": "月蚀·诅咒之地",
+          "intro": "被黑暗侵蚀后只剩\"咒\"这个代号。刻薄毒舌，内心却比谁都在意同伴。",
+          "trait_affinity": {
+            "weather": "月蚀",
+            "terrain": "诅咒之地"
+          }
+        },
+        {
+          "id": "cin13",
+          "name": "瘴",
+          "rarity": "normal",
+          "country": "ci",
+          "job_path": [
+            "法师学徒",
+            "暗法师",
+            "疫源法师"
+          ],
+          "trait_desc": "雾·沼泽",
+          "intro": "所过之处疫病横行，\"瘴\"是世人对他的恐惧。看似冷漠，实则背负着沉重的诅咒。",
+          "trait_affinity": {
+            "weather": "雾",
+            "terrain": "沼泽"
+          }
+        },
+        {
+          "id": "cin14",
+          "name": "漪",
+          "rarity": "normal",
+          "country": "ci",
+          "job_path": [
+            "法师学徒",
+            "理法师",
+            "沧澜术士"
+          ],
+          "trait_desc": "雨·水域",
+          "intro": "掌控潮汐的术士，\"漪\"是他心湖泛起的第一丝波纹。随性散漫，关键时刻却最为可靠。",
+          "trait_affinity": {
+            "weather": "雨",
+            "terrain": "水域"
+          }
+        },
+        {
+          "id": "cin15",
+          "name": "烬",
+          "rarity": "normal",
+          "country": "ci",
+          "job_path": [
+            "法师学徒",
+            "理法师",
+            "炽焰术士"
+          ],
+          "trait_desc": "酷暑·火山",
+          "intro": "一把火烧尽了过去，\"烬\"是重生的余灰。暴躁冲动，对认定的事绝不回头。",
+          "trait_affinity": {
+            "weather": "酷暑",
+            "terrain": "火山"
+          }
+        },
+        {
+          "id": "cin16",
+          "name": "翠",
+          "rarity": "normal",
+          "country": "ci",
+          "job_path": [
+            "法师学徒",
+            "理法师",
+            "森灵术士"
+          ],
+          "trait_desc": "雨·森林",
+          "intro": "与森林精灵签订契约，\"翠\"是他守护的颜色。温和亲近自然，对伐木者零容忍。",
+          "trait_affinity": {
+            "weather": "雨",
+            "terrain": "森林"
+          }
+        },
+        {
+          "id": "cin17",
+          "name": "械",
+          "rarity": "normal",
+          "country": "ci",
+          "job_path": [
+            "工匠学徒",
+            "技师",
+            "机枢卫"
+          ],
+          "trait_desc": "阴·遗迹",
+          "intro": "满身都是机械改造，\"械\"是他对自己的称呼。理性至上，用数据衡量一切。",
+          "trait_affinity": {
+            "weather": "阴",
+            "terrain": "遗迹"
+          }
+        },
+        {
+          "id": "cin18",
+          "name": "炮",
+          "rarity": "normal",
+          "country": "ci",
+          "job_path": [
+            "工匠学徒",
+            "铸匠",
+            "城垣卫"
+          ],
+          "trait_desc": "阴·山地",
+          "intro": "守过的城墙比走过的路还多，\"炮\"是他最得意的发明。豪爽开朗，最爱喝酒吹牛。",
+          "trait_affinity": {
+            "weather": "阴",
+            "terrain": "山地"
+          }
+        },
+        {
+          "id": "cin19",
+          "name": "巡",
+          "rarity": "normal",
+          "country": "ci",
+          "job_path": [
+            "工匠学徒",
+            "技师",
+            "天翼卫"
+          ],
+          "trait_desc": "大风·天空",
+          "intro": "终日在天际巡逻，\"巡\"是他存在的意义。开朗健谈，最喜欢给后辈讲巡逻见闻。",
+          "trait_affinity": {
+            "weather": "大风",
+            "terrain": "天空"
+          }
+        },
+        {
+          "id": "cin20",
+          "name": "轰",
+          "rarity": "normal",
+          "country": "ci",
+          "job_path": [
+            "工匠学徒",
+            "炼金师",
+            "爆破鬼手"
+          ],
+          "trait_desc": "雷暴·洞窟",
+          "intro": "炸掉的东西比记得的名字还多，\"轰\"是他的招牌。疯癫随性，把爆炸当艺术。",
+          "trait_affinity": {
+            "weather": "雷暴",
+            "terrain": "洞窟"
+          }
+        },
+        {
+          "id": "cin21",
+          "name": "春",
+          "rarity": "normal",
+          "country": "ci",
+          "job_path": [
+            "工匠学徒",
+            "炼金师",
+            "灵药圣手"
+          ],
+          "trait_desc": "雨·森林",
+          "intro": "能让枯木逢春，\"春\"是病人对他的感恩。温和耐心，视救人为天职。",
+          "trait_affinity": {
+            "weather": "雨",
+            "terrain": "森林"
+          }
+        },
+        {
+          "id": "cin22",
+          "name": "锋",
+          "rarity": "normal",
+          "country": "ci",
+          "job_path": [
+            "工匠学徒",
+            "铸匠",
+            "神兵宗师"
+          ],
+          "trait_desc": "晴·古战场",
+          "intro": "铸过的每把剑都有名字，自己却只剩\"锋\"。精益求精，对兵器近乎偏执。",
+          "trait_affinity": {
+            "weather": "晴",
+            "terrain": "古战场"
+          }
+        },
+        {
+          "id": "cin23",
+          "name": "护",
+          "rarity": "normal",
+          "country": "ci",
+          "job_path": [
+            "工匠学徒",
+            "铸匠",
+            "鳞甲宗师"
+          ],
+          "trait_desc": "雪·山地",
+          "intro": "亲手为同伴锻造铠甲，\"护\"是他的信念。沉稳内敛，用行动代替言语。",
+          "trait_affinity": {
+            "weather": "雪",
+            "terrain": "山地"
+          }
+        },
+        {
+          "id": "cin24",
+          "name": "铭",
+          "rarity": "normal",
+          "country": "ci",
+          "job_path": [
+            "工匠学徒",
+            "铸匠",
+            "符文宗师"
+          ],
+          "trait_desc": "星陨·遗迹",
+          "intro": "在每片甲胄上刻下守护符文，\"铭\"是他留下的印记。严谨细致，信奉细节决定生死。",
+          "trait_affinity": {
+            "weather": "星陨",
+            "terrain": "遗迹"
+          }
+        },
+        {
+          "id": "cie1",
+          "name": "赤木茂喵",
+          "rarity": "epic",
+          "country": "ci",
+          "job_path": [
+            "武者学徒",
+            "战士",
+            "天罡斗士"
+          ],
+          "trait_desc": "雷暴·古战场",
+          "intro": "曾在赌桌之上以冷血与恐惧闻名的雀鬼，加入灰誓团后化名\"赤木茂\"。牌局即战场，他从不信运气，只信手中的剑与自己的直觉。",
+          "trait_affinity": {
+            "weather": "雷暴",
+            "terrain": "古战场"
+          }
+        },
+        {
+          "id": "aue1",
+          "name": "一姬喵",
+          "rarity": "epic",
+          "country": "au",
+          "job_path": [
+            "工匠学徒",
+            "铸匠",
+            "神兵宗师"
+          ],
+          "trait_desc": "星陨·神殿",
+          "intro": "魂天神社的巫女，虽长着猫耳却坚称自己是人类，\"一姬\"是她在圣辉教国的代号。最爱吃饭和午睡，敲起铁锤来却比谁都快，锻造的兵器总带着一股温暖的气息。",
+          "trait_affinity": {
+            "weather": "星陨",
+            "terrain": "神殿"
+          }
+        },
+        {
+          "id": "aue2",
+          "name": "八木唯喵",
+          "rarity": "epic",
+          "country": "au",
+          "job_path": [
+            "武者学徒",
+            "弓箭手",
+            "破云猎手"
+          ],
+          "trait_desc": "大风·山地",
+          "intro": "智商180的天才猎手，\"八木唯\"的箭矢从不偏离计算轨迹。因无法理解他人情感而被疏远，来到圣辉教国后才慢慢开始改变——虽然至今仍是个味痴。",
+          "trait_affinity": {
+            "weather": "大风",
+            "terrain": "山地"
+          }
+        },
+        {
+          "id": "aue3",
+          "name": "宫永咲喵",
+          "rarity": "epic",
+          "country": "au",
+          "job_path": [
+            "法师学徒",
+            "理法师",
+            "沧澜术士"
+          ],
+          "trait_desc": "雨·水域",
+          "intro": "脸上永远挂着平静笑容的术士，\"宫永咲\"的牌局从不偏不倚，如潮水般精准。看似温和，一旦认真，岭上之花便能淹没一切对手。",
+          "trait_affinity": {
+            "weather": "雨",
+            "terrain": "水域"
+          }
+        },
+        {
+          "id": "aur1",
+          "name": "宫永照喵",
+          "rarity": "rare",
+          "country": "au",
+          "job_path": [
+            "法师学徒",
+            "理法师",
+            "炽焰术士"
+          ],
+          "trait_desc": "酷暑·火山",
+          "intro": "被誉为全国第一的炽焰术士，\"宫永照\"之名如烈日般灼目。以雷霆万钧之势碾压一切阻碍，绝不允许任何人玷污圣辉的荣光。",
+          "trait_affinity": {
+            "weather": "酷暑",
+            "terrain": "火山"
+          }
+        },
+        {
+          "id": "aur2",
+          "name": "福路美穗子喵",
+          "rarity": "rare",
+          "country": "au",
+          "job_path": [
+            "法师学徒",
+            "光法师",
+            "圣光祭司"
+          ],
+          "trait_desc": "圣光降临·神殿",
+          "intro": "圣辉教国最温柔的祭司，\"福路美穗子\"的圣光能治愈一切伤痛。异色的双眼在觉醒时会绽放神异的光辉，为守护同伴甘愿燃尽自身。",
+          "trait_affinity": {
+            "weather": "圣光降临",
+            "terrain": "神殿"
+          }
+        },
+        {
+          "id": "cir1",
+          "name": "鹫巢岩喵",
+          "rarity": "rare",
+          "country": "ci",
+          "job_path": [
+            "法师学徒",
+            "暗法师",
+            "暗蚀法师"
+          ],
+          "trait_desc": "月蚀·诅咒之地",
+          "intro": "老朽之名早已随鲜血沉入牌河，\"鹫巢岩\"是对手最后的梦魇。残酷无情的暗蚀法师，以恐惧为食粮，却唯独对真正的强者怀有敬意。",
+          "trait_affinity": {
+            "weather": "月蚀",
+            "terrain": "诅咒之地"
+          }
+        },
+        {
+          "id": "aur3",
+          "name": "莱恩喵",
+          "rarity": "rare",
+          "country": "au",
+          "job_path": [
+            "工匠学徒",
+            "炼金师",
+            "爆破鬼手"
+          ],
+          "trait_desc": "雷暴·洞窟",
+          "intro": "巡回马戏团\"灵魂\"的天才魔术师，\"莱恩\"是他在圣辉教国的艺名。看似粘人可爱，却总在意想不到的时机炸出最绚烂的烟火，把爆破当成一场华丽的魔术秀。",
+          "trait_affinity": {
+            "weather": "雷暴",
+            "terrain": "洞窟"
+          }
+        },
+        {
+          "id": "aur4",
+          "name": "森川绫子喵",
+          "rarity": "rare",
+          "country": "au",
+          "job_path": [
+            "法师学徒",
+            "暗法师",
+            "死灵法师"
+          ],
+          "trait_desc": "血月·诅咒之地",
+          "intro": "左手封印着堕天使\"玛斯缇玛\"的死灵法师，\"森川绫子\"为此踏上旅途。痴迷心灵现象的中二少女，看似阴沉怕生，实则温柔寂寞，最怕把不幸带给珍视之人。",
+          "trait_affinity": {
+            "weather": "血月",
+            "terrain": "诅咒之地"
+          }
+        },
+        {
+          "id": "cir2",
+          "name": "天贵史喵",
+          "rarity": "rare",
+          "country": "ci",
+          "job_path": [
+            "武者学徒",
+            "骑士",
+            "铁蹄骑士"
+          ],
+          "trait_desc": "晴·平原",
+          "intro": "曾与赤木茂同处一个时代的雀士，\"天贵史\"之名代表着绝不认输的铁蹄。即便落后一万六千点，他也敢放弃四暗刻选择立直，硬是从悬崖边把命运拽了回来。加入灰誓团后，这份韧性化作了冲锋时最锋利的马蹄。",
+          "trait_affinity": {
+            "weather": "晴",
+            "terrain": "平原"
+          }
+        },
+        {
+          "id": "aur5",
+          "name": "原村和喵",
+          "rarity": "rare",
+          "country": "au",
+          "job_path": [
+            "工匠学徒",
+            "技师",
+            "机枢卫"
+          ],
+          "trait_desc": "阴·遗迹",
+          "intro": "以数据和逻辑行事的机枢卫，\"原村和\"从不相信虚无的运气。她的机械大脑能在瞬间算出最优解，是圣辉教国最冷静的战术核心。",
+          "trait_affinity": {
+            "weather": "阴",
+            "terrain": "遗迹"
+          }
+        },
+        {
+          "id": "aur6",
+          "name": "竹井久喵",
+          "rarity": "rare",
+          "country": "au",
+          "job_path": [
+            "武者学徒",
+            "战士",
+            "天诛剑士"
+          ],
+          "trait_desc": "晴·平原",
+          "intro": "圣辉教国的剑士队长，\"竹井久\"的剑法飘忽不定，令人难以捉摸。总能在最关键的时刻做出最出人意料的决断，是队伍的灵魂支柱。",
+          "trait_affinity": {
+            "weather": "晴",
+            "terrain": "平原"
+          }
+        },
+        {
+          "id": "aul1",
+          "name": "优衣喵",
+          "rarity": "legend",
+          "country": "au",
+          "job_path": [
+            "法师学徒",
+            "光法师",
+            "圣光祭司"
+          ],
+          "trait_desc": "圣光降临·神殿",
+          "intro": "圣辉教国的传奇祭司，\"优衣\"之名即是圣光的化身。传说她的祈愿能让枯骨重生，是教国最珍贵的守护者。",
+          "trait_affinity": {
+            "weather": "圣光降临",
+            "terrain": "神殿"
+          }
+        },
+        {
+          "id": "aul2",
+          "name": "hasfin喵",
+          "rarity": "legend",
+          "country": "au",
+          "job_path": [
+            "法师学徒",
+            "光法师",
+            "圣光裁决者"
+          ],
+          "trait_desc": "极光·神殿",
+          "intro": "行走于圣光与暗影之间的裁决者，\"hasfin\"是圣辉教国最神秘的存在。他的圣剑既能照亮黑暗，也能审判罪人，无人知晓他真正的来历。",
+          "trait_affinity": {
+            "weather": "极光",
+            "terrain": "神殿"
+          }
+        }
+      ]
+    }
+  }
+}

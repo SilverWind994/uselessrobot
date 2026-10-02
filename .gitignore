@@ -1,0 +1,43 @@
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+venv/
+.venv/
+env/
+
+# ===== IDE / 编辑器 / 系统杂项 =====
+.trae/
+.vscode/
+.idea/
+**/.ipynb_checkpoints/
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# ===== 私密配置（API 密钥 / 数据库密码 / 个人 QQ 号）=====
+# 本机真实配置，提交请使用 config.example.py 模板
+newbot/config_local.py
+
+# QQ 授权名单（真实 QQ 号；程序在缺失时会自动生成空文件）
+**/users_ids_re.txt
+**/groups_ids_re.txt
+
+# ===== newbot 运行时数据 =====
+# 用户/群游戏存档（文件名为真实 QQ 号）
+newbot/assets/jsonFile/*
+!newbot/assets/jsonFile/.gitkeep
+# TTS 等运行输出
+newbot/assets/output/*
+!newbot/assets/output/.gitkeep
+# 卡片合成缓存
+newbot/assets/cat_expedition/data/cache/*
+!newbot/assets/cat_expedition/data/cache/.gitkeep
+# 猫猫远征队：玩家存档与全局远征状态（cat_pool.json / expedition_acts.json 是静态配置，保留）
+newbot/assets/cat_expedition/players.json
+newbot/assets/cat_expedition/expedition.json
+
+# ===== 老代码归档（archive/mybot）中的运行时数据 =====
+archive/mybot/jsonFile/*
+!archive/mybot/jsonFile/.gitkeep

@@ -1,0 +1,8 @@
+fastapi>=0.115.0
+uvicorn>=0.31.1
+psycopg2-binary>=2.9.9
+requests>=2.31.0
+openai>=1.0.0
+numpy>=1.26.4
+soundfile>=0.12.1
+Pillow>=10.3.0

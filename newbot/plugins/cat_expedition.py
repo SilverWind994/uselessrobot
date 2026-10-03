@@ -140,7 +140,7 @@ class CatExpeditionPlugin:
             description="猫猫远征队·查看远征队基础属性"
         )
         router.register(
-            ["远征", "expedition", ".expedition"],
+            ["远征", "喵远征", "expedition", ".expedition"],
             self.cmd_expedition,
             description="猫猫远征队·每日远征Boss"
         )
@@ -156,7 +156,7 @@ class CatExpeditionPlugin:
             description="猫猫远征队·科研"
         )
         router.register(
-            ["喵喵图鉴", "catpedia", ".catpedia"],
+            ["喵图鉴", "catpedia", ".catpedia"],
             self.cmd_catpedia,
             description="猫猫远征队·国家/喵喵图鉴与详情"
         )
@@ -680,12 +680,21 @@ class CatExpeditionPlugin:
             f"Boss「{stage_cfg['boss_name']}」被击败了！",
         ]
 
-        # 发放通关奖励
-        player = self._get_player(ctx.user_id)
-        player["fish"] += stage_cfg["reward_fish"]
-        player["eye_stones"] = player.get("eye_stones", 0) + stage_cfg["reward_eye"]
-        self._update_player(ctx.user_id, player)
-        lines.append(f"通关奖励：🐟{stage_cfg['reward_fish']} 💎{stage_cfg['reward_eye']}")
+        # 发放通关奖励（所有参与本关讨伐的玩家）
+        participants = []
+        seen_qq = set()
+        for entry in exp.get("damage_log", []):
+            if entry["qq"] not in seen_qq:
+                seen_qq.add(entry["qq"])
+                participants.append(entry["qq"])
+        for qq in participants:
+            p = self._peek_player(int(qq))
+            if p is None:
+                continue
+            p["fish"] += stage_cfg["reward_fish"]
+            p["eye_stones"] = p.get("eye_stones", 0) + stage_cfg["reward_eye"]
+            self._update_player(int(qq), p)
+        lines.append(f"通关奖励（全员 {len(participants)} 人）：🐟{stage_cfg['reward_fish']} 💎{stage_cfg['reward_eye']}")
 
         # 发放 top3 奖励
         damage_log = exp.get("damage_log", [])

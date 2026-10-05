@@ -37,6 +37,9 @@ newbot/assets/cat_expedition/data/cache/*
 # 猫猫远征队：玩家存档与全局远征状态（cat_pool.json / expedition_acts.json 是静态配置，保留）
 newbot/assets/cat_expedition/players.json
 newbot/assets/cat_expedition/expedition.json
+# 猫猫立绘（用户本地维护，自行上传，不纳入版本库）
+newbot/assets/cat_expedition/cats/*
+!newbot/assets/cat_expedition/cats/.gitkeep
 
 # ===== 老代码归档（archive/mybot）中的运行时数据 =====
 archive/mybot/jsonFile/*

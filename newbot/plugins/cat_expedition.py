@@ -70,16 +70,19 @@ class CatExpeditionPlugin:
     def __init__(self, sender: MessageSender):
         self._sender = sender
         self._countries = {}
-        self._pool = self._load_pool()
+        self._pools = {}          # 全部卡池 key -> pool dict
+        self._pool = []           # 默认全量卡池（用于图鉴/兑换查询）
+        self._pool, self._pools = self._load_pool()
 
     # ==================== 数据加载 ====================
 
-    def _load_pool(self) -> List[dict]:
-        """加载卡池与国家表"""
+    def _load_pool(self):
+        """加载卡池与国家表。返回 (默认全量卡池, 全部卡池dict)"""
         data = _load_json(Config.CAT_POOL_PATH)
         self._countries = data.get("countries", {})
-        pool = data.get("pools", {}).get("default", {})
-        return pool.get("cats", [])
+        pools = data.get("pools", {})
+        default = pools.get("default", {})
+        return default.get("cats", []), pools
 
     def _load_players(self) -> dict:
         """加载所有玩家存档"""
@@ -127,7 +130,7 @@ class CatExpeditionPlugin:
         router.register(
             ["抽喵喵", "catsummon", ".catsummon"],
             self.cmd_summon,
-            description="猫猫远征队·抽卡"
+            description="猫猫远征队·抽卡（需指定卡池，输入「全」抽全部）"
         )
         router.register(
             ["兑换喵", "catredeem", ".catredeem"],
@@ -159,6 +162,11 @@ class CatExpeditionPlugin:
             ["喵图鉴", "catpedia", ".catpedia"],
             self.cmd_catpedia,
             description="猫猫远征队·国家/喵喵图鉴与详情"
+        )
+        router.register(
+            ["喵卡池", "catpool", ".catpool"],
+            self.cmd_pool,
+            description="猫猫远征队·查看卡池与介绍"
         )
         router.register(
             ["喵地图", "catmap", ".catmap"],
@@ -224,16 +232,38 @@ class CatExpeditionPlugin:
 
     # ==================== 抽喵 ====================
 
+    @staticmethod
+    def _summon_usage() -> str:
+        return ("请指定卡池！\n"
+                "用法：抽喵 [数量] <卡池名>   例：抽喵 3 方桌骑士\n"
+                "输入「全」可从全部卡池抽取：例 抽喵 10 全\n"
+                "发送「喵卡池」查看所有卡池与介绍")
+
     def cmd_summon(self, ctx: CommandContext) -> None:
         args = ctx.get_args().strip()
+        tokens = args.split() if args else []
+        if not tokens:
+            self._sender.reply(ctx, self._summon_usage())
+            return
+
         count = 1
-        if args:
-            try:
-                count = int(args)
-                if count < 1:
-                    raise ValueError
-            except ValueError:
-                self._sender.reply(ctx, "用法：抽喵 [数量]  例：抽喵 3")
+        pool_name = tokens[0]
+        if tokens[0].isdigit():
+            count = int(tokens[0])
+            if count < 1:
+                self._sender.reply(ctx, "数量至少为 1 喵~")
+                return
+            if len(tokens) < 2:
+                self._sender.reply(ctx, self._summon_usage())
+                return
+            pool_name = tokens[1]
+
+        if pool_name in ("全", "全部", "all"):
+            pool_key = None  # 全部卡池：从全量卡池抽取
+        else:
+            pool_key = self._resolve_pool(pool_name)
+            if pool_key is None:
+                self._sender.reply(ctx, f"没找到卡池「{pool_name}」。\n{self._summon_usage()}")
                 return
 
         player = self._get_player(ctx.user_id)
@@ -246,7 +276,7 @@ class CatExpeditionPlugin:
             )
             return
 
-        results = self._do_summon(player, count)
+        results = self._do_summon(player, count, pool_key)
         player["fish"] -= total_cost
         # 每次抽卡获得猫眼石
         player["eye_stones"] = player.get("eye_stones", 0) + count * Config.CAT_EYE_STONE_PER_SUMMON
@@ -274,14 +304,79 @@ class CatExpeditionPlugin:
         lines.append(f"\n当前余额：{player['fish']} 鱼干 | 猫眼石：{player['eye_stones']}")
         self._sender.reply(ctx, "\n".join(lines))
 
-    def _do_summon(self, player: dict, count: int) -> List[dict]:
-        """核心抽卡逻辑，返回每只的抽卡结果"""
+    # ==================== 卡池查询 ====================
+
+    def cmd_pool(self, ctx: CommandContext) -> None:
+        """查看所有卡池或指定卡池详情"""
+        args = ctx.get_args().strip()
+        if not args:
+            lines = ["【喵喵卡池】"]
+            for key, pool in self._pools.items():
+                if key == "default":
+                    continue
+                cats = pool.get("cats", [])
+                legend = [c["name"] for c in cats if c["rarity"] == "legend"]
+                desc = pool.get("desc", "")
+                line = f"  · {pool.get('name', key)}（{len(cats)}张）"
+                if legend:
+                    line += f"  传说：{'、'.join(legend)}"
+                lines.append(line)
+                if desc:
+                    lines.append(f"      {desc}")
+            lines.append("")
+            lines.append("用法：喵卡池 <卡池名>  查看该卡池全部喵喵")
+            lines.append("抽卡必须指定卡池：抽喵 3 方桌骑士；抽喵 10 全 为全部卡池")
+            self._sender.reply(ctx, "\n".join(lines))
+            return
+
+        pool_key = self._resolve_pool(args)
+        if pool_key is None:
+            self._sender.reply(ctx, f"没找到卡池「{args}」，可用「喵卡池」查看全部卡池")
+            return
+
+        pool = self._pools[pool_key]
+        cats = pool.get("cats", [])
+        lines = [f"【{pool.get('name', pool_key)}】"]
+        desc = pool.get("desc")
+        if desc:
+            lines.append(desc)
+        lines.append(f"共 {len(cats)} 张喵喵：")
+        order = ["legend", "epic", "rare", "normal"]
+        for r in order:
+            rc = [c for c in cats if c["rarity"] == r]
+            if not rc:
+                continue
+            rname = Config.CAT_RARITY_NAMES.get(r, r)
+            lines.append(f"—— {rname}（{len(rc)}）——")
+            for c in rc:
+                lines.append(f"  · {c['name']}")
+        self._sender.reply(ctx, "\n".join(lines))
+
+    def _do_summon(self, player: dict, count: int, pool_key: Optional[str] = None) -> List[dict]:
+        """核心抽卡逻辑，返回每只的抽卡结果。
+        pool_key=None 表示全部卡池（全量池抽取，即「全」）；
+        指定 pool_key 时，稀有度 rare 及以上的卡只从该卡池中抽取，
+        普通卡始终从全量卡池抽取，卡池缺少某稀有度时回退全量池。"""
         results = []
-        pool_by_rarity = self._group_by_rarity()
+        default_by_rarity = self._group_by_rarity()
+
+        pool_by_rarity = None
+        if pool_key and pool_key in self._pools:
+            pool_by_rarity = {}
+            for cat in self._pools[pool_key].get("cats", []):
+                pool_by_rarity.setdefault(cat["rarity"], []).append(cat)
 
         for _ in range(count):
             rarity = self._roll_rarity()
-            cat = random.choice(pool_by_rarity[rarity])
+            if rarity == "normal":
+                candidates = default_by_rarity.get("normal", [])
+            elif pool_by_rarity and pool_by_rarity.get(rarity):
+                candidates = pool_by_rarity[rarity]
+            else:
+                candidates = default_by_rarity.get(rarity, [])
+            if not candidates:
+                candidates = default_by_rarity.get("normal", [])
+            cat = random.choice(candidates)
             results.append(self._grant_cat(player, cat))
 
         return results
@@ -1223,6 +1318,15 @@ class CatExpeditionPlugin:
         for cat in self._pool:
             if cat["id"] == cat_id:
                 return cat
+        return None
+
+    def _resolve_pool(self, name: str) -> Optional[str]:
+        """按卡池显示名或 key 解析卡池 key，找不到返回 None"""
+        if not name:
+            return None
+        for key, pool in self._pools.items():
+            if key == name or pool.get("name") == name:
+                return key
         return None
 
     @staticmethod

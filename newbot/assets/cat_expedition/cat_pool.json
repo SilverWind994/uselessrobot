@@ -670,7 +670,7 @@
           }
         },
         {
-          "id": "zel1",
+          "id": "aul3",
           "name": "北笙喵",
           "rarity": "legend",
           "country": "au",
@@ -687,7 +687,7 @@
           }
         },
         {
-          "id": "syl1",
+          "id": "aul4",
           "name": "西沉喵(V)",
           "rarity": "legend",
           "country": "au",
@@ -704,7 +704,7 @@
           }
         },
         {
-          "id": "tae1",
+          "id": "aue4",
           "name": "喵头车",
           "rarity": "epic",
           "country": "au",
@@ -721,7 +721,7 @@
           }
         },
         {
-          "id": "moe1",
+          "id": "aue5",
           "name": "暮蝶喵",
           "rarity": "epic",
           "country": "au",
@@ -738,7 +738,7 @@
           }
         },
         {
-          "id": "zae1",
+          "id": "aue6",
           "name": "喵保安",
           "rarity": "epic",
           "country": "au",
@@ -755,7 +755,7 @@
           }
         },
         {
-          "id": "due1",
+          "id": "aue7",
           "name": "K.O.喵",
           "rarity": "epic",
           "country": "au",
@@ -772,7 +772,7 @@
           }
         },
         {
-          "id": "zer1",
+          "id": "aur7",
           "name": "喵捷风",
           "rarity": "rare",
           "country": "au",
@@ -789,7 +789,7 @@
           }
         },
         {
-          "id": "vor1",
+          "id": "aur8",
           "name": "喵贤者",
           "rarity": "rare",
           "country": "au",
@@ -806,7 +806,7 @@
           }
         },
         {
-          "id": "igr1",
+          "id": "aur9",
           "name": "炼狱喵",
           "rarity": "rare",
           "country": "au",
@@ -823,7 +823,7 @@
           }
         },
         {
-          "id": "dur1",
+          "id": "aur10",
           "name": "炸弹喵",
           "rarity": "rare",
           "country": "au",
@@ -840,7 +840,7 @@
           }
         },
         {
-          "id": "syr1",
+          "id": "aur11",
           "name": "斯凯喵",
           "rarity": "rare",
           "country": "au",
@@ -857,7 +857,7 @@
           }
         },
         {
-          "id": "cir3",
+          "id": "aur12",
           "name": "蝰喵",
           "rarity": "rare",
           "country": "au",
@@ -874,7 +874,7 @@
           }
         },
         {
-          "id": "dur2",
+          "id": "aur13",
           "name": "奇乐喵",
           "rarity": "rare",
           "country": "au",
@@ -891,7 +891,7 @@
           }
         },
         {
-          "id": "asr1",
+          "id": "aur14",
           "name": "喵钱包",
           "rarity": "rare",
           "country": "au",
@@ -1158,7 +1158,7 @@
       "desc": "源能战团：这些喵喵大多来自「无畏契约」的源能战场，以源能与科技改写战局；亦有两位原创传说猎手镇守其间。卡池传说喵喵：北笙喵、西沉喵(V)。",
       "cats": [
         {
-          "id": "zel1",
+          "id": "aul3",
           "name": "北笙喵",
           "rarity": "legend",
           "country": "au",
@@ -1175,7 +1175,7 @@
           }
         },
         {
-          "id": "syl1",
+          "id": "aul4",
           "name": "西沉喵(V)",
           "rarity": "legend",
           "country": "au",
@@ -1192,7 +1192,7 @@
           }
         },
         {
-          "id": "tae1",
+          "id": "aue4",
           "name": "喵头车",
           "rarity": "epic",
           "country": "au",
@@ -1209,7 +1209,7 @@
           }
         },
         {
-          "id": "moe1",
+          "id": "aue5",
           "name": "暮蝶喵",
           "rarity": "epic",
           "country": "au",
@@ -1226,7 +1226,7 @@
           }
         },
         {
-          "id": "zae1",
+          "id": "aue6",
           "name": "喵保安",
           "rarity": "epic",
           "country": "au",
@@ -1243,7 +1243,7 @@
           }
         },
         {
-          "id": "due1",
+          "id": "aue7",
           "name": "K.O.喵",
           "rarity": "epic",
           "country": "au",
@@ -1260,7 +1260,7 @@
           }
         },
         {
-          "id": "zer1",
+          "id": "aur7",
           "name": "喵捷风",
           "rarity": "rare",
           "country": "au",
@@ -1277,7 +1277,7 @@
           }
         },
         {
-          "id": "vor1",
+          "id": "aur8",
           "name": "喵贤者",
           "rarity": "rare",
           "country": "au",
@@ -1294,7 +1294,7 @@
           }
         },
         {
-          "id": "igr1",
+          "id": "aur9",
           "name": "炼狱喵",
           "rarity": "rare",
           "country": "au",
@@ -1311,7 +1311,7 @@
           }
         },
         {
-          "id": "dur1",
+          "id": "aur10",
           "name": "炸弹喵",
           "rarity": "rare",
           "country": "au",
@@ -1328,7 +1328,7 @@
           }
         },
         {
-          "id": "syr1",
+          "id": "aur11",
           "name": "斯凯喵",
           "rarity": "rare",
           "country": "au",
@@ -1345,7 +1345,7 @@
           }
         },
         {
-          "id": "cir3",
+          "id": "aur12",
           "name": "蝰喵",
           "rarity": "rare",
           "country": "au",
@@ -1362,7 +1362,7 @@
           }
         },
         {
-          "id": "dur2",
+          "id": "aur13",
           "name": "奇乐喵",
           "rarity": "rare",
           "country": "au",
@@ -1379,7 +1379,7 @@
           }
         },
         {
-          "id": "asr1",
+          "id": "aur14",
           "name": "喵钱包",
           "rarity": "rare",
           "country": "au",

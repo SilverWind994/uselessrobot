@@ -174,10 +174,12 @@ class AvalonQuizPlugin:
         return self._data.get("current")
 
     def _question_image_target(self, q: dict, target: Target) -> None:
-        """把题目图片发给 target：本地文件优先，回退 URL"""
+        """把题目图片发给 target：本地文件优先（转 file:// URI），回退 URL"""
         path = q.get("image_path") or ""
         if path and os.path.exists(path):
-            self._sender.send_image(target, path)
+            # NapCat/OneBot 要求本地文件用 file:/// URI
+            uri = "file:///" + os.path.abspath(path).replace("\\", "/")
+            self._sender.send_image(target, uri)
         else:
             self._sender.send_image(target, q.get("image_url", ""))
 

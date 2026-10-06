@@ -40,6 +40,9 @@ newbot/assets/cat_expedition/expedition.json
 # 猫猫立绘（用户本地维护，自行上传，不纳入版本库）
 newbot/assets/cat_expedition/cats/*
 !newbot/assets/cat_expedition/cats/.gitkeep
+# 何切阿瓦隆：答题数据与题目图片（运行时内容，不纳入版本库）
+newbot/assets/avalon/*
+!newbot/assets/avalon/.gitkeep
 
 # ===== 老代码归档（archive/mybot）中的运行时数据 =====
 archive/mybot/jsonFile/*

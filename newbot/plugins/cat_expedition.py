@@ -7,6 +7,7 @@ from typing import List, Optional
 from PIL import Image, ImageDraw, ImageFont
 
 from config import Config
+from plugins.cat_config import CatConfig
 from core.message_sender import MessageSender, Target
 from core.command_router import CommandRouter, CommandContext
 
@@ -45,7 +46,7 @@ CAT_FONT_SIZES = {"name": 72, "star": 60, "rarity": 56, "trait": 48, "intro": 40
 
 def _ensure_dirs():
     """确保数据目录存在"""
-    os.makedirs(Config.CAT_EXPEDITION_DIR, exist_ok=True)
+    os.makedirs(CatConfig.CAT_EXPEDITION_DIR, exist_ok=True)
 
 
 def _load_json(path: str) -> dict:
@@ -79,7 +80,7 @@ class CatExpeditionPlugin:
 
     def _load_pool(self):
         """加载卡池与国家表。返回 (默认全量卡池, 全部卡池dict)"""
-        data = _load_json(Config.CAT_POOL_PATH)
+        data = _load_json(CatConfig.CAT_POOL_PATH)
         self._countries = data.get("countries", {})
         pools = data.get("pools", {})
         default = pools.get("default", {})
@@ -125,11 +126,11 @@ class CatExpeditionPlugin:
 
     def _load_players(self) -> dict:
         """加载所有玩家存档"""
-        return _load_json(Config.CAT_PLAYERS_PATH)
+        return _load_json(CatConfig.CAT_PLAYERS_PATH)
 
     def _save_players(self, players: dict) -> None:
         """保存所有玩家存档"""
-        _save_json(Config.CAT_PLAYERS_PATH, players)
+        _save_json(CatConfig.CAT_PLAYERS_PATH, players)
 
     def _get_player(self, qq: int) -> dict:
         """获取玩家数据，不存在则新建（首登送1000鱼干）"""
@@ -137,16 +138,16 @@ class CatExpeditionPlugin:
         if str(qq) not in players:
             players[str(qq)] = {
                 "nick": "",
-                "fish": Config.CAT_WELCOME_FISH,
+                "fish": CatConfig.CAT_WELCOME_FISH,
                 "eye_stones": 0,
                 "relics": 0,
                 "last_signin": None,
                 "signin_streak": 0,
                 "signin_total": 0,
                 "summon_count": 0,
-                "deploy_limit": Config.CAT_INITIAL_DEPLOY_LIMIT,
+                "deploy_limit": CatConfig.CAT_INITIAL_DEPLOY_LIMIT,
                 "deploy_team": [],
-                "research_limit": Config.CAT_INITIAL_RESEARCH_LIMIT,
+                "research_limit": CatConfig.CAT_INITIAL_RESEARCH_LIMIT,
                 "collection": []
             }
             self._save_players(players)
@@ -234,23 +235,23 @@ class CatExpeditionPlugin:
         player["signin_total"] = player.get("signin_total", 0) + 1
 
         # 随机鱼干 80-120，概率暴击
-        base = random.randint(Config.CAT_SIGNIN_MIN, Config.CAT_SIGNIN_MAX)
+        base = random.randint(CatConfig.CAT_SIGNIN_MIN, CatConfig.CAT_SIGNIN_MAX)
         crit_type = "normal"
         r = random.random()
-        if r < Config.CAT_SIGNIN_SUPER_CHANCE:
+        if r < CatConfig.CAT_SIGNIN_SUPER_CHANCE:
             base *= 4
             crit_type = "super"
-        elif r < Config.CAT_SIGNIN_SUPER_CHANCE + Config.CAT_SIGNIN_CRIT_CHANCE:
+        elif r < CatConfig.CAT_SIGNIN_SUPER_CHANCE + CatConfig.CAT_SIGNIN_CRIT_CHANCE:
             base *= 2
             crit_type = "crit"
         player["fish"] += base
 
         # 累计签到奖励：每10天一次，天数*10，上限2000
         bonus = 0
-        interval = Config.CAT_SIGNIN_BONUS_INTERVAL
+        interval = CatConfig.CAT_SIGNIN_BONUS_INTERVAL
         if player["signin_streak"] % interval == 0:
             raw_bonus = player["signin_streak"] * 10
-            bonus = min(raw_bonus, Config.CAT_SIGNIN_BONUS_CAP)
+            bonus = min(raw_bonus, CatConfig.CAT_SIGNIN_BONUS_CAP)
             player["fish"] += bonus
 
         self._update_player(ctx.user_id, player)
@@ -306,7 +307,7 @@ class CatExpeditionPlugin:
                 return
 
         player = self._get_player(ctx.user_id)
-        total_cost = count * Config.CAT_SUMMON_COST
+        total_cost = count * CatConfig.CAT_SUMMON_COST
 
         if player["fish"] < total_cost:
             need = total_cost - player["fish"]
@@ -318,14 +319,14 @@ class CatExpeditionPlugin:
         results = self._do_summon(player, count, pool_key)
         player["fish"] -= total_cost
         # 每次抽卡获得猫眼石
-        player["eye_stones"] = player.get("eye_stones", 0) + count * Config.CAT_EYE_STONE_PER_SUMMON
+        player["eye_stones"] = player.get("eye_stones", 0) + count * CatConfig.CAT_EYE_STONE_PER_SUMMON
         player["summon_count"] = player.get("summon_count", 0) + count
         self._update_player(ctx.user_id, player)
 
         # 拼消息
         lines = [f"【抽喵结果】共 {count} 只，消耗 {total_cost} 鱼干"]
         for r in results:
-            rname = Config.CAT_RARITY_NAMES[r["rarity"]]
+            rname = CatConfig.CAT_RARITY_NAMES[r["rarity"]]
             line = f"  [{rname}] {r['name']}"
             if r["job"]:
                 line += f"（{r['job']}）"
@@ -385,7 +386,7 @@ class CatExpeditionPlugin:
             rc = [c for c in cats if c["rarity"] == r]
             if not rc:
                 continue
-            rname = Config.CAT_RARITY_NAMES.get(r, r)
+            rname = CatConfig.CAT_RARITY_NAMES.get(r, r)
             lines.append(f"—— {rname}（{len(rc)}）——")
             for c in rc:
                 lines.append(f"  · {c['name']}")
@@ -455,8 +456,8 @@ class CatExpeditionPlugin:
         old_job = owned.get("job", "")
 
         # 已满星：返还鱼干
-        if old_star >= Config.CAT_MAX_STAR:
-            refund = Config.CAT_DUP_REFUND_BY_RARITY.get(owned["rarity"], 50)
+        if old_star >= CatConfig.CAT_MAX_STAR:
+            refund = CatConfig.CAT_DUP_REFUND_BY_RARITY.get(owned["rarity"], 50)
             player["fish"] += refund
             return {**owned, "is_dup": True, "refunded": True, "refund_amt": refund,
                     "star_up": False, "job_up": False}
@@ -477,17 +478,17 @@ class CatExpeditionPlugin:
         args = ctx.get_args().strip()
         if not args:
             self._sender.reply(
-                ctx, f"用法：兑换喵 <名字>\n需要 {Config.CAT_EYE_STONE_COST} 个猫眼石兑换指定喵喵"
+                ctx, f"用法：兑换喵 <名字>\n需要 {CatConfig.CAT_EYE_STONE_COST} 个猫眼石兑换指定喵喵"
             )
             return
 
         player = self._get_player(ctx.user_id)
         stones = player.get("eye_stones", 0)
 
-        if stones < Config.CAT_EYE_STONE_COST:
-            need = Config.CAT_EYE_STONE_COST - stones
+        if stones < CatConfig.CAT_EYE_STONE_COST:
+            need = CatConfig.CAT_EYE_STONE_COST - stones
             self._sender.reply(
-                ctx, f"猫眼石不够啦！需要 {Config.CAT_EYE_STONE_COST}，还差 {need} 个"
+                ctx, f"猫眼石不够啦！需要 {CatConfig.CAT_EYE_STONE_COST}，还差 {need} 个"
             )
             return
 
@@ -499,11 +500,11 @@ class CatExpeditionPlugin:
             return
 
         # 扣猫眼石，直接grant给玩家（不走概率，固定这只）
-        player["eye_stones"] -= Config.CAT_EYE_STONE_COST
+        player["eye_stones"] -= CatConfig.CAT_EYE_STONE_COST
         result = self._grant_cat(player, target)
         self._update_player(ctx.user_id, player)
 
-        rname = Config.CAT_RARITY_NAMES[target["rarity"]]
+        rname = CatConfig.CAT_RARITY_NAMES[target["rarity"]]
         msg = f"🎉 兑换成功！\n"
         msg += f"  [{rname}] {result['name']}（{result.get('job', '')}）"
         if result["star_up"]:
@@ -528,7 +529,7 @@ class CatExpeditionPlugin:
         player = self._get_player(ctx.user_id)
         collection = player.get("collection", [])
         max_star_num = sum(
-            1 for cat in collection if cat.get("star", 0) >= Config.CAT_MAX_STAR
+            1 for cat in collection if cat.get("star", 0) >= CatConfig.CAT_MAX_STAR
         )
 
         lines = [
@@ -538,8 +539,8 @@ class CatExpeditionPlugin:
             f"🐟 鱼干：{player.get('fish', 0)}",
             f"💎 猫眼石：{player.get('eye_stones', 0)}",
             f"🏺 遗物：{player.get('relics', 0)}",
-            f"⚔️ 出阵猫猫上限：{player.get('deploy_limit', Config.CAT_INITIAL_DEPLOY_LIMIT)}",
-            f"🔬 研究猫猫上限：{player.get('research_limit', Config.CAT_INITIAL_RESEARCH_LIMIT)}",
+            f"⚔️ 出阵猫猫上限：{player.get('deploy_limit', CatConfig.CAT_INITIAL_DEPLOY_LIMIT)}",
+            f"🔬 研究猫猫上限：{player.get('research_limit', CatConfig.CAT_INITIAL_RESEARCH_LIMIT)}",
             f"📅 累计签到：{player.get('signin_total', 0)} 天"
             f"（连续 {player.get('signin_streak', 0)} 天）",
             f"🎴 累计抽喵：{player.get('summon_count', 0)} 次",
@@ -591,7 +592,7 @@ class CatExpeditionPlugin:
 
     def cmd_map(self, ctx: CommandContext) -> None:
         """发送世界地图"""
-        path = Config.CAT_MAP_PATH
+        path = CatConfig.CAT_MAP_PATH
         if not os.path.exists(path):
             self._sender.reply(ctx, "地图还没画好喵～")
             return
@@ -624,7 +625,7 @@ class CatExpeditionPlugin:
             return
 
         # 天气每次远征都随机，不告诉玩家
-        weather = random.choice(Config.CAT_WEATHER_TYPES)
+        weather = random.choice(CatConfig.CAT_WEATHER_TYPES)
         terrain = stage_cfg.get("terrain", "平原")
 
         # 计算总伤害：基础战力(全部猫) × (1 + 匹配天气/地形的猫的特性加成比例)
@@ -633,8 +634,8 @@ class CatExpeditionPlugin:
         total_bonus_ratio = 0.0
 
         for owned in player.get("collection", []):
-            base = Config.CAT_BASE_POWER_BY_RARITY.get(owned["rarity"], 0)
-            star_mult = Config.CAT_STAR_POWER_MULT.get(owned.get("star", 1), 1)
+            base = CatConfig.CAT_BASE_POWER_BY_RARITY.get(owned["rarity"], 0)
+            star_mult = CatConfig.CAT_STAR_POWER_MULT.get(owned.get("star", 1), 1)
             base_power = base * star_mult
             base_total += base_power
 
@@ -650,8 +651,8 @@ class CatExpeditionPlugin:
                 matches += 1
 
             if matches > 0:
-                per_match = Config.CAT_TRAIT_BONUS_BY_RARITY.get(owned["rarity"], 0.02)
-                trait_mult = Config.CAT_TRAIT_MULT_BY_STAR.get(owned.get("star", 1), 1)
+                per_match = CatConfig.CAT_TRAIT_BONUS_BY_RARITY.get(owned["rarity"], 0.02)
+                trait_mult = CatConfig.CAT_TRAIT_MULT_BY_STAR.get(owned.get("star", 1), 1)
                 bonus_ratio = per_match * trait_mult * matches
                 total_bonus_ratio += bonus_ratio
                 name = owned.get("name", owned["id"])
@@ -671,8 +672,8 @@ class CatExpeditionPlugin:
             return
 
         # 随机系数
-        ratio = random.uniform(Config.CAT_EXPEDITION_RANDOM_MIN,
-                               Config.CAT_EXPEDITION_RANDOM_MAX)
+        ratio = random.uniform(CatConfig.CAT_EXPEDITION_RANDOM_MIN,
+                               CatConfig.CAT_EXPEDITION_RANDOM_MAX)
         damage = int(total_power * ratio)
 
         # 扣减Boss血量
@@ -754,7 +755,7 @@ class CatExpeditionPlugin:
                 lines.insert(0, "———")
             story_img = act_cfg.get("story_image", "")
             if story_img:
-                img_path = os.path.join(Config.CAT_EXPEDITION_IMG_DIR, story_img)
+                img_path = os.path.join(CatConfig.CAT_EXPEDITION_IMG_DIR, story_img)
                 if os.path.exists(img_path):
                     self._sender.send_image(Target.from_data(ctx.raw_data), img_path)
 
@@ -767,7 +768,7 @@ class CatExpeditionPlugin:
                 lines.insert(0, "———")
             boss_img = act_cfg.get("boss_image", "")
             if boss_img:
-                img_path = os.path.join(Config.CAT_EXPEDITION_IMG_DIR, boss_img)
+                img_path = os.path.join(CatConfig.CAT_EXPEDITION_IMG_DIR, boss_img)
                 if os.path.exists(img_path):
                     self._sender.send_image(Target.from_data(ctx.raw_data), img_path)
 
@@ -886,7 +887,7 @@ class CatExpeditionPlugin:
                 lines.append(clear_text)
             clear_img = act_cfg.get("clear_image", "")
             if clear_img:
-                img_path = os.path.join(Config.CAT_EXPEDITION_IMG_DIR, clear_img)
+                img_path = os.path.join(CatConfig.CAT_EXPEDITION_IMG_DIR, clear_img)
                 if os.path.exists(img_path):
                     self._sender.send_image(Target.from_data(ctx.raw_data), img_path)
 
@@ -905,7 +906,7 @@ class CatExpeditionPlugin:
                 # 发送剧情图
                 story_img = next_act_cfg.get("story_image", "")
                 if story_img:
-                    img_path = os.path.join(Config.CAT_EXPEDITION_IMG_DIR, story_img)
+                    img_path = os.path.join(CatConfig.CAT_EXPEDITION_IMG_DIR, story_img)
                     if os.path.exists(img_path):
                         self._sender.send_image(Target.from_data(ctx.raw_data), img_path)
             else:
@@ -917,15 +918,15 @@ class CatExpeditionPlugin:
 
     def _load_expedition(self) -> dict:
         """加载全局远征状态"""
-        return _load_json(Config.CAT_EXPEDITION_DATA)
+        return _load_json(CatConfig.CAT_EXPEDITION_DATA)
 
     def _save_expedition(self, exp: dict) -> None:
         """保存全局远征状态"""
-        _save_json(Config.CAT_EXPEDITION_DATA, exp)
+        _save_json(CatConfig.CAT_EXPEDITION_DATA, exp)
 
     def _get_act_config(self, act: int) -> dict:
         """从JSON文件读取指定幕的关卡配置"""
-        data = _load_json(Config.CAT_EXPEDITION_ACTS_PATH)
+        data = _load_json(CatConfig.CAT_EXPEDITION_ACTS_PATH)
         return data.get(str(act), {})
 
     def cmd_research(self, ctx: CommandContext) -> None:
@@ -1053,14 +1054,14 @@ class CatExpeditionPlugin:
             self._font(32), (130, 110, 85)
         )
 
-        q_img = self._find_img(Config.CAT_IMG_CATS_DIR, "?")
+        q_img = self._find_img(CatConfig.CAT_IMG_CATS_DIR, "?")
 
         y = header_h
         for rarity, rc in groups:
             # 稀有度分组小标题
             self._center_text(
                 draw, (margin, y, width - margin, y + group_h),
-                f"—— {Config.CAT_RARITY_NAMES[rarity]} ——",
+                f"—— {CatConfig.CAT_RARITY_NAMES[rarity]} ——",
                 self._font(36), CAT_RARITY_RGB[rarity]
             )
             y += group_h
@@ -1102,8 +1103,8 @@ class CatExpeditionPlugin:
             rows = (len(rc) + cols - 1) // cols
             y += rows * cell_h + gap
 
-        os.makedirs(Config.CAT_CARD_CACHE_DIR, exist_ok=True)
-        path = os.path.join(Config.CAT_CARD_CACHE_DIR, f"book_{code}_{qq}.png")
+        os.makedirs(CatConfig.CAT_CARD_CACHE_DIR, exist_ok=True)
+        path = os.path.join(CatConfig.CAT_CARD_CACHE_DIR, f"book_{code}_{qq}.png")
         book.convert("RGB").save(path)
         return path
 
@@ -1140,12 +1141,12 @@ class CatExpeditionPlugin:
         # 照片：cats/猫名.png 专属立绘 → cats/最终职业.png 兜底
         photo = None
         if job_path:
-            photo = (self._find_img(Config.CAT_IMG_CATS_DIR, cat["name"])
-                     or self._find_img(Config.CAT_IMG_CATS_DIR, job_path[-1]))
-        job_img = self._find_img(Config.CAT_IMG_JOBS_DIR, cur_job) if cur_job else None
-        origin_img = self._find_img(Config.CAT_IMG_ORIGINS_DIR, country_name)
+            photo = (self._find_img(CatConfig.CAT_IMG_CATS_DIR, cat["name"])
+                     or self._find_img(CatConfig.CAT_IMG_CATS_DIR, job_path[-1]))
+        job_img = self._find_img(CatConfig.CAT_IMG_JOBS_DIR, cur_job) if cur_job else None
+        origin_img = self._find_img(CatConfig.CAT_IMG_ORIGINS_DIR, country_name)
 
-        card = Image.open(Config.CAT_CARD_TEMPLATE).convert("RGBA")
+        card = Image.open(CatConfig.CAT_CARD_TEMPLATE).convert("RGBA")
         draw = ImageDraw.Draw(card)
 
         for key, path, want in (
@@ -1168,7 +1169,7 @@ class CatExpeditionPlugin:
         self._center_text(draw, CAT_CELLS["star"], "★" * star,
                           self._font(CAT_FONT_SIZES["star"]), CAT_STAR_RGB)
         self._center_text(
-            draw, CAT_CELLS["rarity"], Config.CAT_RARITY_NAMES[cat["rarity"]],
+            draw, CAT_CELLS["rarity"], CatConfig.CAT_RARITY_NAMES[cat["rarity"]],
             self._font(CAT_FONT_SIZES["rarity"]), CAT_RARITY_RGB[cat["rarity"]]
         )
         self._center_text_fit(
@@ -1188,8 +1189,8 @@ class CatExpeditionPlugin:
             self._font(CAT_FONT_SIZES["intro"]), CAT_TEXT_RGB
         )
 
-        os.makedirs(Config.CAT_CARD_CACHE_DIR, exist_ok=True)
-        path = os.path.join(Config.CAT_CARD_CACHE_DIR, f"card_{cat['id']}_{star}星.png")
+        os.makedirs(CatConfig.CAT_CARD_CACHE_DIR, exist_ok=True)
+        path = os.path.join(CatConfig.CAT_CARD_CACHE_DIR, f"card_{cat['id']}_{star}星.png")
         card.convert("RGB").save(path)
         return path
 
@@ -1199,9 +1200,9 @@ class CatExpeditionPlugin:
 
     def _cat_portrait_path(self, cat: dict) -> Optional[str]:
         """专属立绘 cats/猫名.png，缺则用 cats/最终职业.png"""
-        path = self._find_img(Config.CAT_IMG_CATS_DIR, cat["name"])
+        path = self._find_img(CatConfig.CAT_IMG_CATS_DIR, cat["name"])
         if path is None and cat.get("job_path"):
-            path = self._find_img(Config.CAT_IMG_CATS_DIR, cat["job_path"][-1])
+            path = self._find_img(CatConfig.CAT_IMG_CATS_DIR, cat["job_path"][-1])
         return path
 
     @staticmethod
@@ -1288,8 +1289,8 @@ class CatExpeditionPlugin:
         以后会叠加遗物加成。"""
         total = 0
         for owned in player.get("collection", []):
-            base = Config.CAT_BASE_POWER_BY_RARITY.get(owned.get("rarity", "normal"), 0)
-            total += base * Config.CAT_STAR_POWER_MULT.get(owned.get("star", 1), 1)
+            base = CatConfig.CAT_BASE_POWER_BY_RARITY.get(owned.get("rarity", "normal"), 0)
+            total += base * CatConfig.CAT_STAR_POWER_MULT.get(owned.get("star", 1), 1)
         return total
 
     def _cat_power(self, owned_cat: dict, pool_cat: Optional[dict],
@@ -1299,8 +1300,8 @@ class CatExpeditionPlugin:
         """出阵猫战力：基础战力×星级倍率，再叠加适性特性加成。
         仅对出征队员调用，非出阵猫不享受特性加成。"""
         star = owned_cat.get("star", 1)
-        base = Config.CAT_BASE_POWER_BY_RARITY[owned_cat["rarity"]]
-        power = base * Config.CAT_STAR_POWER_MULT.get(star, 1)
+        base = CatConfig.CAT_BASE_POWER_BY_RARITY[owned_cat["rarity"]]
+        power = base * CatConfig.CAT_STAR_POWER_MULT.get(star, 1)
         bonus = self._trait_bonus_ratio(pool_cat, owned_cat["rarity"], star,
                                         battle_type, weather, terrain)
         return int(power * (1 + bonus))
@@ -1325,15 +1326,15 @@ class CatExpeditionPlugin:
         )
         if matched == 0:
             return 0.0
-        per_match = Config.CAT_TRAIT_BONUS_BY_RARITY.get(rarity, 0.02)
-        multiplier = Config.CAT_TRAIT_MULT_BY_STAR.get(star, 1)
+        per_match = CatConfig.CAT_TRAIT_BONUS_BY_RARITY.get(rarity, 0.02)
+        multiplier = CatConfig.CAT_TRAIT_MULT_BY_STAR.get(star, 1)
         return matched * per_match * multiplier
 
     # ==================== 辅助方法 ====================
 
     def _roll_rarity(self) -> str:
         """按概率 roll 稀有度"""
-        rates = Config.CAT_RARITY_RATES
+        rates = CatConfig.CAT_RARITY_RATES
         r = random.random()
         cum = 0.0
         for rarity, rate in rates.items():

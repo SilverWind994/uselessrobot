@@ -14,6 +14,7 @@ from core.qq_file_manager import QQNumberFileManager
 from plugins.simple_functions import SimpleFunctionsPlugin
 from plugins.ai_functions import AIFunctionsPlugin
 from plugins.cat_expedition import CatExpeditionPlugin
+from plugins.avalon_quiz import AvalonQuizPlugin
 
 
 class Bot:
@@ -47,6 +48,10 @@ class Bot:
         # 猫猫远征队插件
         cat_game = CatExpeditionPlugin(self._sender)
         cat_game.register(self._router)
+
+        # 何切阿瓦隆问答插件
+        self._avalon = AvalonQuizPlugin(self._sender)
+        self._avalon.register(self._router)
 
     def _register_routes(self) -> None:
         self.app.post("/")(self._handle_event)
@@ -85,6 +90,10 @@ class Bot:
         if ctx.is_group and not self._groups.find(ctx.group_id):
             return {}
         if ctx.is_private and not self._users.find(ctx.user_id):
+            return {}
+
+        # 何切阿瓦隆：出题人待发图状态下的图片捕获（优先于指令路由）
+        if self._avalon.handle_message(ctx):
             return {}
 
         self._handle_group_chat(ctx)

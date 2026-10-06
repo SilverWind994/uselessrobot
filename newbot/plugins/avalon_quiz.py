@@ -32,6 +32,30 @@ def _now() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _parse_time(s):
+    """解析时间字符串，支持 None 和空字符串，返回 datetime 或 None"""
+    if not s:
+        return None
+    try:
+        return datetime.strptime(s, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+
+
+def _format_duration(seconds: float) -> str:
+    """秒数转中文时长，如 125.3 -> 2分5秒"""
+    if seconds < 0:
+        seconds = 0
+    sec = int(seconds)
+    if sec < 60:
+        return f"{sec}秒"
+    m, s = divmod(sec, 60)
+    if m < 60:
+        return f"{m}分{s}秒"
+    h, m = divmod(m, 60)
+    return f"{h}小时{m}分{s}秒"
+
+
 _IMAGE_CQ_RE = re.compile(r"\[CQ:image,[^\]]*\]")
 _IMAGE_URL_RE = re.compile(r"url=([^,\]]+)")
 
@@ -256,10 +280,19 @@ class AvalonQuizPlugin:
         if answers:
             lines.append("—— 答题列表 ——")
             for i, a in enumerate(answers, 1):
-                vt = f"，看题 {a['view_time']}" if a.get("view_time") else "，未看题直接作答"
+                # 计算耗时
+                at = _parse_time(a.get("answer_time", ""))
+                vt = _parse_time(a.get("view_time", ""))
+                if at and vt:
+                    dur = (at - vt).total_seconds()
+                    time_str = f"耗时 {_format_duration(dur)}"
+                elif at and not vt:
+                    time_str = "未看题直接作答"
+                else:
+                    time_str = "时间记录异常"
                 lines.append(f"{i}. {a['name']}（{a['user_id']}）\n"
                              f"   答案：{a['answer']}\n"
-                             f"   答题 {a['answer_time']}{vt}")
+                             f"   {time_str}")
         else:
             lines.append("还没有人作答~")
         self._sender.reply(ctx, "\n".join(lines))

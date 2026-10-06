@@ -60,9 +60,24 @@ _IMAGE_CQ_RE = re.compile(r"\[CQ:image,[^\]]*\]")
 _IMAGE_URL_RE = re.compile(r"url=([^,\]]+)")
 
 
-def _extract_image_url(raw_message: str):
-    """从消息里提取第一张图片的 URL（CQ 码），没有图片返回 None"""
-    cq = _IMAGE_CQ_RE.search(raw_message)
+def _extract_image_url(ctx: CommandContext) -> str | None:
+    """提取消息中第一张图片的地址：优先 message 数组的 file（本地路径），其次 url，最后 CQ 码解析"""
+    # 方式1：message 数组（NapCat/OneBot 原始 segment）
+    message = ctx.raw_data.get("message")
+    if isinstance(message, list):
+        for seg in message:
+            if seg.get("type") == "image":
+                data = seg.get("data", {})
+                # NapCat 可能已缓存到本地，file 字段是本地路径
+                file_path = data.get("file", "")
+                if file_path and os.path.exists(file_path):
+                    return file_path
+                url = data.get("url", "")
+                if url:
+                    return url
+    # 方式2：raw_message CQ 码兜底
+    raw = ctx.raw_message
+    cq = _IMAGE_CQ_RE.search(raw)
     if not cq:
         return None
     m = _IMAGE_URL_RE.search(cq.group(0))
@@ -132,7 +147,7 @@ class AvalonQuizPlugin:
             return False
         if ctx.user_id != self._pending["user_id"]:
             return False
-        url = _extract_image_url(ctx.raw_message)
+        url = _extract_image_url(ctx)
         if url is None:
             return False  # 不是图片，放行走正常流程
         self._pending = None
@@ -141,25 +156,32 @@ class AvalonQuizPlugin:
 
     # ==================== 内部逻辑 ====================
 
-    def _set_question(self, ctx: CommandContext, url: str) -> None:
+    def _set_question(self, ctx: CommandContext, url_or_path: str) -> None:
         target = Target.from_data(ctx.raw_data)
         data = self._data
 
-        # 优先下载到本地，失败则回退用 URL 发送
+        # 如果已经是本地文件（NapCat 缓存的 file 路径），复制到固定位置
         image_path = ""
-        try:
-            resp = requests.get(url, timeout=15,
-                                headers={"User-Agent": "Mozilla/5.0"})
-            resp.raise_for_status()
-            with open(Config.AVALON_QUESTION_IMG, "wb") as f:
-                f.write(resp.content)
+        if os.path.exists(url_or_path):
+            import shutil
+            shutil.copy(url_or_path, Config.AVALON_QUESTION_IMG)
             image_path = Config.AVALON_QUESTION_IMG
-        except Exception as e:
-            print(f"[AvalonQuiz] 题目图片下载失败，改用链接记录: {e}")
+            print(f"[AvalonQuiz] 使用 NapCat 本地缓存，已复制: {url_or_path} -> {Config.AVALON_QUESTION_IMG}")
+        else:
+            # 网络 URL：尝试下载到本地
+            try:
+                resp = requests.get(url_or_path, timeout=15,
+                                    headers={"User-Agent": "Mozilla/5.0"})
+                resp.raise_for_status()
+                with open(Config.AVALON_QUESTION_IMG, "wb") as f:
+                    f.write(resp.content)
+                image_path = Config.AVALON_QUESTION_IMG
+            except Exception as e:
+                print(f"[AvalonQuiz] 题目图片下载失败，改用链接记录: {e}")
 
         data["current"] = {
             "image_path": image_path,
-            "image_url": url,
+            "image_url": url_or_path,
             "setter_id": ctx.user_id,
             "setter_name": ctx.sender_nickname,
             "set_time": _now(),
@@ -174,12 +196,10 @@ class AvalonQuizPlugin:
         return self._data.get("current")
 
     def _question_image_target(self, q: dict, target: Target) -> None:
-        """把题目图片发给 target：本地文件优先（转 file:// URI），回退 URL"""
+        """把题目图片发给 target：本地文件优先，回退 URL（与「随机UE」同样的发送方式）"""
         path = q.get("image_path") or ""
         if path and os.path.exists(path):
-            # NapCat/OneBot 要求本地文件用 file:/// URI
-            uri = "file:///" + os.path.abspath(path).replace("\\", "/")
-            self._sender.send_image(target, uri)
+            self._sender.send_image(target, path)
         else:
             self._sender.send_image(target, q.get("image_url", ""))
 
@@ -201,7 +221,7 @@ class AvalonQuizPlugin:
             self._sender.reply(ctx, "只有出题人才能出题哦~")
             return
         # 指令本身带图则直接发布
-        url = _extract_image_url(ctx.raw_message)
+        url = _extract_image_url(ctx)
         if url:
             self._set_question(ctx, url)
             return

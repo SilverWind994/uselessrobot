@@ -108,11 +108,13 @@ class AvalonQuizPlugin:
         router.register(
             ["何切阿瓦隆", "何切"],
             self.cmd_entry,
-            description="何切阿瓦隆·问答（子指令：出题/看题/答题/答题情况/取消）"
+            description="何切阿瓦隆·问答（仅私聊，子指令：出题/看题/答题/答题情况/取消）"
         )
 
     def cmd_entry(self, ctx: CommandContext) -> None:
-        """单一入口：解析子指令并分发"""
+        """单一入口：解析子指令并分发（仅私聊可用）"""
+        if ctx.is_group:
+            return
         args = ctx.get_args().strip()
         parts = args.split(None, 1)
         sub = parts[0].lower() if parts else ""
@@ -142,8 +144,8 @@ class AvalonQuizPlugin:
 
     def handle_message(self, ctx: CommandContext) -> bool:
         """主循环在指令路由前调用。出题人处于待发图状态时，拦截其含图消息作为题目。
-        返回 True 表示消息已被消费。"""
-        if not self._pending:
+        返回 True 表示消息已被消费。仅私聊生效。"""
+        if ctx.is_group or not self._pending:
             return False
         if ctx.user_id != self._pending["user_id"]:
             return False

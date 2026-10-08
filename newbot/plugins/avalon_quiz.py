@@ -162,25 +162,33 @@ class AvalonQuizPlugin:
         target = Target.from_data(ctx.raw_data)
         data = self._data
 
-        # 如果已经是本地文件（NapCat 缓存的 file 路径），复制到固定位置
+        # 每题单独存档图片，避免新题覆盖旧题图片
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        question_img = os.path.join(Config.AVALON_DIR, f"question_{stamp}.png")
+
+        # 如果已经是本地文件（NapCat 缓存的 file 路径），复制到题目目录
         image_path = ""
         if os.path.exists(url_or_path):
             import shutil
-            shutil.copy(url_or_path, Config.AVALON_QUESTION_IMG)
-            image_path = Config.AVALON_QUESTION_IMG
-            print(f"[AvalonQuiz] 使用 NapCat 本地缓存，已复制: {url_or_path} -> {Config.AVALON_QUESTION_IMG}")
+            shutil.copy(url_or_path, question_img)
+            image_path = question_img
+            print(f"[AvalonQuiz] 使用 NapCat 本地缓存，已复制: {url_or_path} -> {question_img}")
         else:
             # 网络 URL：尝试下载到本地
             try:
                 resp = requests.get(url_or_path, timeout=15,
                                     headers={"User-Agent": "Mozilla/5.0"})
                 resp.raise_for_status()
-                with open(Config.AVALON_QUESTION_IMG, "wb") as f:
+                with open(question_img, "wb") as f:
                     f.write(resp.content)
-                image_path = Config.AVALON_QUESTION_IMG
+                image_path = question_img
             except Exception as e:
                 print(f"[AvalonQuiz] 题目图片下载失败，改用链接记录: {e}")
 
+        # 归档上一题（保留记录，暂不提供查询入口）
+        previous = data.get("current")
+        if previous:
+            data.setdefault("history", []).append(previous)
         data["current"] = {
             "image_path": image_path,
             "image_url": url_or_path,
@@ -188,7 +196,7 @@ class AvalonQuizPlugin:
             "setter_name": ctx.sender_nickname,
             "set_time": _now(),
             "viewers": {},   # qq(str) -> {"name":..., "view_time":...} 首次看题时间
-            "answers": [],   # {"user_id":..., "name":..., "answer":..., "answer_time":..., "view_time":...}
+            "answers": [],   # 全部提交记录，同一人可多条：{"user_id","name","answer","answer_time","view_time","attempt"}
         }
         _save_data(data)
         self._sender.reply(ctx, "📝 何切阿瓦隆新题目已发布！"
@@ -269,20 +277,13 @@ class AvalonQuizPlugin:
         view_time = viewers.get(str(ctx.user_id), {}).get("view_time")
 
         answers = q.setdefault("answers", [])
-        updated = False
-        for item in answers:
-            if item["user_id"] == ctx.user_id:
-                item.update({"name": ctx.sender_nickname, "answer": answer,
-                             "answer_time": _now(), "view_time": view_time})
-                updated = True
-                break
-        if not updated:
-            answers.append({"user_id": ctx.user_id, "name": ctx.sender_nickname,
-                            "answer": answer, "answer_time": _now(),
-                            "view_time": view_time})
+        attempt = sum(1 for item in answers if item["user_id"] == ctx.user_id) + 1
+        answers.append({"user_id": ctx.user_id, "name": ctx.sender_nickname,
+                        "answer": answer, "answer_time": _now(),
+                        "view_time": view_time, "attempt": attempt})
         _save_data(self._data)
-        self._sender.reply(ctx,
-                           f"已{'更新' if updated else '收到'} {ctx.sender_nickname} 的答案：{answer}")
+        self._sender.reply(
+            ctx, f"已收到 {ctx.sender_nickname} 的第 {attempt} 次答案：{answer}")
 
     def cmd_status(self, ctx: CommandContext) -> None:
         if ctx.user_id not in Config.AVALON_SETTERS:
@@ -297,14 +298,18 @@ class AvalonQuizPlugin:
 
         viewers = q.get("viewers", {})
         answers = q.get("answers", [])
+        # 同一人可能多次提交，这里只取最后一次
+        latest = {}
+        for a in answers:
+            latest[a["user_id"]] = a
         lines = ["📋 何切阿瓦隆 当前题目",
                  f"出题人：{q.get('setter_name')}（{q.get('setter_id')}）",
                  f"出题时间：{q.get('set_time')}",
-                 f"看题 {len(viewers)} 人 · 答题 {len(answers)} 人"]
-        if answers:
-            lines.append("—— 答题列表 ——")
-            for i, a in enumerate(answers, 1):
-                # 计算耗时
+                 f"看题 {len(viewers)} 人 · 答题 {len(latest)} 人"]
+        if latest:
+            lines.append("—— 答题列表（各人最后一次）——")
+            for i, a in enumerate(latest.values(), 1):
+                # 计算耗时：最后一次提交时间 - 首次看题时间
                 at = _parse_time(a.get("answer_time", ""))
                 vt = _parse_time(a.get("view_time", ""))
                 if at and vt:
@@ -315,7 +320,7 @@ class AvalonQuizPlugin:
                 else:
                     time_str = "时间记录异常"
                 lines.append(f"{i}. {a['name']}（{a['user_id']}）\n"
-                             f"   答案：{a['answer']}\n"
+                             f"   答案：{a['answer']}（第 {a.get('attempt', 1)} 次提交）\n"
                              f"   {time_str}")
         else:
             lines.append("还没有人作答~")

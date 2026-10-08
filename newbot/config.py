@@ -62,7 +62,6 @@ class Config:
     # ==================== 何切阿瓦隆问答 ====================
     AVALON_DIR = os.path.join(ASSETS_DIR, "avalon")
     AVALON_DATA_PATH = os.path.join(AVALON_DIR, "avalon_data.json")
-    AVALON_QUESTION_IMG = os.path.join(AVALON_DIR, "question.png")  # 当前题目图片（每次出题覆盖）
     AVALON_SETTERS = [3187638890, 2544910201]  # 出题人白名单
 
     @classmethod

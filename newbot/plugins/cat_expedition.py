@@ -1,6 +1,7 @@
 import os
 import json
 import random
+import re
 from datetime import date
 from typing import List, Optional
 
@@ -49,6 +50,14 @@ def _ensure_dirs():
     os.makedirs(CatConfig.CAT_EXPEDITION_DIR, exist_ok=True)
 
 
+def _pad_cat_id(cat_id: Optional[str]) -> Optional[str]:
+    """把形如 aue1 的卡池 id 序号补零为 aue01（cin01 等已是两位数则原样返回）"""
+    m = re.fullmatch(r"([a-z]+)(\d+)", cat_id or "")
+    if not m:
+        return cat_id
+    return f"{m.group(1)}{int(m.group(2)):02d}"
+
+
 def _load_json(path: str) -> dict:
     """读 JSON 文件，文件不存在返回空 dict"""
     _ensure_dirs()
@@ -86,25 +95,17 @@ class CatExpeditionPlugin:
         default = pools.get("default", {})
         return default.get("cats", []), pools
 
-    # 历史 id 迁移表：源能战团角色曾按国籍分配 id，统一圣辉教国后改为 au 前缀
-    _LEGACY_ID_MAP = {
-        "zel1": "aul3", "syl1": "aul4",
-        "tae1": "aue4", "moe1": "aue5", "zae1": "aue6", "due1": "aue7",
-        "zer1": "aur7", "vor1": "aur8", "igr1": "aur9", "dur1": "aur10",
-        "syr1": "aur11", "cir3": "aur12", "dur2": "aur13", "asr1": "aur14",
-    }
-
     def _migrate_players(self) -> None:
-        """启动时迁移玩家存档：修正历史 id 并按 id 对齐卡池中的 name/rarity。
+        """启动时迁移玩家存档：把历史 id 补零为两位数，并按 id 对齐卡池中的 name/rarity。
         卡池改 id/改名/调稀有度后，玩家收藏里的旧字段会在下次启动时自动更新。"""
         pool_by_id = {c["id"]: c for c in self._pool}
         players = self._load_players()
         changed = False
         for pl in players.values():
             for owned in pl.get("collection", []):
-                old_id = owned.get("id")
-                if old_id in self._LEGACY_ID_MAP:
-                    owned["id"] = self._LEGACY_ID_MAP[old_id]
+                new_id = _pad_cat_id(owned.get("id"))
+                if new_id != owned.get("id"):
+                    owned["id"] = new_id
                     changed = True
                 ref = pool_by_id.get(owned.get("id"))
                 if ref is None:
@@ -118,8 +119,9 @@ class CatExpeditionPlugin:
             team = pl.get("deploy_team")
             if isinstance(team, list):
                 for i, cid in enumerate(team):
-                    if cid in self._LEGACY_ID_MAP:
-                        team[i] = self._LEGACY_ID_MAP[cid]
+                    new_id = _pad_cat_id(cid)
+                    if new_id != cid:
+                        team[i] = new_id
                         changed = True
         if changed:
             self._save_players(players)

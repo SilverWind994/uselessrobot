@@ -196,7 +196,7 @@ class CatExpeditionPlugin:
             description="猫猫远征队·查看当前Boss信息"
         )
         router.register(
-            ["科研", "research", ".research"],
+            ["科研", "喵科研", "research", ".research"],
             self.cmd_research,
             description="猫猫远征队·科研"
         )
@@ -216,7 +216,7 @@ class CatExpeditionPlugin:
             description="猫猫远征队·世界地图"
         )
         router.register(
-            ["邮件", "catmail", ".catmail"],
+            ["喵邮件", "catmail", ".catmail"],
             self.cmd_mail,
             description="猫猫远征队·管理员全服邮件（仅管理员可用）",
             permission_check=lambda ctx: ctx.user_id == Config.CAT_ADMIN_QQ

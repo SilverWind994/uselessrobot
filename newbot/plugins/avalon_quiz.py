@@ -324,4 +324,11 @@ class AvalonQuizPlugin:
                              f"   {time_str}")
         else:
             lines.append("还没有人作答~")
+        # 已看题但未作答的人，附上其看题时间
+        answered_ids = {str(uid) for uid in latest}
+        not_answered = [(uid, v) for uid, v in viewers.items() if uid not in answered_ids]
+        if not_answered:
+            lines.append("—— 已看题未作答 ——")
+            for uid, v in not_answered:
+                lines.append(f"· {v.get('name', '未知')}（{uid}）看题时间：{v.get('view_time') or '未知'}")
         self._sender.reply(ctx, "\n".join(lines))

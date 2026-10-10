@@ -25,12 +25,17 @@ class CatConfig:
     CAT_RARITY_RATES = {"normal": 0.75, "rare": 0.20, "epic": 0.04, "legend": 0.01}
     CAT_RARITY_NAMES = {"normal": "普通", "rare": "稀有", "epic": "史诗", "legend": "传说"}
 
+    # 抽卡幸运：单抽有 1% 概率直接变成十连（仍只按 1 抽扣费）
+    CAT_SUMMON_LUCKY_CHANCE = 0.01
+    CAT_SUMMON_LUCKY_COUNT = 10
+
     # ==================== 鱼干经济 ====================
     CAT_SUMMON_COST = 100          # 单次抽卡
     CAT_SIGNIN_MIN = 80            # 签到鱼干下限
     CAT_SIGNIN_MAX = 120           # 签到鱼干上限
     CAT_SIGNIN_CRIT_CHANCE = 0.10  # 暴击概率（双倍）
     CAT_SIGNIN_SUPER_CHANCE = 0.01 # 超级暴击概率（四倍）
+    CAT_SIGNIN_LOW_FISH = 1000     # 签到暴击提升的鱼干阈值（低于此值且非全服战力第一时生效）
     CAT_SIGNIN_BONUS_INTERVAL = 10  # 每多少天触发累计奖励
     CAT_SIGNIN_BONUS_CAP = 2000    # 累计奖励上限
     CAT_WELCOME_FISH = 1000        # 新玩家初始
@@ -72,3 +77,6 @@ class CatConfig:
 
     CAT_EXPEDITION_RANDOM_MIN = 0.8   # 伤害随机下限
     CAT_EXPEDITION_RANDOM_MAX = 1.2   # 伤害随机上限
+
+    CAT_EXPEDITION_CRIT_CHANCE = 0.10  # 远征暴击概率
+    CAT_EXPEDITION_CRIT_MULT = 1.5     # 远征暴击伤害倍率

@@ -238,12 +238,21 @@ class CatExpeditionPlugin:
 
         # 随机鱼干 80-120，概率暴击
         base = random.randint(CatConfig.CAT_SIGNIN_MIN, CatConfig.CAT_SIGNIN_MAX)
+        crit_chance = CatConfig.CAT_SIGNIN_CRIT_CHANCE
+        super_chance = CatConfig.CAT_SIGNIN_SUPER_CHANCE
+        # 非全服战力第一且鱼干不足时，暴击率按战力差提升，超级暴击率取暴击率的 10%
+        if player["fish"] < CatConfig.CAT_SIGNIN_LOW_FISH:
+            max_power = self._max_team_base_power()
+            own_power = self._team_base_power(player)
+            if own_power < max_power:
+                crit_chance += (max_power - own_power) / max_power
+                super_chance = crit_chance * 0.10
         crit_type = "normal"
         r = random.random()
-        if r < CatConfig.CAT_SIGNIN_SUPER_CHANCE:
+        if r < super_chance:
             base *= 4
             crit_type = "super"
-        elif r < CatConfig.CAT_SIGNIN_SUPER_CHANCE + CatConfig.CAT_SIGNIN_CRIT_CHANCE:
+        elif r < super_chance + crit_chance:
             base *= 2
             crit_type = "crit"
         player["fish"] += base
@@ -318,15 +327,23 @@ class CatExpeditionPlugin:
             )
             return
 
-        results = self._do_summon(player, count, pool_key)
+        # 幸运：单抽有概率直接变成十连，仍只按 1 抽扣费
+        lucky = (count == 1
+                 and random.random() < CatConfig.CAT_SUMMON_LUCKY_CHANCE)
+        draw_count = CatConfig.CAT_SUMMON_LUCKY_COUNT if lucky else count
+
+        results = self._do_summon(player, draw_count, pool_key)
         player["fish"] -= total_cost
-        # 每次抽卡获得猫眼石
+        # 每次抽卡获得猫眼石（幸运十连只按实际付费抽数计）
         player["eye_stones"] = player.get("eye_stones", 0) + count * CatConfig.CAT_EYE_STONE_PER_SUMMON
         player["summon_count"] = player.get("summon_count", 0) + count
         self._update_player(ctx.user_id, player)
 
         # 拼消息
-        lines = [f"【抽喵结果】共 {count} 只，消耗 {total_cost} 鱼干"]
+        header = f"【抽喵结果】共 {len(results)} 只，消耗 {total_cost} 鱼干"
+        if lucky:
+            header = f"✨ 欧气爆发！一抽变十连！\n{header}"
+        lines = [header]
         for r in results:
             rname = CatConfig.CAT_RARITY_NAMES[r["rarity"]]
             line = f"  [{rname}] {r['name']}"
@@ -678,6 +695,11 @@ class CatExpeditionPlugin:
                                CatConfig.CAT_EXPEDITION_RANDOM_MAX)
         damage = int(total_power * ratio)
 
+        # 暴击：概率造成 1.5 倍伤害
+        is_crit = random.random() < CatConfig.CAT_EXPEDITION_CRIT_CHANCE
+        if is_crit:
+            damage = int(damage * CatConfig.CAT_EXPEDITION_CRIT_MULT)
+
         # 扣减Boss血量
         exp["boss_hp"] = max(0, exp["boss_hp"] - damage)
         exp["damage_log"].append({
@@ -712,7 +734,8 @@ class CatExpeditionPlugin:
                 else:
                     lines.append("  无匹配天气/地形的猫猫")
                 lines.append(f"总战力：{base_total}×{1+total_bonus_ratio:.2f}={total_power}，随机倍率：{ratio:.2f}")
-                lines.append(f"本次伤害：{damage}")
+                crit_text = f"（⚡暴击 ×{CatConfig.CAT_EXPEDITION_CRIT_MULT}）" if is_crit else ""
+                lines.append(f"本次伤害：{damage}{crit_text}")
                 lines.append(f"Boss剩余血量：{exp['boss_hp']}/{stage_cfg['boss_hp']}（{hp_percent:.1f}%）")
                 self._sender.reply(ctx, "\n".join(lines))
             else:
@@ -1294,6 +1317,11 @@ class CatExpeditionPlugin:
             base = CatConfig.CAT_BASE_POWER_BY_RARITY.get(owned.get("rarity", "normal"), 0)
             total += base * CatConfig.CAT_STAR_POWER_MULT.get(owned.get("star", 1), 1)
         return total
+
+    def _max_team_base_power(self) -> int:
+        """全服玩家中最高的基础战力（签到暴击提升判定用）"""
+        players = self._load_players()
+        return max((self._team_base_power(p) for p in players.values()), default=0)
 
     def _cat_power(self, owned_cat: dict, pool_cat: Optional[dict],
                    battle_type: Optional[str] = None,

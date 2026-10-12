@@ -1041,16 +1041,16 @@ class CatExpeditionPlugin:
         owned_stars = {c["id"]: c.get("star", 1)
                        for c in (player or {}).get("collection", [])}
 
-        # 按稀有度分组（只保留有猫的组，顺序 normal→rare→epic→legend）
+        # 按稀有度分组（只保留有猫的组，顺序 legend→epic→rare→normal，传说在前）
         groups = []
-        for r in CAT_RARITY_ORDER:
+        for r in reversed(CAT_RARITY_ORDER):
             rc = sorted((c for c in all_cats if c["rarity"] == r),
                         key=lambda c: c["id"])
             if rc:
                 groups.append((r, rc))
 
         margin = 48
-        header_h = 150
+        header_h = 380
         group_h = 56
         gap = 16
         cell_w = 380
@@ -1075,11 +1075,19 @@ class CatExpeditionPlugin:
 
         name = self._countries.get(code, "未知国家")
         self._center_text(
-            draw, (0, 24, width, 96), name, self._font(60), CAT_TEXT_RGB
+            draw, (0, 22, width, 92), name, self._font(60), CAT_TEXT_RGB
         )
+        # 国家名称下方绘制国家图标（旗帜）
+        origin_img = self._find_img(CatConfig.CAT_IMG_ORIGINS_DIR, name)
+        if origin_img:
+            flag_w, flag_h = 450, 234
+            cx = width // 2
+            self._paste_fit(book, origin_img,
+                            (cx - flag_w // 2, 96,
+                             cx + flag_w // 2, 96 + flag_h))
         got = sum(1 for c in all_cats if c["id"] in owned_ids)
         self._center_text(
-            draw, (0, 92, width, 138),
+            draw, (0, 338, width, 376),
             f"{code} · 收集进度 {got}/{len(all_cats)}",
             self._font(32), (130, 110, 85)
         )

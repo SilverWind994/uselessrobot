@@ -514,8 +514,13 @@ class CatExpeditionPlugin:
         # 模糊匹配卡池里的猫
         target = self._find_pool_cat_by_name(args)
         if target is None:
-            pool_names = "\n".join(f"  · {c['name']}" for c in self._pool)
-            self._sender.reply(ctx, f"没找到叫「{args}」的喵喵。卡池里有：\n{pool_names}")
+            legends = [c["name"] for c in self._pool if c["rarity"] == "legend"]
+            self._sender.reply(
+                ctx,
+                f"没找到叫「{args}」的喵喵。\n"
+                f"可兑换的传说喵喵：{'、'.join(legends)}\n"
+                f"其他喵喵可用「喵卡池」查看。"
+            )
             return
 
         # 扣猫眼石，直接grant给玩家（不走概率，固定这只）

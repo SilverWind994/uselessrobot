@@ -2,7 +2,7 @@ import os
 import json
 import random
 import re
-from datetime import date
+from datetime import date, timedelta
 from typing import List, Optional
 
 from PIL import Image, ImageDraw, ImageFont
@@ -97,11 +97,22 @@ class CatExpeditionPlugin:
 
     def _migrate_players(self) -> None:
         """启动时迁移玩家存档：把历史 id 补零为两位数，并按 id 对齐卡池中的 name/rarity。
-        卡池改 id/改名/调稀有度后，玩家收藏里的旧字段会在下次启动时自动更新。"""
+        卡池改 id/改名/调稀有度后，玩家收藏里的旧字段会在下次启动时自动更新。
+        另含一次性补偿：满星重复抽卡此前漏发的猫眼石。"""
         pool_by_id = {c["id"]: c for c in self._pool}
         players = self._load_players()
         changed = False
         for pl in players.values():
+            # 一次性补偿漏发的猫眼石：估算返还次数
+            # = 抽卡次数 - 拥有数量（几星算几只）+ 2（默认每人用猫眼石换过 2 只）
+            if not pl.get("eye_stone_makeup_done"):
+                pl["eye_stone_makeup_done"] = True
+                changed = True
+                owned_copies = sum(c.get("star", 1) for c in pl.get("collection", []))
+                missed = pl.get("summon_count", 0) - owned_copies + 2
+                if missed > 0:
+                    pl["eye_stones"] = (pl.get("eye_stones", 0)
+                                        + missed * CatConfig.CAT_DUP_EYE_STONE)
             for owned in pl.get("collection", []):
                 new_id = _pad_cat_id(owned.get("id"))
                 if new_id != owned.get("id"):
@@ -147,6 +158,7 @@ class CatExpeditionPlugin:
                 "signin_streak": 0,
                 "signin_total": 0,
                 "summon_count": 0,
+                "eye_stone_makeup_done": True,   # 新玩家不参与历史猫眼石补偿
                 "deploy_limit": CatConfig.CAT_INITIAL_DEPLOY_LIMIT,
                 "deploy_team": [],
                 "research_limit": CatConfig.CAT_INITIAL_RESEARCH_LIMIT,
@@ -226,14 +238,20 @@ class CatExpeditionPlugin:
 
     def cmd_signin(self, ctx: CommandContext) -> None:
         player = self._get_player(ctx.user_id)
-        today = date.today().isoformat()
+        today = date.today()
+        today_str = today.isoformat()
 
-        if player["last_signin"] == today:
+        if player["last_signin"] == today_str:
             self._sender.reply(ctx, "今天已经签过啦~明天再来喵 (=^･ω･^=)")
             return
 
-        player["last_signin"] = today
-        player["signin_streak"] += 1
+        # 连续签到：昨天签过则 +1，否则（首次或断签）重新计为 1 天；累计签到只增不减
+        yesterday_str = (today - timedelta(days=1)).isoformat()
+        if player.get("last_signin") == yesterday_str:
+            player["signin_streak"] = player.get("signin_streak", 0) + 1
+        else:
+            player["signin_streak"] = 1
+        player["last_signin"] = today_str
         player["signin_total"] = player.get("signin_total", 0) + 1
 
         # 随机鱼干 80-120，概率暴击
@@ -257,7 +275,7 @@ class CatExpeditionPlugin:
             crit_type = "crit"
         player["fish"] += base
 
-        # 累计签到奖励：每10天一次，天数*10，上限2000
+        # 连续签到奖励：每满10天一次，天数*10，上限2000
         bonus = 0
         interval = CatConfig.CAT_SIGNIN_BONUS_INTERVAL
         if player["signin_streak"] % interval == 0:
@@ -276,7 +294,7 @@ class CatExpeditionPlugin:
 
         msg = f"签到成功！{crit_icon}+{base} 鱼干 🐟\n"
         if bonus > 0:
-            msg += f"🎉 累计签到 {player['signin_streak']} 天！额外奖励 +{bonus} 鱼干\n"
+            msg += f"🎉 连续签到 {player['signin_streak']} 天！额外奖励 +{bonus} 鱼干\n"
         msg += f"当前余额：{player['fish']} 鱼干 | 连续签到：{player['signin_streak']}天"
 
         self._sender.reply(ctx, msg)
@@ -351,7 +369,8 @@ class CatExpeditionPlugin:
                 line += f"（{r['job']}）"
             if r["is_dup"]:
                 if r["refunded"]:
-                    line += f"（已满星，返还 {r['refund_amt']} 鱼干）"
+                    line += (f"（已满星，返还 {r['refund_amt']} 鱼干"
+                             f" + {CatConfig.CAT_DUP_EYE_STONE} 猫眼石）")
                 else:
                     line += f"（已拥有，当前 ★{r['star']}）"
             if r["star_up"]:
@@ -474,10 +493,11 @@ class CatExpeditionPlugin:
         old_star = owned["star"]
         old_job = owned.get("job", "")
 
-        # 已满星：返还鱼干
+        # 已满星：返还鱼干与猫眼石
         if old_star >= CatConfig.CAT_MAX_STAR:
             refund = CatConfig.CAT_DUP_REFUND_BY_RARITY.get(owned["rarity"], 50)
             player["fish"] += refund
+            player["eye_stones"] = player.get("eye_stones", 0) + CatConfig.CAT_DUP_EYE_STONE
             return {**owned, "is_dup": True, "refunded": True, "refund_amt": refund,
                     "star_up": False, "job_up": False}
 
@@ -559,11 +579,10 @@ class CatExpeditionPlugin:
         lines = [
             "【猫猫远征队 · 基础属性】",
             f"🐱 猫猫：{len(collection)} 只（满星 {max_star_num} 只）",
-            f"👊 基础战力：{self._team_base_power(player)}",
+            f"⚔️ 基础战力：{self._team_base_power(player)}",
             f"🐟 鱼干：{player.get('fish', 0)}",
             f"💎 猫眼石：{player.get('eye_stones', 0)}",
             f"🏺 遗物：{player.get('relics', 0)}",
-            f"⚔️ 出阵猫猫上限：{player.get('deploy_limit', CatConfig.CAT_INITIAL_DEPLOY_LIMIT)}",
             f"🔬 研究猫猫上限：{player.get('research_limit', CatConfig.CAT_INITIAL_RESEARCH_LIMIT)}",
             f"📅 累计签到：{player.get('signin_total', 0)} 天"
             f"（连续 {player.get('signin_streak', 0)} 天）",

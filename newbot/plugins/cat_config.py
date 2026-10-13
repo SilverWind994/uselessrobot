@@ -44,6 +44,7 @@ class CatConfig:
     # 猫眼石（抽卡积累，100换一只指定猫）
     CAT_EYE_STONE_PER_SUMMON = 1
     CAT_EYE_STONE_COST = 100
+    CAT_DUP_EYE_STONE = 1         # 满星喵喵重复抽到时的猫眼石返还
 
     # ==================== 养成与战斗 ====================
     CAT_MAX_STAR = 5              # 星级上限
@@ -68,7 +69,6 @@ class CatConfig:
                          "龙巢", "神殿", "古战场", "深渊裂隙", "水晶矿脉", "诅咒之地", "妖精之森"]
 
     # 远征队位置上限（初始值，可通过游戏内成长提升，实际值存在玩家存档）
-    CAT_INITIAL_DEPLOY_LIMIT = 3    # 出阵猫猫上限初始值
     CAT_INITIAL_RESEARCH_LIMIT = 3  # 研究猫猫上限初始值
 
     # ==================== 远征Boss系统 ====================

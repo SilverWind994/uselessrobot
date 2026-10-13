@@ -97,22 +97,11 @@ class CatExpeditionPlugin:
 
     def _migrate_players(self) -> None:
         """启动时迁移玩家存档：把历史 id 补零为两位数，并按 id 对齐卡池中的 name/rarity。
-        卡池改 id/改名/调稀有度后，玩家收藏里的旧字段会在下次启动时自动更新。
-        另含一次性补偿：满星重复抽卡此前漏发的猫眼石。"""
+        卡池改 id/改名/调稀有度后，玩家收藏里的旧字段会在下次启动时自动更新。"""
         pool_by_id = {c["id"]: c for c in self._pool}
         players = self._load_players()
         changed = False
         for pl in players.values():
-            # 一次性补偿漏发的猫眼石：估算返还次数
-            # = 抽卡次数 - 拥有数量（几星算几只）+ 2（默认每人用猫眼石换过 2 只）
-            if not pl.get("eye_stone_makeup_done"):
-                pl["eye_stone_makeup_done"] = True
-                changed = True
-                owned_copies = sum(c.get("star", 1) for c in pl.get("collection", []))
-                missed = pl.get("summon_count", 0) - owned_copies + 2
-                if missed > 0:
-                    pl["eye_stones"] = (pl.get("eye_stones", 0)
-                                        + missed * CatConfig.CAT_DUP_EYE_STONE)
             for owned in pl.get("collection", []):
                 new_id = _pad_cat_id(owned.get("id"))
                 if new_id != owned.get("id"):
@@ -158,7 +147,6 @@ class CatExpeditionPlugin:
                 "signin_streak": 0,
                 "signin_total": 0,
                 "summon_count": 0,
-                "eye_stone_makeup_done": True,   # 新玩家不参与历史猫眼石补偿
                 "deploy_limit": CatConfig.CAT_INITIAL_DEPLOY_LIMIT,
                 "deploy_team": [],
                 "research_limit": CatConfig.CAT_INITIAL_RESEARCH_LIMIT,
@@ -369,8 +357,7 @@ class CatExpeditionPlugin:
                 line += f"（{r['job']}）"
             if r["is_dup"]:
                 if r["refunded"]:
-                    line += (f"（已满星，返还 {r['refund_amt']} 鱼干"
-                             f" + {CatConfig.CAT_DUP_EYE_STONE} 猫眼石）")
+                    line += f"（已满星，返还 {r['refund_amt']} 鱼干）"
                 else:
                     line += f"（已拥有，当前 ★{r['star']}）"
             if r["star_up"]:
@@ -493,11 +480,10 @@ class CatExpeditionPlugin:
         old_star = owned["star"]
         old_job = owned.get("job", "")
 
-        # 已满星：返还鱼干与猫眼石
+        # 已满星：返还鱼干
         if old_star >= CatConfig.CAT_MAX_STAR:
             refund = CatConfig.CAT_DUP_REFUND_BY_RARITY.get(owned["rarity"], 50)
             player["fish"] += refund
-            player["eye_stones"] = player.get("eye_stones", 0) + CatConfig.CAT_DUP_EYE_STONE
             return {**owned, "is_dup": True, "refunded": True, "refund_amt": refund,
                     "star_up": False, "job_up": False}
 

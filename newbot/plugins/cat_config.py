@@ -41,10 +41,9 @@ class CatConfig:
     CAT_WELCOME_FISH = 1000        # 新玩家初始
     CAT_DUP_REFUND_BY_RARITY = {"normal": 20, "rare": 50, "epic": 100, "legend": 500}
 
-    # 猫眼石（抽卡积累，100换一只指定猫）
+    # 猫眼石（抽卡积累，100换一只指定猫。仅由抽卡动作产生）
     CAT_EYE_STONE_PER_SUMMON = 1
     CAT_EYE_STONE_COST = 100
-    CAT_DUP_EYE_STONE = 1         # 满星喵喵重复抽到时的猫眼石返还
 
     # ==================== 养成与战斗 ====================
     CAT_MAX_STAR = 5              # 星级上限

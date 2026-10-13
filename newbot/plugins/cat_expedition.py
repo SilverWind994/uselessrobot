@@ -275,11 +275,11 @@ class CatExpeditionPlugin:
             crit_type = "crit"
         player["fish"] += base
 
-        # 连续签到奖励：每满10天一次，天数*10，上限2000
+        # 累计签到奖励：每满10天一次，天数*10，上限2000（按累计签到天数，与连续无关）
         bonus = 0
         interval = CatConfig.CAT_SIGNIN_BONUS_INTERVAL
-        if player["signin_streak"] % interval == 0:
-            raw_bonus = player["signin_streak"] * 10
+        if player["signin_total"] % interval == 0:
+            raw_bonus = player["signin_total"] * 10
             bonus = min(raw_bonus, CatConfig.CAT_SIGNIN_BONUS_CAP)
             player["fish"] += bonus
 
@@ -294,7 +294,7 @@ class CatExpeditionPlugin:
 
         msg = f"签到成功！{crit_icon}+{base} 鱼干 🐟\n"
         if bonus > 0:
-            msg += f"🎉 连续签到 {player['signin_streak']} 天！额外奖励 +{bonus} 鱼干\n"
+            msg += f"🎉 累计签到 {player['signin_total']} 天！额外奖励 +{bonus} 鱼干\n"
         msg += f"当前余额：{player['fish']} 鱼干 | 连续签到：{player['signin_streak']}天"
 
         self._sender.reply(ctx, msg)

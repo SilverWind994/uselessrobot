@@ -157,13 +157,10 @@ class YahtzeePlugin:
         router.register(
             ["快艇骰子", "yahtzee", "y", ".y"],
             self.cmd_entry,
-            description="快艇骰子·群内掷骰计分（子指令：加入/开始/重投/计分/放弃/排行榜）"
+            description="快艇骰子·群聊/私聊掷骰计分（子指令：加入/开始/重投/计分/放弃/排行榜）"
         )
 
     def cmd_entry(self, ctx: CommandContext) -> None:
-        if not ctx.is_group:
-            self._sender.reply(ctx, "请在群聊中开启此功能")
-            return
         self._ensure_week()
         self._drop_stale(ctx)
 
@@ -216,12 +213,17 @@ class YahtzeePlugin:
     # ==================== 子指令实现 ====================
 
     def _show(self, ctx: CommandContext) -> None:
-        game = self._get_or_create(ctx)
-        if not game["started"]:
-            names = "、".join(p["name"] for p in game["players"])
+        game = self._get_game(self._room_key(ctx))
+        if game is None or not game["started"]:
+            players = game["players"] if game else []
+            if not players:
+                self._sender.reply(
+                    ctx, f"还没有人加入喵，发送「快艇骰子 加入」加入对局（1~{MAX_PLAYERS}人）")
+                return
+            names = "、".join(p["name"] for p in players)
             self._sender.reply(
                 ctx,
-                f"快艇骰子准备中（{len(game['players'])}/{MAX_PLAYERS}）：{names}\n"
+                f"快艇骰子准备中（{len(players)}/{MAX_PLAYERS}）：{names}\n"
                 f"发送「快艇骰子 加入」加入，「快艇骰子 开始」开始"
             )
             return
@@ -243,10 +245,10 @@ class YahtzeePlugin:
         started = len(game["players"]) >= MAX_PLAYERS
         if started:
             self._start_game(game)
-        self._save_game(ctx.group_id, game)
+        self._save_game(self._room_key(ctx), game)
         if started:
-            self._sender.reply(ctx, f"{ctx.user_name} 加入游戏，人满自动开始！")
-            self._send_board(ctx, game)
+            self._sender.reply(ctx, f"{ctx.user_name} 加入游戏，人满自动开始！发送「快艇骰子」可查看计分板")
+            self._send_dice(ctx, game)
         else:
             self._sender.reply(
                 ctx, f"{ctx.user_name} 加入游戏（{len(game['players'])}/{MAX_PLAYERS}）"
@@ -257,13 +259,16 @@ class YahtzeePlugin:
         if game["started"]:
             self._sender.reply(ctx, "游戏已经开始了")
             return
+        if not game["players"]:
+            self._sender.reply(ctx, "还没有人加入喵，先发送「快艇骰子 加入」")
+            return
         self._start_game(game)
-        self._save_game(ctx.group_id, game)
-        self._sender.reply(ctx, "游戏开始喵！")
-        self._send_board(ctx, game)
+        self._save_game(self._room_key(ctx), game)
+        self._sender.reply(ctx, "游戏开始喵！发送「快艇骰子」可查看计分板")
+        self._send_dice(ctx, game)
 
     def _cmd_reroll(self, ctx: CommandContext, rest: str) -> None:
-        game = self._get_game(ctx.group_id)
+        game = self._get_game(self._room_key(ctx))
         if game is None or not game["started"]:
             self._sender.reply(ctx, "当前没有进行中的游戏喵")
             return
@@ -293,11 +298,11 @@ class YahtzeePlugin:
             dice[i] = random.randint(1, 6)
         game["dice"] = sorted(dice)
         game["roll"] += 1
-        self._save_game(ctx.group_id, game)
-        self._send_board(ctx, game)
+        self._save_game(self._room_key(ctx), game)
+        self._send_dice(ctx, game)
 
     def _cmd_score(self, ctx: CommandContext, rest: str) -> None:
-        game = self._get_game(ctx.group_id)
+        game = self._get_game(self._room_key(ctx))
         if game is None or not game["started"]:
             self._sender.reply(ctx, "当前没有进行中的游戏喵")
             return
@@ -320,12 +325,13 @@ class YahtzeePlugin:
                            f"{player['name']} 计分 {_CATEGORY_NAMES[index]} +{gained}，全员已打完")
             return
         self._next_active(game)
-        self._save_game(ctx.group_id, game)
-        self._sender.reply(ctx, f"{player['name']} 计分 {_CATEGORY_NAMES[index]} +{gained}")
-        self._send_board(ctx, game)
+        self._save_game(self._room_key(ctx), game)
+        self._sender.reply(ctx, f"{player['name']} 计分 {_CATEGORY_NAMES[index]} +{gained}"
+                                f"（发送「快艇骰子」查看计分板）")
+        self._send_dice(ctx, game)
 
     def _cmd_giveup(self, ctx: CommandContext) -> None:
-        game = self._get_game(ctx.group_id)
+        game = self._get_game(self._room_key(ctx))
         if game is None:
             self._sender.reply(ctx, "当前没有进行中的游戏喵")
             return
@@ -337,10 +343,10 @@ class YahtzeePlugin:
             # 还没开始时放弃 = 退出大厅
             game["players"].remove(player)
             if not game["players"]:
-                self._remove_game(ctx.group_id)
+                self._remove_game(self._room_key(ctx))
                 self._sender.reply(ctx, "已退出，对局取消喵")
                 return
-            self._save_game(ctx.group_id, game)
+            self._save_game(self._room_key(ctx), game)
             self._sender.reply(ctx, f"已退出本局（剩余 {len(game['players'])} 人）")
             return
         if player["given_up"]:
@@ -358,29 +364,28 @@ class YahtzeePlugin:
             self._finalize(ctx, game, f"{ctx.user_name} 放弃本局（{total}分），其余人也已结束")
             return
         active = sum(1 for p in game["players"] if not p["given_up"])
-        self._save_game(ctx.group_id, game)
+        self._save_game(self._room_key(ctx), game)
         self._sender.reply(
             ctx, f"{ctx.user_name} 放弃本局，{total}分已锁定；其余 {active} 位喵喵继续")
         self._send_board(ctx, game)
 
     # ==================== 内部逻辑 ====================
 
+    @staticmethod
+    def _room_key(ctx: CommandContext) -> int:
+        """对局键：群聊用群号，私聊用玩家 QQ（避免不同私聊互相串局）"""
+        return ctx.group_id if ctx.is_group else ctx.user_id
+
     def _get_game(self, group_id: int):
         return _load_json(_STATE_PATH).get(str(group_id))
 
     def _get_or_create(self, ctx: CommandContext) -> dict:
-        """取本群对局，没有则以发起者为第一名玩家新建"""
-        game = self._get_game(ctx.group_id)
+        """取本群对局，没有则新建一个空对局（玩家需自行「加入」）"""
+        game = self._get_game(self._room_key(ctx))
         if game is not None:
             return game
-        game = {
-            "started": False,
-            "turn": 0,
-            "roll": 1,
-            "dice": [],
-            "players": [self._new_player(ctx.user_id, ctx.user_name)],
-        }
-        self._save_game(ctx.group_id, game)
+        game = {"started": False, "turn": 0, "roll": 1, "dice": [], "players": []}
+        self._save_game(self._room_key(ctx), game)
         return game
 
     @staticmethod
@@ -396,12 +401,12 @@ class YahtzeePlugin:
 
     def _drop_stale(self, ctx: CommandContext) -> None:
         """对局闲置过久则作废，避免卡住后续的开局"""
-        game = self._get_game(ctx.group_id)
+        game = self._get_game(self._room_key(ctx))
         if game is None:
             return
         if time.time() - game.get("updated_at", 0) <= IDLE_SECONDS:
             return
-        self._remove_game(ctx.group_id)
+        self._remove_game(self._room_key(ctx))
         self._sender.reply(ctx, f"上一局快艇骰子闲置超过 {IDLE_SECONDS // 3600} 小时，已自动作废喵")
 
     def _remove_game(self, group_id: int) -> None:
@@ -464,14 +469,22 @@ class YahtzeePlugin:
                 note = "（本周已有首次分数，不重复计）"
             lines.append(f"{p['name']}{tag}：{total}分 {note}")
         _save_json(_WEEKLY_PATH, weekly)
-        self._remove_game(ctx.group_id)
+        self._remove_game(self._room_key(ctx))
         self._sender.reply(ctx, "\n".join(lines))
 
     def _send_board(self, ctx: CommandContext, game: dict) -> None:
         try:
-            path = self._render_board(game, ctx.group_id)
+            path = self._render_board(game, self._room_key(ctx))
         except Exception as e:
             self._sender.reply(ctx, f"棋盘绘制失败了喵：{e}")
+            return
+        self._sender.send_image(Target.from_data(ctx.raw_data), path)
+
+    def _send_dice(self, ctx: CommandContext, game: dict) -> None:
+        try:
+            path = self._render_dice(game, self._room_key(ctx))
+        except Exception as e:
+            self._sender.reply(ctx, f"骰子绘制失败了喵：{e}")
             return
         self._sender.send_image(Target.from_data(ctx.raw_data), path)
 
@@ -510,9 +523,11 @@ class YahtzeePlugin:
     def _help_text() -> str:
         return (
             "快艇骰子玩法\n"
+            "· 群聊/私聊都能开：群聊 1~4 人，私聊单人\n"
             "· 快艇骰子 加入 / 开始：组局，1~4人（人满自动开始）\n"
             "· 快艇骰子 重投 1 3（或连写 13）：重投第1、3颗骰子（每回合最多重投2次）\n"
             "· 快艇骰子 计分 快艇：把当前骰子记到指定格子\n"
+            "· 快艇骰子：查看完整计分板（掷骰/重投只发骰子小图）\n"
             "· 快艇骰子 放弃：自己退出本局，剩余格子按0锁定，当前分数立即固定\n"
             "· 快艇骰子 排行榜：查看本周排行\n"
             "格子：一点~六点、全选、四同、葫芦、小顺、大顺、快艇\n"
@@ -589,6 +604,36 @@ class YahtzeePlugin:
 
         os.makedirs(YAHTZEE_DIR, exist_ok=True)
         path = os.path.join(YAHTZEE_DIR, f"board_{group_id}.png")
+        img.save(path)
+        return path
+
+    def _render_dice(self, game: dict, group_id: int) -> str:
+        """只画当前回合的骰子（小图），计分板另见 _render_board"""
+        players = game["players"]
+        cur = players[game["turn"]]
+        dice = game["dice"] or []
+        size, gap = 76, 16
+        row_w = len(dice) * (size + gap) - gap if dice else 0
+        width = max(row_w + 60, 420)
+        height = 190
+        img = Image.new("RGB", (width, height), (252, 250, 244))
+        draw = ImageDraw.Draw(img)
+        draw.rectangle((6, 6, width - 7, height - 7), outline=(205, 196, 180), width=3)
+
+        self._center_text(draw, (0, 14, width, 50), "快艇骰子",
+                          self._font(32), (60, 45, 35))
+        self._center_text(draw, (0, 48, width, 78),
+                          f"当前回合：{cur['name']}（第{game['roll']}/{MAX_ROLL}投）",
+                          self._font(24), (168, 96, 40))
+        if dice:
+            start_x = (width - row_w) // 2
+            for i, v in enumerate(dice):
+                _draw_die(draw, start_x + i * (size + gap), 88, size, v)
+        self._center_text(draw, (0, height - 40, width, height - 12),
+                          "发送「快艇骰子」查看计分板", self._font(20), (150, 140, 128))
+
+        os.makedirs(YAHTZEE_DIR, exist_ok=True)
+        path = os.path.join(YAHTZEE_DIR, f"dice_{group_id}.png")
         img.save(path)
         return path
 

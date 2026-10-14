@@ -2,12 +2,14 @@
 
 玩法：群里 1~4 人，每人 12 个计分格，掷 5 颗骰子、最多重投 2 次，选一格计分。
 每周记录每位玩家「本周第一次」的分数，跨周结算时按分数排名发放鱼干奖励。
-中途可以「放弃」，放弃按当前分数结算（不再依赖强制结束的 stop）。
+中途可以「放弃」：放弃者退出本局并锁定当前分数，其余人继续；
+所有人打完 12 格、或无人能行动时本局结束（不再依赖强制结束的 stop）。
 """
 
 import json
 import os
 import re
+import time
 import random
 from datetime import date
 
@@ -27,10 +29,14 @@ MAX_ROLL = 3          # 每回合最多投掷次数（含首投，即可重投 2
 CATEGORY_COUNT = 12   # 每人可计分的格子数
 # 每周首次得分排行奖励：第1名1000鱼干、第2名900……依次递减，最多发到第10名100
 WEEKLY_REWARDS = [1000 - 100 * i for i in range(10)]
+IDLE_SECONDS = 6 * 60 * 60   # 对局闲置超过该时长自动作废，避免卡住之后的开局
 
 # 计分表格行（与 score 数组下标的映射见 _cell_text）
 _ROW_NAMES = ["一点", "二点", "三点", "四点", "五点", "六点", "奖励分",
               "全选", "四同", "葫芦", "小顺", "大顺", "快艇", "总分"]
+# 可计分的 12 个格子名（与 score 数组下标一一对应；奖励分/总分不是格子）
+_CATEGORY_NAMES = ["一点", "二点", "三点", "四点", "五点", "六点",
+                   "全选", "四同", "葫芦", "小顺", "大顺", "快艇"]
 
 # 子指令别名表：快艇骰子 <子指令> [内容]
 _SUB_ALIASES = {
@@ -159,6 +165,7 @@ class YahtzeePlugin:
             self._sender.reply(ctx, "请在群聊中开启此功能")
             return
         self._ensure_week()
+        self._drop_stale(ctx)
 
         args = ctx.get_args().strip()
         parts = args.split(None, 1)
@@ -232,7 +239,7 @@ class YahtzeePlugin:
         if len(game["players"]) >= MAX_PLAYERS:
             self._sender.reply(ctx, "人数已满喵")
             return
-        game["players"].append({"id": uid, "name": ctx.user_name, "score": [-1] * CATEGORY_COUNT})
+        game["players"].append(self._new_player(uid, ctx.user_name))
         started = len(game["players"]) >= MAX_PLAYERS
         if started:
             self._start_game(game)
@@ -272,13 +279,14 @@ class YahtzeePlugin:
         for t in raw:
             if not t:
                 continue
-            if t in ("1", "2", "3", "4", "5"):
-                idxs.add(int(t) - 1)
-            else:
+            # 每个 token 里的每位数字都算一颗（支持「重投 13」这种连写）
+            if not all(c in "12345" for c in t):
                 self._sender.reply(ctx, "要重投的东西好像不太对喵")
                 return
+            for c in t:
+                idxs.add(int(c) - 1)
         if not idxs:
-            self._sender.reply(ctx, "指令不全喵，例如：快艇骰子 重投 1 2")
+            self._sender.reply(ctx, "指令不全喵，例如：快艇骰子 重投 1 3 或 重投 13")
             return
         dice = game["dice"]
         for i in idxs:
@@ -307,22 +315,53 @@ class YahtzeePlugin:
             return
         player["score"][index] = _score_of(index, game["dice"])
         gained = player["score"][index]
-        if self._advance(game):
-            self._finalize(ctx, game, f"{player['name']} 计分 {_ROW_NAMES[index]} +{gained}")
+        if not self._has_active(game):
+            self._finalize(ctx, game,
+                           f"{player['name']} 计分 {_CATEGORY_NAMES[index]} +{gained}，全员已打完")
             return
+        self._next_active(game)
         self._save_game(ctx.group_id, game)
-        self._sender.reply(ctx, f"{player['name']} 计分 {_ROW_NAMES[index]} +{gained}")
+        self._sender.reply(ctx, f"{player['name']} 计分 {_CATEGORY_NAMES[index]} +{gained}")
         self._send_board(ctx, game)
 
     def _cmd_giveup(self, ctx: CommandContext) -> None:
         game = self._get_game(ctx.group_id)
-        if game is None or not game["started"]:
+        if game is None:
             self._sender.reply(ctx, "当前没有进行中的游戏喵")
             return
-        if not any(p["id"] == ctx.user_id for p in game["players"]):
+        player = next((p for p in game["players"] if p["id"] == ctx.user_id), None)
+        if player is None:
             self._sender.reply(ctx, "你没有参与这局游戏喵")
             return
-        self._finalize(ctx, game, f"{ctx.user_name} 放弃本局，按当前分数结算")
+        if not game["started"]:
+            # 还没开始时放弃 = 退出大厅
+            game["players"].remove(player)
+            if not game["players"]:
+                self._remove_game(ctx.group_id)
+                self._sender.reply(ctx, "已退出，对局取消喵")
+                return
+            self._save_game(ctx.group_id, game)
+            self._sender.reply(ctx, f"已退出本局（剩余 {len(game['players'])} 人）")
+            return
+        if player["given_up"]:
+            self._sender.reply(ctx, "你已经放弃过了")
+            return
+        # 放弃：剩余未记分的格子按 0 锁定，当前分数立即固定
+        for i in range(CATEGORY_COUNT):
+            if player["score"][i] < 0:
+                player["score"][i] = 0
+        player["given_up"] = True
+        total = _total(player["score"])
+        if game["players"][game["turn"]]["id"] == ctx.user_id and self._has_active(game):
+            self._next_active(game)
+        if not self._has_active(game):
+            self._finalize(ctx, game, f"{ctx.user_name} 放弃本局（{total}分），其余人也已结束")
+            return
+        active = sum(1 for p in game["players"] if not p["given_up"])
+        self._save_game(ctx.group_id, game)
+        self._sender.reply(
+            ctx, f"{ctx.user_name} 放弃本局，{total}分已锁定；其余 {active} 位喵喵继续")
+        self._send_board(ctx, game)
 
     # ==================== 内部逻辑 ====================
 
@@ -337,19 +376,33 @@ class YahtzeePlugin:
         game = {
             "started": False,
             "turn": 0,
-            "round": 1,
             "roll": 1,
             "dice": [],
-            "players": [{"id": ctx.user_id, "name": ctx.user_name,
-                         "score": [-1] * CATEGORY_COUNT}],
+            "players": [self._new_player(ctx.user_id, ctx.user_name)],
         }
         self._save_game(ctx.group_id, game)
         return game
 
+    @staticmethod
+    def _new_player(uid: int, name: str) -> dict:
+        return {"id": uid, "name": name, "given_up": False,
+                "score": [-1] * CATEGORY_COUNT}
+
     def _save_game(self, group_id: int, game: dict) -> None:
+        game["updated_at"] = time.time()
         state = _load_json(_STATE_PATH)
         state[str(group_id)] = game
         _save_json(_STATE_PATH, state)
+
+    def _drop_stale(self, ctx: CommandContext) -> None:
+        """对局闲置过久则作废，避免卡住后续的开局"""
+        game = self._get_game(ctx.group_id)
+        if game is None:
+            return
+        if time.time() - game.get("updated_at", 0) <= IDLE_SECONDS:
+            return
+        self._remove_game(ctx.group_id)
+        self._sender.reply(ctx, f"上一局快艇骰子闲置超过 {IDLE_SECONDS // 3600} 小时，已自动作废喵")
 
     def _remove_game(self, group_id: int) -> None:
         state = _load_json(_STATE_PATH)
@@ -360,7 +413,6 @@ class YahtzeePlugin:
     def _start_game(self, game: dict) -> None:
         game["started"] = True
         game["turn"] = 0
-        game["round"] = 1
         game["roll"] = 1
         game["dice"] = _roll5()
 
@@ -371,17 +423,31 @@ class YahtzeePlugin:
             return f"当前玩家是 {cur['name']}"
         return ""
 
-    def _advance(self, game: dict) -> bool:
-        """结束当前回合并轮到下一位；整局结束返回 True"""
-        game["turn"] += 1
-        if game["turn"] >= len(game["players"]):
-            game["turn"] = 0
-            game["round"] += 1
-        if game["round"] > CATEGORY_COUNT:
-            return True
-        game["roll"] = 1
-        game["dice"] = _roll5()
+    def _next_active(self, game: dict) -> bool:
+        """轮到下一位还能行动的玩家（跳过已放弃/已打完的），返回 False 表示无人可行动"""
+        n = len(game["players"])
+        for _ in range(n):
+            game["turn"] = (game["turn"] + 1) % n
+            p = game["players"][game["turn"]]
+            if (not p["given_up"]) and any(v < 0 for v in p["score"]):
+                game["roll"] = 1
+                game["dice"] = _roll5()
+                return True
         return False
+
+    @staticmethod
+    def _has_active(game: dict) -> bool:
+        """是否还有人能继续行动"""
+        return any((not p["given_up"]) and any(v < 0 for v in p["score"])
+                   for p in game["players"])
+
+    @staticmethod
+    def _progress(game: dict) -> int:
+        """本局进度（供显示）：进行中玩家已填格数的最大值"""
+        active = [p for p in game["players"] if not p["given_up"]]
+        if not active:
+            return CATEGORY_COUNT
+        return max(sum(1 for v in p["score"] if v >= 0) for p in active)
 
     def _finalize(self, ctx: CommandContext, game: dict, reason: str) -> None:
         """结算本局：记录各玩家本周首次分数、公布总分、清除对局"""
@@ -389,13 +455,14 @@ class YahtzeePlugin:
         lines = [reason, ""]
         for p in game["players"]:
             total = _total(p["score"])
+            tag = "（已放弃）" if p.get("given_up") else ""
             key = str(p["id"])
             if key not in weekly["scores"]:
                 weekly["scores"][key] = {"name": p["name"], "score": total}
                 note = "（计入本周首次分数）"
             else:
                 note = "（本周已有首次分数，不重复计）"
-            lines.append(f"{p['name']}：{total}分 {note}")
+            lines.append(f"{p['name']}{tag}：{total}分 {note}")
         _save_json(_WEEKLY_PATH, weekly)
         self._remove_game(ctx.group_id)
         self._sender.reply(ctx, "\n".join(lines))
@@ -444,12 +511,14 @@ class YahtzeePlugin:
         return (
             "快艇骰子玩法\n"
             "· 快艇骰子 加入 / 开始：组局，1~4人（人满自动开始）\n"
-            "· 快艇骰子 重投 1 3：重投第1、3颗骰子（每回合最多重投2次）\n"
+            "· 快艇骰子 重投 1 3（或连写 13）：重投第1、3颗骰子（每回合最多重投2次）\n"
             "· 快艇骰子 计分 快艇：把当前骰子记到指定格子\n"
-            "· 快艇骰子 放弃：中止本局，按当前分数结算\n"
+            "· 快艇骰子 放弃：自己退出本局，剩余格子按0锁定，当前分数立即固定\n"
             "· 快艇骰子 排行榜：查看本周排行\n"
             "格子：一点~六点、全选、四同、葫芦、小顺、大顺、快艇\n"
-            "（上区合计≥63分额外+35；每人12格，全填完即结束）\n"
+            "（上区合计≥63分额外+35；每人12格）\n"
+            "【怎么结束】所有人填满12格即自动结束；有人放弃时其余人继续，直到没人能行动才结束；\n"
+            f"对局闲置超过{IDLE_SECONDS // 3600}小时会自动作废（作废不计分）。\n"
             "【排行与奖励】每周只记录你「本周第一次」的分数（正常打完或放弃都算），同周再玩不刷新；\n"
             f"换周后按这份分数从高到低排名发鱼干：第1名{WEEKLY_REWARDS[0]}，"
             f"逐名-100，发到第10名{WEEKLY_REWARDS[-1]}，第10名之后没有奖励；\n"
@@ -475,7 +544,7 @@ class YahtzeePlugin:
 
         cur = players[game["turn"]]
         self._center_text(draw, (0, 16, width, 62),
-                          f"快艇骰子 · 第{min(game['round'], CATEGORY_COUNT)}轮",
+                          f"快艇骰子 · 进度 {self._progress(game)}/{CATEGORY_COUNT}",
                           self._font(40), (60, 45, 35))
         self._center_text(draw, (0, 60, width, 94),
                           f"当前回合：{cur['name']}（第{game['roll']}/{MAX_ROLL}投）",
@@ -493,9 +562,15 @@ class YahtzeePlugin:
         draw.rectangle((margin, head_y, width - margin, head_y + 40), fill=(234, 228, 214))
         for j, p in enumerate(players):
             cx = margin + label_w + j * col_w
-            color = (196, 128, 30) if j == game["turn"] else (60, 52, 44)
+            if j == game["turn"]:
+                color = (196, 128, 30)
+            elif p["given_up"]:
+                color = (168, 160, 150)
+            else:
+                color = (60, 52, 44)
+            lab, lab_font = self._fit_header(self._label(p), col_w - 16)
             self._center_text(draw, (cx, head_y, cx + col_w, head_y + 40),
-                              self._short(p["name"]), self._font(26), color)
+                              lab, lab_font, color)
 
         # 计分行
         for r, name in enumerate(_ROW_NAMES):
@@ -505,8 +580,9 @@ class YahtzeePlugin:
             draw.text((margin + 16, ry + 9), name, font=self._font(26), fill=(70, 60, 50))
             for j, p in enumerate(players):
                 cx = margin + label_w + j * col_w
+                color = (168, 160, 150) if p["given_up"] else (50, 45, 40)
                 self._center_text(draw, (cx, ry, cx + col_w, ry + row_h),
-                                  self._cell_text(p, r), self._font(28), (50, 45, 40))
+                                  self._cell_text(p, r), self._font(28), color)
             draw.line((margin, ry, width - margin, ry), fill=(224, 218, 206))
         draw.line((margin, table_top + row_h * len(_ROW_NAMES), width - margin,
                    table_top + row_h * len(_ROW_NAMES)), fill=(224, 218, 206))
@@ -531,8 +607,11 @@ class YahtzeePlugin:
         return str(_total(s))
 
     @staticmethod
-    def _short(name: str, limit: int = 8) -> str:
-        return name[:limit]
+    def _label(player: dict) -> str:
+        """表头的玩家名；已放弃的加「（弃）」标记"""
+        if player.get("given_up"):
+            return player["name"] + "（弃）"
+        return player["name"]
 
     @staticmethod
     def _font(size: int) -> ImageFont.FreeTypeFont:
@@ -541,6 +620,24 @@ class YahtzeePlugin:
             if os.path.exists(fp):
                 return ImageFont.truetype(fp, size)
         return ImageFont.load_default()
+
+    @staticmethod
+    def _text_w(fnt: ImageFont.FreeTypeFont, text: str) -> int:
+        l, _, r, _ = fnt.getbbox(text)
+        return r - l
+
+    @classmethod
+    def _fit_header(cls, text: str, max_w: int):
+        """返回 (显示文本, 字体)：名字优先完整显示，过长则缩小字号，仍放不下才省略"""
+        for size in (26, 24, 22, 20, 18, 16):
+            fnt = cls._font(size)
+            if cls._text_w(fnt, text) <= max_w:
+                return text, fnt
+        fnt = cls._font(16)
+        out = text
+        while out and cls._text_w(fnt, out + "…") > max_w:
+            out = out[:-1]
+        return out + "…", fnt
 
     @staticmethod
     def _center_text(draw: ImageDraw.ImageDraw, box, text: str, fnt, fill) -> None:

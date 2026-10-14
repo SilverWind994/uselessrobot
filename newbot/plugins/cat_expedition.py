@@ -167,6 +167,17 @@ class CatExpeditionPlugin:
         player["fish"] += amount
         self._update_player(qq, player)
 
+    def get_eye_stones(self, qq: int) -> int:
+        """查询玩家猫眼石余额（负数表示欠债）"""
+        return self._get_player(qq).get("eye_stones", 0)
+
+    def add_eye_stones(self, qq: int, amount: int) -> int:
+        """增减玩家猫眼石（amount 可为负，负余额即欠债）；返回新余额"""
+        player = self._get_player(qq)
+        player["eye_stones"] = player.get("eye_stones", 0) + amount
+        self._update_player(qq, player)
+        return player["eye_stones"]
+
     # ==================== 注册命令 ====================
 
     def register(self, router: CommandRouter) -> None:

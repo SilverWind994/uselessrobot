@@ -731,8 +731,8 @@ class CatExpeditionPlugin:
             self._handle_stage_clear(ctx, exp, stage_cfg, act_cfg)
         else:
             hp_percent = exp["boss_hp"] / stage_cfg["boss_hp"] * 100
-            if hp_percent > 10:
-                # 血量>10%：显示详细伤害明细
+            if hp_percent > 25:
+                # 血量>25%：显示详细伤害明细
                 lines = [
                     f"【远征】{act_cfg.get('name', '???')} 第{exp['stage']}关",
                     f"天气：{weather} | 地形：{terrain}",
@@ -749,7 +749,7 @@ class CatExpeditionPlugin:
                 lines.append(f"Boss剩余血量：{exp['boss_hp']}/{stage_cfg['boss_hp']}（{hp_percent:.1f}%）")
                 self._sender.reply(ctx, "\n".join(lines))
             else:
-                # 血量≤10%：只显示"???"，不说伤害
+                # 血量≤25%：只显示"???"，不说伤害
                 lines = [
                     f"【远征】{act_cfg.get('name', '???')} 第{exp['stage']}关",
                     f"天气：{weather} | 地形：{terrain}",
@@ -807,7 +807,7 @@ class CatExpeditionPlugin:
                 if os.path.exists(img_path):
                     self._sender.send_image(Target.from_data(ctx.raw_data), img_path)
 
-        if hp_percent > 10:
+        if hp_percent > 25:
             lines.append(f"血量：{exp['boss_hp']}/{boss_max}（{hp_percent:.1f}%）")
         else:
             lines.append("血量：???")
@@ -819,8 +819,8 @@ class CatExpeditionPlugin:
         lines.append(f"第3名：🐟{stage_cfg['top3_fish']} 💎{stage_cfg['top3_eye']}")
         lines.append(f"最后一击：🐟{stage_cfg['last_hit_fish']} 💎{stage_cfg['last_hit_eye']}")
 
-        # 排行榜（血量>10%才显示）
-        if hp_percent > 10:
+        # 排行榜（血量>25%才显示）
+        if hp_percent > 25:
             damage_log = exp.get("damage_log", [])
             if damage_log:
                 # 按QQ聚合伤害

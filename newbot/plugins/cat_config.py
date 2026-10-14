@@ -35,7 +35,7 @@ class CatConfig:
     CAT_SIGNIN_MAX = 120           # 签到鱼干上限
     CAT_SIGNIN_CRIT_CHANCE = 0.10  # 暴击概率（双倍）
     CAT_SIGNIN_SUPER_CHANCE = 0.01 # 超级暴击概率（四倍）
-    CAT_SIGNIN_LOW_FISH = 1000     # 签到暴击提升的鱼干阈值（低于此值且非全服战力第一时生效）
+    CAT_SIGNIN_LOW_FISH = 2500     # 签到暴击提升的鱼干阈值（低于此值且非全服战力第一时生效）
     CAT_SIGNIN_BONUS_INTERVAL = 10  # 每多少天触发累计奖励
     CAT_SIGNIN_BONUS_CAP = 2000    # 累计奖励上限
     CAT_WELCOME_FISH = 1000        # 新玩家初始

@@ -54,6 +54,7 @@ _NOBET_WORDS = {"无赌注", "不赌", "无注", "nobet", "free"}
 _JOIN_WORDS = {"加入", "join"}
 _HELP_WORDS = {"帮助", "help"}
 _STATUS_WORDS = {"状态", "status", "查看", "info", ""}
+_CANCEL_WORDS = {"取消", "解散", "退出", "quit", "cancel"}
 
 _SUIT_BASE = {"m": 0, "p": 10, "s": 20, "z": 30}
 
@@ -579,6 +580,8 @@ class Mahjong17Plugin:
             self._sender.reply(ctx, self._help_text())
         elif sub in _STATUS_WORDS:
             self._show(ctx)
+        elif sub in _CANCEL_WORDS:
+            self._cmd_cancel(ctx)
         else:
             self._sender.reply(ctx, "指令有误喵，发送「17步麻将 帮助」查看玩法")
 
@@ -651,6 +654,21 @@ class Mahjong17Plugin:
             f"十七步麻将开始，双方请在私聊中组建手牌。本局宝牌指示牌为{dora_text}"
             + ("（带猫眼石赌注）" if game.get("bet") else ""))
 
+    def _cmd_cancel(self, ctx: CommandContext) -> None:
+        gid = ctx.group_id
+        game = self._load_game(gid)
+        if game is None:
+            self._sender.reply(ctx, "本群没有进行中的17步麻将喵")
+            return
+        if game["started"]:
+            self._sender.reply(ctx, "对局已经开始了，开局后必须打完整局喵")
+            return
+        if game["player_id"][0] != ctx.user_id:
+            self._sender.reply(ctx, "只有开局的人才能取消这局喵")
+            return
+        self._remove_game(gid)
+        self._sender.reply(ctx, f"{ctx.user_name} 取消了还没开局的17步麻将")
+
     def _show(self, ctx: CommandContext) -> None:
         game = self._load_game(ctx.group_id)
         if game is None:
@@ -660,7 +678,7 @@ class Mahjong17Plugin:
         if not game["started"]:
             self._sender.reply(
                 ctx, f"17步麻将准备中（1/2）：{game['player_name'][0]}\n"
-                     f"发送「17步麻将 加入」加入"
+                     f"发送「17步麻将 加入」加入，或「17步麻将 取消」解散"
                      + ("（本局有猫眼石赌注）" if game.get("bet") else "（本局无赌注）"))
             return
         self._send_table(ctx.group_id, game)
@@ -783,16 +801,14 @@ class Mahjong17Plugin:
         self._sender.reply(ctx, "你打出了" + text)
 
     def _handle_ron(self, ctx: CommandContext, game: dict, gid: int, pid: int) -> None:
+        if pid == 0 and game["turn"] == 0:
+            # 庄家还没打牌，没有可荣和的牌：不算和牌，对局照常继续
+            self._sender.reply(ctx, "还没有人打牌，无法荣和")
+            return
         self._send_group_text(gid, game["player_name"][pid] + "宣布荣和")
         self._send_end_table(gid, game)
         self._send_private_text(game["player_id"][1 - pid], "对手宣布荣和")
         if pid == 0:
-            if game["turn"] == 0:
-                # 还没有人打牌就宣布荣和，按旧版视作直接投了
-                self._remove_game(gid)
-                self._send_group_text(
-                    gid, "但是根本没人打牌，意思是" + game["player_name"][0] + "直接投了说是")
-                return
             cut = game["take_tiles"][1][game["turn"] - 1]
         else:
             cut = game["take_tiles"][0][game["turn"]]
@@ -1088,6 +1104,7 @@ class Mahjong17Plugin:
             "17步麻将玩法（群聊两人对局）\n"
             "· 开局者发送「17步麻将 赌注」或「17步麻将 无赌注」创建对局\n"
             "· 另一位发送「17步麻将 加入」开局；「17步麻将」查看牌桌\n"
+            "· 开局前反悔可发送「17步麻将 取消」解散对局；开局后必须打完整局\n"
             "· 开局后双方在【私聊】里操作（群聊只看牌桌）：\n"
             "   选牌：17步麻将 123m456p789s11z（共13张，红五写作0，如 0m）\n"
             "   打牌：17步麻将 5m（只能打「舍牌候补」里有的牌）\n"
@@ -1098,5 +1115,5 @@ class Mahjong17Plugin:
             "· 诈胡（宣布荣和但无役）由诈胡者赔给对方 5 猫眼石\n"
             "· 猫眼石不够则余额记成负数（欠债），欠债者不能参与带赌注的对局，"
             "还清（余额≥0）后才能再玩\n"
-            "· 流局与「开局直接投了」不结算"
+            "· 流局不结算"
         )

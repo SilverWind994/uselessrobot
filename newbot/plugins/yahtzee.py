@@ -153,11 +153,6 @@ class YahtzeePlugin:
             self.cmd_entry,
             description="快艇骰子·群内掷骰计分（子指令：加入/开始/重投/计分/放弃/排行榜）"
         )
-        router.register(
-            ["快艇排行榜", "yahtzeerank", ".yahtzeerank", "yrank"],
-            self.cmd_rank,
-            description="快艇骰子·本周首次得分排行榜"
-        )
 
     def cmd_entry(self, ctx: CommandContext) -> None:
         if not ctx.is_group:
@@ -205,7 +200,7 @@ class YahtzeePlugin:
             return
         ranked = sorted(scores.items(), key=lambda kv: kv[1]["score"], reverse=True)
         lines = [f"快艇骰子本周排行榜（{week}）",
-                 "每位玩家只计本周第一次的分数，跨周按名次发鱼干", ""]
+                 "每位玩家只计本周第一次的分数，换周后按这份分数排名发鱼干", ""]
         for i, (_, info) in enumerate(ranked[:10]):
             reward = WEEKLY_REWARDS[i] if i < len(WEEKLY_REWARDS) else 0
             lines.append(f"{i + 1}. {info['name']} — {info['score']}分（奖励{reward}鱼干）")
@@ -451,11 +446,14 @@ class YahtzeePlugin:
             "· 快艇骰子 加入 / 开始：组局，1~4人（人满自动开始）\n"
             "· 快艇骰子 重投 1 3：重投第1、3颗骰子（每回合最多重投2次）\n"
             "· 快艇骰子 计分 快艇：把当前骰子记到指定格子\n"
-            "· 快艇骰子 放弃：中止本局，按当前分数结算本周首次分数\n"
-            "· 快艇骰子 排行榜 / 快艇排行榜：本周首次得分排行\n"
+            "· 快艇骰子 放弃：中止本局，按当前分数结算\n"
+            "· 快艇骰子 排行榜：查看本周排行\n"
             "格子：一点~六点、全选、四同、葫芦、小顺、大顺、快艇\n"
             "（上区合计≥63分额外+35；每人12格，全填完即结束）\n"
-            f"周榜奖励：第1名{WEEKLY_REWARDS[0]}鱼干，逐名-100，发到第10名{WEEKLY_REWARDS[-1]}"
+            "【排行与奖励】每周只记录你「本周第一次」的分数（正常打完或放弃都算），同周再玩不刷新；\n"
+            f"换周后按这份分数从高到低排名发鱼干：第1名{WEEKLY_REWARDS[0]}，"
+            f"逐名-100，发到第10名{WEEKLY_REWARDS[-1]}，第10名之后没有奖励；\n"
+            "奖励在换周后第一次用到快艇骰子时自动发放。"
         )
 
     # ==================== 绘图 ====================

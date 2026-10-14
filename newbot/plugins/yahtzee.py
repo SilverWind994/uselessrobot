@@ -326,9 +326,8 @@ class YahtzeePlugin:
             return
         self._next_active(game)
         self._save_game(self._room_key(ctx), game)
-        self._sender.reply(ctx, f"{player['name']} 计分 {_CATEGORY_NAMES[index]} +{gained}"
-                                f"（发送「快艇骰子」查看计分板）")
-        self._send_dice(ctx, game)
+        self._sender.reply(ctx, f"{player['name']} 计分 {_CATEGORY_NAMES[index]} +{gained}")
+        self._send_board(ctx, game)
 
     def _cmd_giveup(self, ctx: CommandContext) -> None:
         game = self._get_game(self._room_key(ctx))
@@ -527,7 +526,8 @@ class YahtzeePlugin:
             "· 快艇骰子 加入 / 开始：组局，1~4人（人满自动开始）\n"
             "· 快艇骰子 重投 1 3（或连写 13）：重投第1、3颗骰子（每回合最多重投2次）\n"
             "· 快艇骰子 计分 快艇：把当前骰子记到指定格子\n"
-            "· 快艇骰子：查看完整计分板（掷骰/重投只发骰子小图）\n"
+            "· 快艇骰子：随时查看完整计分板（掷骰/重投只发骰子小图）\n"
+            "· 计分后会自动发送完整计分板\n"
             "· 快艇骰子 放弃：自己退出本局，剩余格子按0锁定，当前分数立即固定\n"
             "· 快艇骰子 排行榜：查看本周排行\n"
             "格子：一点~六点、全选、四同、葫芦、小顺、大顺、快艇\n"

@@ -161,6 +161,12 @@ class CatExpeditionPlugin:
         players[str(qq)] = player
         self._save_players(players)
 
+    def add_fish(self, qq: int, amount: int) -> None:
+        """为玩家增加鱼干（供其它插件发放奖励；玩家不存在时自动建档）"""
+        player = self._get_player(qq)
+        player["fish"] += amount
+        self._update_player(qq, player)
+
     # ==================== 注册命令 ====================
 
     def register(self, router: CommandRouter) -> None:

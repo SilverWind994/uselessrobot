@@ -15,6 +15,7 @@ from plugins.simple_functions import SimpleFunctionsPlugin
 from plugins.ai_functions import AIFunctionsPlugin
 from plugins.cat_expedition import CatExpeditionPlugin
 from plugins.avalon_quiz import AvalonQuizPlugin
+from plugins.yahtzee import YahtzeePlugin
 
 
 class Bot:
@@ -52,6 +53,10 @@ class Bot:
         # 何切阿瓦隆问答插件
         self._avalon = AvalonQuizPlugin(self._sender)
         self._avalon.register(self._router)
+
+        # 快艇骰子插件（奖励复用猫猫远征队的鱼干）
+        self._yahtzee = YahtzeePlugin(self._sender, cat_game)
+        self._yahtzee.register(self._router)
 
     def _register_routes(self) -> None:
         self.app.post("/")(self._handle_event)

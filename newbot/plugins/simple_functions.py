@@ -228,11 +228,6 @@ class SimpleFunctionsPlugin:
             self.cmd_record_reminder,
             description="记事提醒"
         )
-        router.register(
-            ["结束", "stop", ".stop", "/stop"],
-            self.cmd_stop,
-            description="结束当前活动"
-        )
         # --- 暂不可用 ---
         router.register(
             ["早安", "morning", ".morning", "/morning"],
@@ -336,11 +331,6 @@ class SimpleFunctionsPlugin:
             self.cmd_deprecated,
             description="[暂不可用] 飞行棋游戏"
         )
-        router.register(
-            ["快艇骰子", "yahtzee", "y", ".y"],
-            self.cmd_deprecated,
-            description="[暂不可用] Yahtzee快艇骰子"
-        )
 
     def cmd_deprecated(self, ctx: CommandContext) -> None:
         target = Target.from_data(ctx.raw_data)
@@ -410,7 +400,6 @@ class SimpleFunctionsPlugin:
             "今日运势": "每人每天固定运势数值(1-100)\n示例: 今日运势 / fortune\n注意: 同一天同一人结果固定",
             "今日麻将运势": "预测麻将顺位概率(四个位置百分比)\n示例: 今日麻将运势 / mjfortune\n注意: 同一天同一人结果固定",
             "记事": "设置定时提醒\n格式: 记事 <时间> <内容> [@用户QQ号]\n时间简写: 8位(YYYYMMDD 默认早8点)\n         10位(YYYYMMDDHH 默认00分)\n         12位(YYYYMMDDHHMM 精确到分)\n示例: 记事 202609041830 开组会\n示例: 记事 20260904 交作业 → 当日8点\n示例: 记事 202609050900 123456789 交学费 → 群内@某人",
-            "结束": "结束当前进行中的活动(游戏/报名等)\n示例: 结束 / stop",
             # --- AI功能 ---
             "ai": "AI对话(带上下文，按用户/群隔离)\n示例: ai 今天天气怎么样\n示例: .ai 推荐几本科幻小说\n注意: 支持联网搜索，可用 ai清空 重置对话",
             "ai清空": "清空AI对话上下文\n示例: ai清空 / .aiclear",
@@ -455,7 +444,9 @@ class SimpleFunctionsPlugin:
             "麻将帝国": "暂不可用 - 麻将帝国",
             "猜单词": "暂不可用 - Wordle猜单词",
             "飞行棋": "暂不可用 - 飞行棋游戏",
-            "快艇骰子": "暂不可用 - Yahtzee快艇骰子",
+            # --- 快艇骰子 ---
+            "快艇骰子": "快艇骰子·群内多人掷骰计分\n用法: 快艇骰子（查看局面/创建对局）\n子指令: 加入/开始/重投 1 3/计分 快艇/放弃/排行榜\n每回合掷5颗骰子，最多重投2次，选一格计分\n格子: 一点~六点、全选、四同、葫芦、小顺、大顺、快艇\n每周按每人首次得分排名，第1名1000鱼干逐名-100到第10名100\n示例: 快艇骰子 加入 → 加入对局\n示例: 快艇骰子 重投 1 2 → 重投第1、2颗\n示例: 快艇骰子 放弃 → 按当前分数结算",
+            "快艇排行榜": "快艇骰子·本周首次得分排行榜\n每位玩家只计本周第一次的分数，跨周按名次发鱼干\n示例: 快艇排行榜 / 快艇骰子 排行榜",
         }
         msg = message.strip().lower()
         return help_map.get(msg, "没有该指令的详细说明\n使用 help 查看全部指令")
@@ -678,21 +669,6 @@ class SimpleFunctionsPlugin:
             self._sender.send_text(target, "记住了(希望不会忘记提醒)")
         except Exception as e:
             self._sender.send_text(target, f"记录失败: {e}")
-
-    def cmd_stop(self, ctx: CommandContext) -> None:
-        target = Target.from_data(ctx.raw_data)
-        try:
-            data = self._json_repo.get(target.user_id, target.is_group, target.group_id)
-            if target.is_group and data.get("group_bind"):
-                player_count = data.get("data", {}).get("player_num", 0)
-                for i in range(player_count):
-                    self._json_repo.reset(
-                        data["data"]["player_id"][i], False, target.group_id
-                    )
-            self._json_repo.reset(target.user_id, target.is_group, target.group_id)
-            self._sender.send_text(target, "不管之前在没在干啥反正停下了,我去睡觉了喵")
-        except Exception as e:
-            self._sender.send_text(target, f"结束失败: {e}")
 
     @staticmethod
     def _is_valid_datetime(date_str: str) -> bool:

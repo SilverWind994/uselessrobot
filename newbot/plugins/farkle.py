@@ -119,19 +119,29 @@ def _faces_text(dice) -> str:
 # ==================== 计分 ====================
 
 def _score_selection(counts: dict) -> int:
-    """计算一组锁定骰子的得分；含无法计分的骰子（散落的 2/3/4/6）返回 None"""
+    """计算一组锁定骰子的得分；含无法计分的骰子返回 None。
+
+    支持：顺子 1~6；小顺子 1~5 / 2~6（可与额外的 1、5 单张一起锁定）；
+    三张及以上同点；单张 1、5。
+    """
     total = sum(counts.values())
-    # 顺子 / 小顺子（点数各不相同且刚好铺满）
+    # 顺子：6 颗点数各不相同且铺满 1~6
     if total == 6 and all(counts.get(f, 0) == 1 for f in range(1, 7)):
         return _STRAIGHT_SCORE
-    if total == 5 and all(counts.get(f, 0) == 1 for f in range(1, 6)):
-        return _SMALL_STRAIGHT_LOW_SCORE
-    if total == 5 and all(counts.get(f, 0) == 1 for f in range(2, 7)):
-        return _SMALL_STRAIGHT_HIGH_SCORE
 
     score = 0
+    rest = dict(counts)
+    # 小顺子：扣掉一套 1~5 或 2~6（优先分值更高的 2~6），余下的骰子再单独计分
+    for rng, base in ((range(2, 7), _SMALL_STRAIGHT_HIGH_SCORE),
+                      (range(1, 6), _SMALL_STRAIGHT_LOW_SCORE)):
+        if all(rest.get(f, 0) >= 1 for f in rng):
+            for f in rng:
+                rest[f] -= 1
+            score += base
+            break
+
     for face in range(1, 7):
-        c = counts.get(face, 0)
+        c = rest.get(face, 0)
         if c == 0:
             continue
         if c >= 3:

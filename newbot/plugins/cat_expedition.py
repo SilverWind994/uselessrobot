@@ -147,7 +147,6 @@ class CatExpeditionPlugin:
                 "signin_streak": 0,
                 "signin_total": 0,
                 "summon_count": 0,
-                "deploy_limit": CatConfig.CAT_INITIAL_DEPLOY_LIMIT,
                 "deploy_team": [],
                 "research_limit": CatConfig.CAT_INITIAL_RESEARCH_LIMIT,
                 "collection": []

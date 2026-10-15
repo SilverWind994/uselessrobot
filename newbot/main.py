@@ -59,7 +59,7 @@ class Bot:
         self._yahtzee = YahtzeePlugin(self._sender, cat_game)
         self._yahtzee.register(self._router)
 
-        # 17步麻将插件（赌注复用猫猫远征队的猫眼石）
+        # 17步麻将插件（猫眼石复用猫猫远征队的猫眼石）
         self._mahjong17 = Mahjong17Plugin(self._sender, cat_game)
         self._mahjong17.register(self._router)
 

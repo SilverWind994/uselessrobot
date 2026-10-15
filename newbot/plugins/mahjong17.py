@@ -1,6 +1,6 @@
 """17步麻将（mahjong17）—— 移植自 archive/mybot/mahjong_17.py。
 
-玩法：群聊 2 人对局。开局者（创建对局的人）需指定本局是否带「猫眼石赌注」。
+玩法：群聊 2 人对局。开局者（创建对局的人）需指定本局是否为「猫眼石局」。
 开局后双方各自在私聊里查看自己的 34 张牌，从中选出 13 张作为手牌（其余 21 张为舍牌候补），
 然后轮流在私聊里打出舍牌候补的牌，也可以「荣和」对手刚打出的牌；17 巡无人和牌即流局。
 
@@ -10,10 +10,10 @@
 · 荣和：`17步麻将 荣`
 · 流局：最后一巡只能「17步麻将 荣」或「17步麻将 流局」
 
-猫眼石赌注（仅带赌注的对局结算）：
+猫眼石结算（仅猫眼石局生效）：
 · 赢家得分每满 4000 分，由输家支付 1 猫眼石（役满按 32000 分计，即 8 猫眼石）
 · 诈胡（宣布荣和但无役）由诈胡者赔给对方 5 猫眼石
-· 猫眼石不足时余额记成负数（欠债），欠债者不能再参与带赌注的对局
+· 猫眼石不足时余额记成负数（欠债），欠债者不能参与猫眼石局
 """
 
 import json
@@ -50,8 +50,8 @@ _RON_WORDS = ("荣", "和", "荣和", "rong")
 _PASS_WORDS = ("过", "流局", "pass")
 
 # 群聊子指令别名
-_BET_WORDS = {"赌注", "有赌注", "下注", "bet"}
-_NOBET_WORDS = {"无赌注", "不赌", "无注", "nobet", "free"}
+_STONE_WORDS = {"猫眼石", "猫眼石局", "有猫眼石", "stones"}
+_PLAIN_WORDS = {"普通", "普通局", "无猫眼石", "plain", "free"}
 _JOIN_WORDS = {"加入", "join"}
 _HELP_WORDS = {"帮助", "help"}
 _STATUS_WORDS = {"状态", "status", "查看", "info", ""}
@@ -542,7 +542,7 @@ def _score_hand(handtiles, cut, dora):
 # ==================== 插件 ====================
 
 class Mahjong17Plugin:
-    """17步麻将：群聊两人对局 + 可选的猫眼石赌注"""
+    """17步麻将：群聊两人对局 + 可选的猫眼石局"""
 
     def __init__(self, sender: MessageSender, cat_plugin=None):
         self._sender = sender
@@ -554,7 +554,7 @@ class Mahjong17Plugin:
         router.register(
             ["17步麻将", "mahjong17", ".mj17"],
             self.cmd_entry,
-            description="17步麻将·群聊两人对局（可选猫眼石赌注）"
+            description="17步麻将·群聊两人对局（可选猫眼石局）"
         )
 
     def cmd_entry(self, ctx: CommandContext) -> None:
@@ -573,10 +573,10 @@ class Mahjong17Plugin:
 
         if sub in _JOIN_WORDS:
             self._cmd_join(ctx)
-        elif sub in _BET_WORDS:
-            self._cmd_create(ctx, bet=True)
-        elif sub in _NOBET_WORDS:
-            self._cmd_create(ctx, bet=False)
+        elif sub in _STONE_WORDS:
+            self._cmd_create(ctx, stones=True)
+        elif sub in _PLAIN_WORDS:
+            self._cmd_create(ctx, stones=False)
         elif sub in _HELP_WORDS:
             self._sender.reply(ctx, self._help_text())
         elif sub in _STATUS_WORDS:
@@ -586,7 +586,7 @@ class Mahjong17Plugin:
         else:
             self._sender.reply(ctx, "指令有误喵，发送「17步麻将 帮助」查看玩法")
 
-    def _cmd_create(self, ctx: CommandContext, bet: bool) -> None:
+    def _cmd_create(self, ctx: CommandContext, stones: bool) -> None:
         gid = ctx.group_id
         game = self._load_game(gid)
         if game is not None:
@@ -596,12 +596,12 @@ class Mahjong17Plugin:
         if other is not None:
             self._sender.reply(ctx, "你已经在另一局17步麻将中喵")
             return
-        if bet and self._debt_of(ctx.user_id) > 0:
+        if stones and self._debt_of(ctx.user_id) > 0:
             self._sender.reply(
-                ctx, f"你还有 {self._debt_of(ctx.user_id)} 个猫眼石欠债，不能开带赌注的对局喵")
+                ctx, f"你还有 {self._debt_of(ctx.user_id)} 个猫眼石欠债，不能开猫眼石局喵")
             return
         game = {
-            "bet": bet,
+            "stones": stones,
             "started": False,
             "player_id": [ctx.user_id, 0],
             "player_name": [ctx.user_name, ""],
@@ -615,9 +615,9 @@ class Mahjong17Plugin:
             "take_tiles": [[-1] * LAST_TURN, [-1] * LAST_TURN],
         }
         self._save_game(gid, game)
-        bet_text = "有猫眼石赌注（每4000分=1猫眼石）" if bet else "无猫眼石赌注"
+        match_text = "猫眼石局（每4000分=1猫眼石）" if stones else "普通局"
         self._sender.reply(
-            ctx, f"准备十七步麻将，{ctx.user_name}加入游戏，当前1名玩家。本局{bet_text}。\n"
+            ctx, f"准备十七步麻将，{ctx.user_name}加入游戏，当前1名玩家。本局{match_text}。\n"
                  f"另一位玩家发送「17步麻将 加入」即可开局")
 
     def _cmd_join(self, ctx: CommandContext) -> None:
@@ -625,7 +625,7 @@ class Mahjong17Plugin:
         game = self._load_game(gid)
         if game is None:
             self._sender.reply(
-                ctx, "还没有对局喵，请先发送「17步麻将 赌注」或「17步麻将 无赌注」创建对局")
+                ctx, "还没有对局喵，请先发送「17步麻将 猫眼石」或「17步麻将 普通」创建对局")
             return
         if game["started"] or game["player_id"][1] != 0:
             self._sender.reply(ctx, "游戏已经开始了")
@@ -637,10 +637,10 @@ class Mahjong17Plugin:
         if other is not None:
             self._sender.reply(ctx, "你已经在另一局17步麻将中喵")
             return
-        if game.get("bet") and self._debt_of(ctx.user_id) > 0:
+        if game.get("stones") and self._debt_of(ctx.user_id) > 0:
             self._sender.reply(
                 ctx, f"你还有 {self._debt_of(ctx.user_id)} 个猫眼石欠债，"
-                     f"不能加入带赌注的对局喵")
+                     f"不能加入猫眼石局喵")
             return
 
         game["player_id"][1] = ctx.user_id
@@ -654,7 +654,7 @@ class Mahjong17Plugin:
         self._sender.reply(
             ctx,
             f"十七步麻将开始，双方请在私聊中组建手牌。本局宝牌指示牌为{dora_text}"
-            + ("（带猫眼石赌注）" if game.get("bet") else ""))
+            + ("（本局为猫眼石局）" if game.get("stones") else ""))
 
     def _cmd_cancel(self, ctx: CommandContext) -> None:
         gid = ctx.group_id
@@ -675,13 +675,13 @@ class Mahjong17Plugin:
         game = self._load_game(ctx.group_id)
         if game is None:
             self._sender.reply(
-                ctx, "本群还没有17步麻将对局喵，发送「17步麻将 赌注」或「17步麻将 无赌注」创建")
+                ctx, "本群还没有17步麻将对局喵，发送「17步麻将 猫眼石」或「17步麻将 普通」创建")
             return
         if not game["started"]:
             self._sender.reply(
                 ctx, f"17步麻将准备中（1/2）：{game['player_name'][0]}\n"
                      f"发送「17步麻将 加入」加入，或「17步麻将 取消」解散"
-                     + ("（本局有猫眼石赌注）" if game.get("bet") else "（本局无赌注）"))
+                     + ("（本局为猫眼石局）" if game.get("stones") else "（本局为普通局）"))
             return
         self._send_table(ctx.group_id, game)
 
@@ -850,14 +850,14 @@ class Mahjong17Plugin:
             self._send_group_text(gid, line)
         self._remove_game(gid)
 
-    # ==================== 赌注结算 ====================
+    # ==================== 猫眼石结算 ====================
 
     def _settle(self, game: dict, winner_pid: int, score: int, fan: int) -> list:
-        """按猫眼石赌注结算，返回需要发到群里的说明行"""
-        if not game.get("bet"):
+        """按猫眼石结算，返回需要发到群里的说明行"""
+        if not game.get("stones"):
             return []
         if self._cat is None:
-            return ["（猫眼石赌注结算失败：猫眼石系统不可用）"]
+            return ["（猫眼石结算失败：猫眼石系统不可用）"]
         winner = game["player_id"][winner_pid]
         loser = game["player_id"][1 - winner_pid]
         if fan == 0:
@@ -884,7 +884,7 @@ class Mahjong17Plugin:
                          f"{game['player_name'][1 - winner_pid]} 支付 {amount} 猫眼石"
                          f"（余额 {before} → {after}）")
         if after < 0:
-            lines.append(f"猫眼石不足，现有欠债 {-after} 个，还清前不能参与带赌注的对局")
+            lines.append(f"猫眼石不足，现有欠债 {-after} 个，还清前不能参与猫眼石局")
         return lines
 
     def _debt_of(self, user_id: int) -> int:
@@ -1139,7 +1139,7 @@ class Mahjong17Plugin:
     def _help_text() -> str:
         return (
             "17步麻将玩法（群聊两人对局）\n"
-            "· 开局者发送「17步麻将 赌注」或「17步麻将 无赌注」创建对局\n"
+            "· 开局者发送「17步麻将 猫眼石」或「17步麻将 普通」创建对局\n"
             "· 另一位发送「17步麻将 加入」开局；「17步麻将」查看牌桌\n"
             "· 开局前反悔可发送「17步麻将 取消」解散对局；开局后必须打完整局\n"
             "· 开局后双方在【私聊】里操作（群聊只看牌桌）：\n"
@@ -1148,11 +1148,11 @@ class Mahjong17Plugin:
             "   荣和：17步麻将 荣（对手刚打出的牌成和即可）\n"
             "· 双方各打17巡，最后一巡只能「荣」或「流局」\n"
             "· 振听：自己打出的或对手打出的牌里有能和牌的牌，本局之后不能再荣和，再荣和算诈和\n"
-            "【猫眼石赌注】仅带赌注的对局结算：\n"
+            "【猫眼石结算】仅猫眼石局生效：\n"
             "· 赢家得分不足 8000 分不赢猫眼石；满 8000 分后每 4000 分由输家支付 1 猫眼石"
             "（役满按32000分计=8猫眼石）\n"
             "· 诈胡（宣布荣和但不成和，含振听后硬和）由诈胡者赔给对方 5 猫眼石\n"
-            "· 猫眼石不够则余额记成负数（欠债），欠债者不能参与带赌注的对局，"
+            "· 猫眼石不够则余额记成负数（欠债），欠债者不能参与猫眼石局，"
             "还清（余额≥0）后才能再玩\n"
             "· 流局不结算"
         )

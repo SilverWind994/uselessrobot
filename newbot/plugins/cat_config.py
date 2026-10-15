@@ -67,8 +67,8 @@ class CatConfig:
     CAT_TERRAIN_TYPES = ["平原", "山地", "森林", "水域", "沼泽", "沙漠", "雪原", "火山", "洞窟", "遗迹", "天空", "深海",
                          "龙巢", "神殿", "古战场", "深渊裂隙", "水晶矿脉", "诅咒之地", "妖精之森"]
 
-    # 远征队位置上限（初始值，可通过游戏内成长提升，实际值存在玩家存档）
-    CAT_INITIAL_RESEARCH_LIMIT = 3  # 研究猫猫上限初始值
+    # 研究猫猫上限（初始值，可通过游戏内成长提升，实际值存在玩家存档）
+    CAT_INITIAL_RESEARCH_LIMIT = 3
 
     # ==================== 远征Boss系统 ====================
     CAT_EXPEDITION_DATA = os.path.join(CAT_EXPEDITION_DIR, "expedition.json")  # 全局远征状态

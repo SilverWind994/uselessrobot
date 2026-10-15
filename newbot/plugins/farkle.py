@@ -108,9 +108,9 @@ def _draw_die(draw: ImageDraw.ImageDraw, x: int, y: int, size: int, value: int) 
         draw.ellipse((cx - r, cy - r, cx + r, cy + r), fill=(45, 42, 38))
 
 
-def _pos_faces_text(dice) -> str:
-    """带序号的骰子文本（序号即牌面图下方数字），如 [1, 5, 5] -> 「1号1点 2号5点 3号5点」"""
-    return " ".join(f"{i + 1}号{d}点" for i, d in enumerate(dice))
+def _faces_text(dice) -> str:
+    """骰子点数的展示文本，如 [1, 5, 5] -> 「1 5 5」"""
+    return " ".join(str(d) for d in sorted(dice))
 
 
 # ==================== 计分 ====================
@@ -415,7 +415,7 @@ class FarklePlugin:
         if not _roll_has_score(pool):
             lost = game["turn_score"]
             self._sender.reply(
-                ctx, f"{player['name']} 掷出 {_pos_faces_text(pool)}，无法计分——爆骰！"
+                ctx, f"{player['name']} 掷出 {_faces_text(pool)}，无法计分——爆骰！"
                      + (f"本回合累计的 {lost} 分全部作废" if lost > 0 else "本回合没有得分"))
             self._end_turn(ctx, gid, game)
             return
@@ -424,9 +424,8 @@ class FarklePlugin:
         game["phase"] = "keep"
         self._save_game(gid, game)
         self._sender.reply(
-            ctx, f"{player['name']} 掷出 {_pos_faces_text(pool)}。\n"
-                 f"发送「farkle 留 <序号>」锁定至少一颗计分骰，例如「farkle 留 1 3」"
-                 f"（序号即牌面图下方数字）")
+            ctx, f"{player['name']} 掷出 {_faces_text(pool)}。\n"
+                 f"发送「farkle 留 <点数>」锁定至少一颗计分骰，例如「farkle 留 15」")
         self._send_board(ctx, game)
 
     def _cmd_roll(self, ctx: CommandContext) -> None:
@@ -440,7 +439,7 @@ class FarklePlugin:
             self._sender.reply(ctx, err)
             return
         if game["phase"] not in ("roll", "decide"):
-            self._sender.reply(ctx, "现在要先发「farkle 留 <序号>」锁定计分骰喵")
+            self._sender.reply(ctx, "现在要先发「farkle 留 <点数>」锁定计分骰喵")
             return
         self._do_roll(ctx, gid, game)
 
@@ -459,13 +458,16 @@ class FarklePlugin:
             return
 
         pool = game["pool"]
-        idxs, perr = self._parse_keep(rest, len(pool))
+        counts, perr = self._parse_keep(rest)
         if perr:
             self._sender.reply(ctx, perr)
             return
-        # 按序号取骰子（序号即牌面图下方数字，从 1 开始）
-        kept = [pool[i - 1] for i in idxs]
-        counts = Counter(kept)
+        avail = Counter(pool)
+        for face, c in counts.items():
+            if c > avail.get(face, 0):
+                self._sender.reply(
+                    ctx, f"掷出的骰子里没有 {c} 个 {face} 点喵（本次掷出 {_faces_text(pool)}）")
+                return
         score = _score_selection(counts)
         if score is None:
             self._sender.reply(
@@ -473,6 +475,9 @@ class FarklePlugin:
             return
 
         player = game["players"][game["turn"]]
+        kept = []
+        for face, c in counts.items():
+            kept += [face] * c
         game["locked"] += kept
         game["turn_score"] += score
         game["remaining"] -= len(kept)
@@ -488,9 +493,8 @@ class FarklePlugin:
         game["phase"] = "decide"
         self._save_game(gid, game)
 
-        kept_text = "、".join(f"第{i}颗({pool[i - 1]}点)" for i in idxs)
         self._sender.reply(
-            ctx, f"{player['name']} 锁定 {kept_text}，本次 +{score} 分，"
+            ctx, f"{player['name']} 锁定 {_faces_text(kept)}，本次 +{score} 分，"
                  f"本回合累计 {game['turn_score']} 分（剩余可掷 {game['remaining']} 颗）"
                  + ("\n热骰！6 颗骰子全部计分用完，拿回全部骰子，可继续或入账" if hot else ""))
         self._send_board(ctx, game)
@@ -641,23 +645,17 @@ class FarklePlugin:
         return ""
 
     @staticmethod
-    def _parse_keep(rest: str, max_index: int):
-        """解析要锁定的骰子序号（从 1 开始），返回 (indices, err)；
-        支持「留 1 3」「留 13」等多种写法"""
+    def _parse_keep(rest: str):
+        """解析锁定的点数，返回 (counts, err)；支持「留 15」「留 1 5 5」等多种写法"""
         cleaned = re.sub(r"[\s,，、]+", "", rest)
         if not cleaned:
-            return None, "请指定要锁定的骰子序号，例如「farkle 留 1 3」"
-        idxs = []
+            return None, "请指定要锁定的骰子点数，例如「farkle 留 15」"
+        counts = {}
         for c in cleaned:
-            if c not in "123456789":
-                return None, "只能填骰子序号（数字）喵，例如「farkle 留 1 3」"
-            i = int(c)
-            if i > max_index:
-                return None, f"本次只掷出 {max_index} 颗骰子，序号只能填 1~{max_index} 喵"
-            if i in idxs:
-                return None, f"序号 {i} 填重复了喵"
-            idxs.append(i)
-        return sorted(idxs), None
+            if c not in "123456":
+                return None, "只能锁定 1~6 点的骰子喵"
+            counts[int(c)] = counts.get(int(c), 0) + 1
+        return counts, None
 
     # ==================== 展示 ====================
 
@@ -706,20 +704,17 @@ class FarklePlugin:
                 _draw_die(draw, x0 + i * (size + gap), 224, size, v)
             _center_text(draw, (0, 272, width, 296), "已锁定", _font(20), (150, 140, 128))
 
-        # 当前掷出的骰子（大图），下方标注序号（供「farkle 留 <序号>」使用）
+        # 当前掷出的骰子（大图）
         pool = game["pool"]
         if pool:
             size, gap = 76, 16
             row_w = len(pool) * (size + gap) - gap
             x0 = (width - row_w) // 2
             for i, v in enumerate(pool):
-                x = x0 + i * (size + gap)
-                _draw_die(draw, x, 306, size, v)
-                _center_text(draw, (x, 306 + size, x + size, 306 + size + 20),
-                             str(i + 1), _font(20), (150, 140, 128))
+                _draw_die(draw, x0 + i * (size + gap), 306, size, v)
 
         hint = {
-            "keep": "发送「farkle 留 <序号>」锁定计分骰，如 farkle 留 1 3（锁第1、3颗）",
+            "keep": "发送「farkle 留 <点数>」锁定计分骰，如 farkle 留 15（锁1个1点、1个5点）",
             "decide": "发送「farkle 掷」继续博分，或「farkle 入账」收分",
         }.get(game["phase"], "")
         _center_text(draw, (0, height - 42, width, height - 14), hint, _font(22), (150, 140, 128))
@@ -751,8 +746,8 @@ class FarklePlugin:
             "· 接受方把先手让给出价方：出价方先手并以自己的出价负分开局，接受方以 0 分开局\n"
             "【回合作战】（轮到你时）\n"
             "· 轮到你的第一次掷骰会自动进行，不需要手动发送\n"
-            "· 「farkle 留 <序号>」：按牌面图下方序号锁定至少一颗能计分的骰子，"
-            "如「farkle 留 1 3」（=锁第1、第3颗）\n"
+            "· 「farkle 留 <点数>」：锁定至少一颗能计分的骰子，"
+            "如「farkle 留 15」（=锁 1 个 1 点、1 个 5 点）、「farkle 留 1 5 5」\n"
             "· 锁定后可「farkle 掷」继续博更多分（有爆骰风险），或「farkle 入账」收分换手\n"
             "【爆骰】\n"
             "· 掷出的骰子完全无法计分 → 爆骰，本回合已累计的分全部作废，回合结束并换手\n"

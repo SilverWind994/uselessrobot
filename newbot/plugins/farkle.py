@@ -48,6 +48,8 @@ _SUB_ALIASES = {
     "开局": "create", "创建": "create", "create": "create",
     "加入": "join", "join": "join",
     "取消": "cancel", "解散": "cancel", "cancel": "cancel",
+    "投降": "surrender", "认输": "surrender", "弃权": "surrender",
+    "surrender": "surrender", "forfeit": "surrender",
     "出价": "bid", "竞叫": "bid", "bid": "bid",
     "接受": "accept", "成交": "accept", "accept": "accept",
     "掷": "roll", "掷骰": "roll", "roll": "roll",
@@ -166,7 +168,7 @@ class FarklePlugin:
         router.register(
             ["farkle", "骰子对决", ".farkle", "/farkle"],
             self.cmd_entry,
-            description="Farkle骰子·群里两人对战（子指令：开局/加入/出价/接受/掷/留/入账）"
+            description="Farkle骰子·群里两人对战（子指令：开局/加入/出价/接受/掷/留/入账/投降）"
         )
 
     def cmd_entry(self, ctx: CommandContext) -> None:
@@ -197,6 +199,8 @@ class FarklePlugin:
             self._cmd_join(ctx)
         elif action == "cancel":
             self._cmd_cancel(ctx)
+        elif action == "surrender":
+            self._cmd_surrender(ctx)
         elif action == "bid":
             self._cmd_bid(ctx, rest)
         elif action == "accept":
@@ -307,6 +311,25 @@ class FarklePlugin:
             return
         self._remove_game(gid)
         self._sender.reply(ctx, f"{ctx.user_name} 取消了还没开局的 Farkle")
+
+    def _cmd_surrender(self, ctx: CommandContext) -> None:
+        """投降：认输的一方判负，对方直接获胜并按猫眼石结算"""
+        gid = ctx.group_id
+        game = self._load_game(gid)
+        if game is None:
+            self._sender.reply(ctx, "本群没有进行中的 Farkle 喵")
+            return
+        if not game["started"]:
+            self._sender.reply(ctx, "对局还没开始喵，发送「farkle 取消」即可解散")
+            return
+        surrender = next((p for p in game["players"] if p["id"] == ctx.user_id), None)
+        if surrender is None:
+            self._sender.reply(ctx, "你不是本局 Farkle 的玩家喵")
+            return
+        winner = next(p for p in game["players"] if p["id"] != ctx.user_id)
+        self._finish(
+            ctx, game, winner,
+            headline=f"🏳️ {surrender['name']} 投降，{winner['name']} 赢下本局 Farkle！")
 
     def _show(self, ctx: CommandContext) -> None:
         game = self._load_game(ctx.group_id)
@@ -544,9 +567,10 @@ class FarklePlugin:
         self._save_game(gid, game)
         self._do_roll(ctx, gid, game)
 
-    def _finish(self, ctx: CommandContext, game: dict, winner: dict) -> None:
+    def _finish(self, ctx: CommandContext, game: dict, winner: dict,
+                headline: str = None) -> None:
         """结算本局：公布总分，按猫眼石数目结算后清除对局"""
-        lines = [f"🏆 {winner['name']} 达到 {game['target']} 分，赢下本局 Farkle！"]
+        lines = [headline or f"🏆 {winner['name']} 达到 {game['target']} 分，赢下本局 Farkle！"]
         for p in game["players"]:
             lines.append(f"{p['name']}：{p['total']} 分")
         lines += self._settle(game, winner)
@@ -765,6 +789,8 @@ class FarklePlugin:
             "【结算与作废】\n"
             "· 先达到目标分者获胜；有猫眼石时由输家支付给赢家相应数量\n"
             "· 输家猫眼石不足则余额记成负数（欠债），还清前不能参与猫眼石局\n"
+            "· 认输可发送「farkle 投降」（也可「farkle 认输」），投降方判负，"
+            "对方直接获胜并按猫眼石结算\n"
             "· 「farkle」查看牌桌；对局闲置超过 "
             f"{IDLE_SECONDS // 3600} 小时自动作废"
         )

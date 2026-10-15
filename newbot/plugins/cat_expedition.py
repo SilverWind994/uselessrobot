@@ -261,14 +261,15 @@ class CatExpeditionPlugin:
         # 随机鱼干 80-120，概率暴击
         base = random.randint(CatConfig.CAT_SIGNIN_MIN, CatConfig.CAT_SIGNIN_MAX)
         crit_chance = CatConfig.CAT_SIGNIN_CRIT_CHANCE
-        super_chance = CatConfig.CAT_SIGNIN_SUPER_CHANCE
-        # 非全服战力第一且鱼干不足时，暴击率按战力差提升，超级暴击率取暴击率的 10%
+        # 超级暴击率为暴击率的平方：暴击率越高超级暴击率提升越快，但恒不超过暴击率
+        super_chance = crit_chance ** 2
+        # 非全服战力第一且鱼干不足时，暴击率按战力差提升，超级暴击率随之变为其平方
         if player["fish"] < CatConfig.CAT_SIGNIN_LOW_FISH:
             max_power = self._max_team_base_power()
             own_power = self._team_base_power(player)
             if own_power < max_power:
                 crit_chance += (max_power - own_power) / max_power
-                super_chance = crit_chance * 0.10
+                super_chance = crit_chance ** 2
         crit_type = "normal"
         r = random.random()
         if r < super_chance:

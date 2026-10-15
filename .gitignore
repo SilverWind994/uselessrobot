@@ -47,6 +47,8 @@ newbot/assets/avalon/*
 newbot/assets/yahtzee/*
 # 17步麻将：对局状态与合成图（牌面素材 assets/mahjong 是静态资源，保留）
 newbot/assets/mahjong17/*
+# Farkle 骰子：对局状态与棋盘图（运行时内容，不纳入版本库）
+newbot/assets/farkle/*
 
 # ===== 老代码归档（archive/mybot）中的运行时数据 =====
 archive/mybot/jsonFile/*

@@ -17,6 +17,7 @@ from plugins.cat_expedition import CatExpeditionPlugin
 from plugins.avalon_quiz import AvalonQuizPlugin
 from plugins.yahtzee import YahtzeePlugin
 from plugins.mahjong17 import Mahjong17Plugin
+from plugins.farkle import FarklePlugin
 
 
 class Bot:
@@ -62,6 +63,10 @@ class Bot:
         # 17步麻将插件（猫眼石复用猫猫远征队的猫眼石）
         self._mahjong17 = Mahjong17Plugin(self._sender, cat_game)
         self._mahjong17.register(self._router)
+
+        # Farkle 骰子插件（猫眼石复用猫猫远征队的猫眼石）
+        self._farkle = FarklePlugin(self._sender, cat_game)
+        self._farkle.register(self._router)
 
     def _register_routes(self) -> None:
         self.app.post("/")(self._handle_event)

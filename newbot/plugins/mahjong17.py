@@ -35,6 +35,7 @@ _TILE_DIR = os.path.join(_ASSETS_DIR, "mahjong")           # 牌面素材 mj0.pn
 
 IDLE_SECONDS = 6 * 60 * 60   # 对局闲置超过该时长自动作废，避免卡住之后的开局
 STONES_PER_SCORE = 4000      # 每 4000 分折算 1 猫眼石
+MIN_WIN_SCORE = 8000         # 结算分数门槛：赢家得分不足此分数不赢猫眼石
 FALSE_WIN_PENALTY = 5        # 诈胡赔给对方 5 猫眼石
 PLAYER_NUM = 2               # 固定两人
 LAST_TURN = 17               # 17 巡之后只能选择荣和或流局
@@ -606,6 +607,7 @@ class Mahjong17Plugin:
             "player_name": [ctx.user_name, ""],
             "turn": -1,
             "player_turn": 0,
+            "furiten": [False, False],
             "dora": [-1, -1],
             "tiles": [[0] * 38, [0] * 38],
             "hand_tiles": [[-1] + [0] * 37, [-1] + [0] * 37],
@@ -788,8 +790,21 @@ class Mahjong17Plugin:
         if game["left_tiles"][pid][tile] == 0:
             self._sender.reply(ctx, "剩余手牌中没有这张牌")
             return
+        # 振听（对手舍牌）：本回合对手打出的是自己的和了牌，不荣和就进入振听
+        cut = self._last_discard(game, pid)
+        if (cut is not None and not game["furiten"][pid]
+                and _score_hand(game["hand_tiles"][pid], cut, game["dora"])[2] > 0):
+            game["furiten"][pid] = True
+            self._send_private_text(
+                game["player_id"][pid], "你放过了可以荣和的牌，本局进入振听，之后再荣和算诈和")
         game["left_tiles"][pid][tile] -= 1
         game["take_tiles"][pid][game["turn"]] = tile
+        # 振听（自己舍牌）：打出的恰好是自己的和了牌，同样进入振听
+        if (not game["furiten"][pid]
+                and _score_hand(game["hand_tiles"][pid], tile, game["dora"])[2] > 0):
+            game["furiten"][pid] = True
+            self._send_private_text(
+                game["player_id"][pid], "你打出了自己的和了牌，本局进入振听，之后再荣和算诈和")
         game["player_turn"] += 1
         if game["player_turn"] == PLAYER_NUM:
             game["player_turn"] = 0
@@ -800,6 +815,15 @@ class Mahjong17Plugin:
         self._send_table(gid, game)
         self._sender.reply(ctx, "你打出了" + text)
 
+    @staticmethod
+    def _last_discard(game: dict, pid: int):
+        """当前玩家面对的那张对手舍牌（庄家首巡还没人打牌则返回 None）"""
+        if pid == 0:
+            if game["turn"] == 0:
+                return None
+            return game["take_tiles"][1][game["turn"] - 1]
+        return game["take_tiles"][0][game["turn"]]
+
     def _handle_ron(self, ctx: CommandContext, game: dict, gid: int, pid: int) -> None:
         if pid == 0 and game["turn"] == 0:
             # 庄家还没打牌，没有可荣和的牌：不算和牌，对局照常继续
@@ -808,6 +832,13 @@ class Mahjong17Plugin:
         self._send_group_text(gid, game["player_name"][pid] + "宣布荣和")
         self._send_end_table(gid, game)
         self._send_private_text(game["player_id"][1 - pid], "对手宣布荣和")
+        if game["furiten"][pid]:
+            # 振听后不能再荣和，宣布荣和按诈和处理（赔对方 5 猫眼石）
+            self._send_group_text(gid, game["player_name"][pid] + "已经振听，宣布荣和算诈和！")
+            for line in self._settle(game, pid, 0, 0):
+                self._send_group_text(gid, line)
+            self._remove_game(gid)
+            return
         if pid == 0:
             cut = game["take_tiles"][1][game["turn"] - 1]
         else:
@@ -815,7 +846,8 @@ class Mahjong17Plugin:
 
         score, fu, fan, fans = _score_hand(game["hand_tiles"][pid], cut, game["dora"])
         self._send_result(gid, game["hand_tiles"][pid], cut, game["dora"], score, fu, fan, fans)
-        lines = self._settle(game, pid, score, fan)
+        for line in self._settle(game, pid, score, fan):
+            self._send_group_text(gid, line)
         self._remove_game(gid)
 
     # ==================== 赌注结算 ====================
@@ -833,9 +865,9 @@ class Mahjong17Plugin:
             amount = FALSE_WIN_PENALTY
             payer, receiver = winner, loser
         else:
+            if score < MIN_WIN_SCORE:
+                return [f"本局赢家得分 {score} 分，不足 {MIN_WIN_SCORE} 分，不赢猫眼石"]
             amount = score // STONES_PER_SCORE
-            if amount <= 0:
-                return [f"本局赢家得分 {score} 分，不足 {STONES_PER_SCORE} 分，无猫眼石结算"]
             payer, receiver = loser, winner
 
         before = self._cat.get_eye_stones(payer)
@@ -868,9 +900,11 @@ class Mahjong17Plugin:
     def _deal(game: dict) -> None:
         """洗牌并发牌：每人 34 张，另定两张指示牌（红五在 0/10/20 号位）"""
         mountain = []
-        for base in (0, 10, 20, 30):
+        for base in (0, 10, 20):
             for i in range(1, 10):
-                mountain += [base + i] * 4
+                mountain += [base + i] * 4       # 万/筒/索各 1~9
+        for i in range(31, 38):
+            mountain += [i] * 4                  # 字牌东南西北白发中（共 136 张）
         mountain[16] = 0
         mountain[52] = 10
         mountain[88] = 20
@@ -885,7 +919,10 @@ class Mahjong17Plugin:
     # ==================== 状态存取 ====================
 
     def _load_game(self, group_id: int):
-        return _load_json(_STATE_PATH).get(str(group_id))
+        game = _load_json(_STATE_PATH).get(str(group_id))
+        if game is not None:
+            game.setdefault("furiten", [False, False])   # 兼容旧存档
+        return game
 
     def _save_game(self, group_id: int, game: dict) -> None:
         game["updated_at"] = time.time()
@@ -1110,9 +1147,11 @@ class Mahjong17Plugin:
             "   打牌：17步麻将 5m（只能打「舍牌候补」里有的牌）\n"
             "   荣和：17步麻将 荣（对手刚打出的牌成和即可）\n"
             "· 双方各打17巡，最后一巡只能「荣」或「流局」\n"
+            "· 振听：自己打出的或对手打出的牌里有能和牌的牌，本局之后不能再荣和，再荣和算诈和\n"
             "【猫眼石赌注】仅带赌注的对局结算：\n"
-            "· 赢家得分每满 4000 分由输家支付 1 猫眼石（役满按32000分计=8猫眼石）\n"
-            "· 诈胡（宣布荣和但无役）由诈胡者赔给对方 5 猫眼石\n"
+            "· 赢家得分不足 8000 分不赢猫眼石；满 8000 分后每 4000 分由输家支付 1 猫眼石"
+            "（役满按32000分计=8猫眼石）\n"
+            "· 诈胡（宣布荣和但不成和，含振听后硬和）由诈胡者赔给对方 5 猫眼石\n"
             "· 猫眼石不够则余额记成负数（欠债），欠债者不能参与带赌注的对局，"
             "还清（余额≥0）后才能再玩\n"
             "· 流局不结算"

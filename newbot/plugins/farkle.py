@@ -159,7 +159,7 @@ class FarklePlugin:
 
     def register(self, router: CommandRouter) -> None:
         router.register(
-            ["farkle", "法克尔", ".farkle", "/farkle"],
+            ["farkle", "骰子对决", ".farkle", "/farkle"],
             self.cmd_entry,
             description="Farkle骰子·群里两人对战（子指令：开局/加入/掷/留/入账）"
         )
@@ -634,7 +634,7 @@ class FarklePlugin:
     def _help_text() -> str:
         return (
             "Farkle 骰子玩法（群里两人对战，规则取自《天国：拯救》）\n"
-            "指令：farkle（也可用 法克尔 / .farkle / /farkle）\n"
+            "指令：farkle（也可用 骰子对决 / .farkle / /farkle）\n"
             "【开局】\n"
             "· 开局者：「farkle 开局 <目标分> [猫眼石]」，如「farkle 开局 5000 10」\n"
             f"   目标分 {MIN_TARGET}~{MAX_TARGET}（缺省 {DEFAULT_TARGET}）；"

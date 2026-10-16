@@ -1,8 +1,7 @@
 """锦标赛（tournament）—— 群里用现有对战游戏进行的淘汰赛。
 
 参赛人数支持 4 / 8 / 16 三种；奖金按名次阶梯「对半砍」向下取整；
-比赛项目从现有对战游戏池（快艇骰子 / 17步麻将 / Farkle）中抽取，
-可设置本局使用 1 / 3 / 5 / 7 种不同项目（项目数不能超过当前项目池大小）。
+比赛项目由创建者指定（现有：快艇骰子 / 17步麻将 / Farkle），可指定一个或多个。
 
 赛制：
 · 开局按随机分组两两配对，负者淘汰、胜者晋级。
@@ -34,7 +33,6 @@ _STATE_PATH = os.path.join(TOURNAMENT_DIR, "state.json")
 
 IDLE_SECONDS = 6 * 60 * 60   # 锦标赛闲置超过该时长自动作废，避免卡住后续创建
 SIZES = (4, 8, 16)           # 参赛人数可选值
-PROJECT_COUNTS = (1, 3, 5, 7)  # 比赛项目数可选值
 
 # 比赛项目池：与三个对战插件注册的 game 键一一对应
 PROJECTS = (
@@ -43,6 +41,13 @@ PROJECTS = (
     ("farkle", "Farkle"),
 )
 _PROJECT_NAME = {key: name for key, name in PROJECTS}
+# 创建时指定项目的名称别名（大小写不敏感）-> 项目 key
+_GAME_ALIASES = {
+    "快艇骰子": "yahtzee", "快艇": "yahtzee", "yahtzee": "yahtzee", "y": "yahtzee",
+    "17步麻将": "mahjong17", "十七步麻将": "mahjong17", "mahjong17": "mahjong17",
+    "mj17": "mahjong17",
+    "farkle": "farkle", "骰子对决": "farkle",
+}
 
 # 轮次名 / 名次名（除数 = 该轮参赛人数 = size >> round）
 _ROUND_NAME = {16: "十六强赛", 8: "八强赛", 4: "四强赛", 2: "决赛"}
@@ -212,40 +217,47 @@ class TournamentPlugin:
             return
 
         tokens = rest.split()
-        if len(tokens) < 2:
+        if len(tokens) < 2 or not tokens[0].isdigit():
             self._sender.reply(
-                ctx, "用法：「锦标赛 创建 <人数> <项目数> [冠军鱼干] [冠军猫眼石]」\n"
-                     "人数可选 4 / 8 / 16；项目数可选 1 / 3 / 5 / 7\n"
-                     "示例：「锦标赛 创建 8 3 1000 10」= 8 人、3 个项目、冠军 1000 鱼干 + 10 猫眼石")
-            return
-
-        if not tokens[0].isdigit() or int(tokens[0]) not in SIZES:
-            self._sender.reply(ctx, "人数只能填 4 / 8 / 16 喵")
-            return
-        if not tokens[1].isdigit() or int(tokens[1]) not in PROJECT_COUNTS:
-            self._sender.reply(ctx, "项目数只能填 1 / 3 / 5 / 7 喵")
+                ctx, "用法：「锦标赛 创建 <人数> <项目…> [冠军鱼干] [冠军猫眼石]」\n"
+                     f"人数可选 4 / 8 / 16；项目可写一个或多个（现有："
+                     f"{'、'.join(name for _, name in PROJECTS)}）\n"
+                     "示例：「锦标赛 创建 8 快艇骰子 farkle 1000 10」"
+                     "= 8 人、用快艇骰子与 Farkle、冠军 1000 鱼干 + 10 猫眼石")
             return
         size = int(tokens[0])
-        count = int(tokens[1])
-        if count > len(PROJECTS):
-            self._sender.reply(
-                ctx, f"现在只有 {len(PROJECTS)} 种对战游戏（"
-                     f"{'、'.join(name for _, name in PROJECTS)}），"
-                     f"最多只能设置 {len(PROJECTS)} 种项目喵")
+        if size not in SIZES:
+            self._sender.reply(ctx, "人数只能填 4 / 8 / 16 喵")
             return
 
-        fish = 0
-        stone = 0
-        if len(tokens) > 2:
-            if not tokens[2].isdigit():
-                self._sender.reply(ctx, "冠军鱼干要填数字喵")
+        # 人数之后的非数字词依次是项目名；遇到数字词起为奖励（先鱼干、后猫眼石）
+        pool = []
+        numbers = []
+        for tok in tokens[1:]:
+            if tok.isdigit():
+                numbers.append(int(tok))
+                continue
+            key = _GAME_ALIASES.get(tok.lower())
+            if key is None:
+                self._sender.reply(
+                    ctx, f"不认识的项目「{tok}」喵，现有项目："
+                         f"{'、'.join(name for _, name in PROJECTS)}")
                 return
-            fish = int(tokens[2])
-        if len(tokens) > 3:
-            if not tokens[3].isdigit():
-                self._sender.reply(ctx, "冠军猫眼石要填数字喵")
+            if key in pool:
+                self._sender.reply(
+                    ctx, f"项目「{_PROJECT_NAME[key]}」重复了喵，每个项目只能写一次")
                 return
-            stone = int(tokens[3])
+            pool.append(key)
+
+        if not pool:
+            self._sender.reply(
+                ctx, "至少要指定一个项目喵，例如「锦标赛 创建 8 快艇骰子 1000 10」")
+            return
+        if len(numbers) > 2:
+            self._sender.reply(ctx, "奖励最多填两项：先冠军鱼干、后冠军猫眼石喵")
+            return
+        fish = numbers[0] if len(numbers) >= 1 else 0
+        stone = numbers[1] if len(numbers) >= 2 else 0
 
         if (fish > 0 or stone > 0) and ctx.user_id != Config.TOURNAMENT_ADMIN_QQ:
             self._sender.reply(
@@ -257,12 +269,12 @@ class TournamentPlugin:
             "group_id": gid,
             "owner": ctx.user_id,
             "size": size,
-            "project_count": count,
+            "project_count": len(pool),
             "champion_fish": fish,
             "champion_stone": stone,
             "status": "waiting",
             "players": [{"id": ctx.user_id, "name": ctx.user_name}],
-            "pool": [],
+            "pool": pool,
             "round": 0,
             "matches": [],
             "pending": None,
@@ -271,8 +283,9 @@ class TournamentPlugin:
         }
         self._save(t)
         reward = self._reward_desc(fish, stone)
+        pool_text = "、".join(_PROJECT_NAME[k] for k in pool)
         self._sender.reply(
-            ctx, f"🏆 已创建锦标赛：{size} 人 · {count} 种项目 · {reward}\n"
+            ctx, f"🏆 已创建锦标赛：{size} 人 · 项目：{pool_text} · {reward}\n"
                  f"发送「锦标赛 加入」报名，报满 {size} 人后由创建者发送「锦标赛 开始」开始")
         self._sender.reply(ctx, self._status_text(t))
 
@@ -359,12 +372,10 @@ class TournamentPlugin:
     # ==================== 赛程推进 ====================
 
     def _start_tournament(self, t) -> None:
-        """随机分组、抽取项目池、开启第一轮"""
+        """随机分组、开启第一轮（项目池在创建时已由创建者指定）"""
         size = t["size"]
         shuffled = list(t["players"])
         random.shuffle(shuffled)
-        # 项目池：在项目池里随机取出 project_count 个（1 种即全局固定 1 个项目）
-        t["pool"] = random.sample([key for key, _ in PROJECTS], t["project_count"])
 
         row = []
         for i in range(0, size, 2):
@@ -396,11 +407,12 @@ class TournamentPlugin:
         is_final = len(row) == 1
 
         if is_final:
+            # 决赛三局两胜：优先抽三个不同项目，项目不足三个时尽量都用上
             if len(t["pool"]) >= 3:
-                # 决赛抽取三个不同项目打三局两胜
                 projects = random.sample(t["pool"], 3)
+            elif len(t["pool"]) == 2:
+                projects = [t["pool"][0], t["pool"][1], random.choice(t["pool"])]
             else:
-                # 单项目模式：决赛三局两胜，项目相同
                 projects = [t["pool"][0]] * 3
         else:
             projects = [random.choice(t["pool"])]
@@ -429,11 +441,9 @@ class TournamentPlugin:
         b_name = name_of.get(pending["p"][1], pending["names"][1])
 
         if pending["is_final"]:
-            if len(set(pending["projects"])) >= 3:
-                tag = (f"（三局两胜，项目："
-                       f"{'、'.join(_PROJECT_NAME[k] for k in pending['projects'])}）")
-            else:
-                tag = f"（三局两胜，项目：{_PROJECT_NAME[pending['projects'][0]]}）"
+            proj_names = "、".join(
+                dict.fromkeys(_PROJECT_NAME[k] for k in pending["projects"]))
+            tag = f"（三局两胜，项目：{proj_names}）"
             label = f"第 {pending['game_no'] + 1}/3 局"
         else:
             tag = ""
@@ -851,9 +861,10 @@ class TournamentPlugin:
             "锦标赛玩法（在群里用对战游戏进行淘汰赛）\n"
             "指令：锦标赛（也可用 tournament / .tournament / /tournament）\n"
             "【创建】\n"
-            "· 「锦标赛 创建 <人数> <项目数> [冠军鱼干] [冠军猫眼石]」\n"
-            "   人数：4 / 8 / 16；项目数：1 / 3 / 5 / 7（不能超过现有对战游戏数量）\n"
-            "   示例：「锦标赛 创建 8 3 1000 10」\n"
+            "· 「锦标赛 创建 <人数> <项目…> [冠军鱼干] [冠军猫眼石]」\n"
+            "   人数：4 / 8 / 16；项目：写一个或多个，从现有游戏里选"
+            "（快艇骰子 / 17步麻将 / Farkle）\n"
+            "   示例：「锦标赛 创建 8 快艇骰子 farkle 1000 10」\n"
             "· 奖励按名次阶梯「对半砍」向下取整：亚军 = 冠军/2、四强 = 冠军/4、"
             "八强 = 冠军/8、十六强 = 冠军/16\n"
             "· 只有管理员可以开出带鱼干 / 猫眼石奖励的锦标赛；其他玩家请把奖励填 0\n"
@@ -863,14 +874,14 @@ class TournamentPlugin:
             "· 带猫眼石奖励时，欠债（猫眼石为负）的玩家不能报名\n"
             "【赛制】\n"
             "· 开局随机分组两两对局、负者淘汰；每场的「谁先开局」也随机\n"
-            "· 1 种项目：全程固定该项目。非决赛单场定胜负，平局（如17步麻将流局）"
+            "· 只选 1 个项目：全程固定该项目。非决赛单场定胜负，平局（如17步麻将流局）"
             "加赛一次，仍平局则随机晋级；决赛三局两胜\n"
-            "· 3 / 5 / 7 种项目：每一场从项目池随机抽取项目；"
-            "决赛抽取三个不同项目打三局两胜\n"
-            "· 比赛项目池：快艇骰子 / 17步麻将 / Farkle\n"
+            "· 选了多个项目：每一场从这些项目里随机抽取；决赛尽量抽不同项目"
+            "（够三个就三个不同，只有两个就都用上）打三局两胜\n"
             "【进行方式】\n"
-            "· 每场开始时机器人会公告对阵、项目与「怎么开局」，双方照提示在群里开局即可\n"
-            "（对局奖励由锦标赛单独结算，故对局本身按普通局进行）\n"
+            "· 每场开始时机器人公告对阵与项目，并直接为两位选手自动开局"
+            "（不开放手动加入，杜绝外人乱入）\n"
+            "（17步麻将需双方到私聊选牌出牌；对局奖励由锦标赛单独结算，故对局本身按普通局进行）\n"
             "· 「锦标赛」/「锦标赛 状态」可随时查看晋级图与赛程\n"
             "· 锦标赛闲置超过 6 小时自动作废"
         )

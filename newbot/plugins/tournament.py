@@ -59,6 +59,7 @@ _TIER_NAME = {16: "十六强", 8: "八强", 4: "四强", 2: "亚军"}
 _SUB_ALIASES = {
     "创建": "create", "新建": "create", "create": "create",
     "加入": "join", "报名": "join", "join": "join",
+    "退出": "leave", "退赛": "leave", "leave": "leave", "quit": "leave",
     "开始": "start", "start": "start",
     "取消": "cancel", "解散": "cancel", "cancel": "cancel",
     "状态": "status", "查看": "status", "status": "status",
@@ -202,6 +203,8 @@ class TournamentPlugin:
             self._cmd_create(ctx, rest)
         elif action == "join":
             self._cmd_join(ctx)
+        elif action == "leave":
+            self._cmd_leave(ctx)
         elif action == "start":
             self._cmd_start(ctx)
         elif action == "cancel":
@@ -323,6 +326,25 @@ class TournamentPlugin:
                      f"请创建者发送「锦标赛 开始」开始赛程")
         else:
             self._sender.reply(ctx, f"{ctx.user_name} 报名（{n}/{t['size']}）")
+
+    def _cmd_leave(self, ctx: CommandContext) -> None:
+        gid = ctx.group_id
+        t = self._load(gid)
+        if t is None:
+            self._sender.reply(ctx, "本群还没有锦标赛喵")
+            return
+        if t["status"] != "waiting":
+            self._sender.reply(ctx, "这场锦标赛已经开始了喵，报名后不能退出")
+            return
+        if not any(p["id"] == ctx.user_id for p in t["players"]):
+            self._sender.reply(ctx, "你还没有报名这场锦标赛喵")
+            return
+
+        t["players"] = [p for p in t["players"] if p["id"] != ctx.user_id]
+        t["updated_at"] = time.time()
+        self._save(t)
+        self._sender.reply(
+            ctx, f"{ctx.user_name} 已退出锦标赛，目前报名 {len(t['players'])}/{t['size']} 人")
 
     def _cmd_start(self, ctx: CommandContext) -> None:
         gid = ctx.group_id
@@ -657,7 +679,7 @@ class TournamentPlugin:
             if n >= t["size"]:
                 lines.append("报名已满，请创建者发送「锦标赛 开始」")
             else:
-                lines.append("发送「锦标赛 加入」报名")
+                lines.append("发送「锦标赛 加入」报名（已报名的可用「锦标赛 退出」取消）")
         elif t["status"] == "playing":
             for r, row in enumerate(t["matches"]):
                 round_name = _ROUND_NAME.get(t["size"] >> r, "对局")
@@ -884,6 +906,7 @@ class TournamentPlugin:
             "【报名与开始】\n"
             "· 创建者不自动参赛，想参赛需自己「锦标赛 加入」\n"
             "· 「锦标赛 加入」报名，报满设定人数后由创建者「锦标赛 开始」开始赛程\n"
+            "· 报名期间可用「锦标赛 退出」取消自己的报名；开始后不能再退出\n"
             "· 报名期间创建者可「锦标赛 取消」解散；开始后必须打完整场\n"
             "· 带猫眼石奖励时，欠债（猫眼石为负）的玩家不能报名\n"
             "【赛制】\n"

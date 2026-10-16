@@ -11,6 +11,7 @@
 · 流局：最后一巡只能「17步麻将 荣」或「17步麻将 流局」
 
 猫眼石结算（仅猫眼石局生效）：
+· 荣和但得分不足满贯（8000 分）视为平局，不判胜负、不结算
 · 赢家得分每满 4000 分，由输家支付 1 猫眼石（役满按 32000 分计，即 8 猫眼石）
 · 诈胡（宣布荣和但无役）由诈胡者赔给对方 5 猫眼石
 · 猫眼石不足时余额记成负数（欠债），欠债者不能参与猫眼石局
@@ -548,10 +549,18 @@ class Mahjong17Plugin:
         self._sender = sender
         self._cat = cat_plugin  # 猫猫远征队插件，用于猫眼石结算
         self._result_reporter = None
+        self._tournament_checker = None
 
     def set_result_reporter(self, reporter) -> None:
         """锦标赛等外部编排器注册结果回调：reporter(group_id, result)"""
         self._result_reporter = reporter
+
+    def set_tournament_checker(self, checker) -> None:
+        """锦标赛注册：checker(group_id) 返回该群是否正在进行锦标赛"""
+        self._tournament_checker = checker
+
+    def _tournament_active(self, gid: int) -> bool:
+        return bool(self._tournament_checker) and self._tournament_checker(gid)
 
     def _report_result(self, gid: int, result: dict) -> None:
         """对局结束时把结果上报给外部编排器（未注册则忽略）"""
@@ -613,6 +622,12 @@ class Mahjong17Plugin:
         args = ctx.get_args().strip()
         parts = args.split(None, 1)
         sub = parts[0] if parts else ""
+
+        if (sub in _JOIN_WORDS or sub in _STONE_WORDS or sub in _PLAIN_WORDS) \
+                and self._tournament_active(ctx.group_id):
+            self._sender.reply(
+                ctx, "本群锦标赛进行中喵，先打完锦标赛再开普通17步麻将局")
+            return
 
         if sub in _JOIN_WORDS:
             self._cmd_join(ctx)
@@ -905,27 +920,29 @@ class Mahjong17Plugin:
 
         score, fu, fan, fans = _score_hand(game["hand_tiles"][pid], cut, game["dora"])
         self._send_result(gid, game["hand_tiles"][pid], cut, game["dora"], score, fu, fan, fans)
+        players = [{"id": int(game["player_id"][i]), "name": game["player_name"][i]}
+                   for i in range(PLAYER_NUM)]
         if fan == 0:
             # 无役不成和：宣布荣和按诈胡处理，宣布者判负
-            self._report_result(gid, {
-                "game": "mahjong17",
-                "players": [{"id": int(game["player_id"][i]),
-                             "name": game["player_name"][i]}
-                            for i in range(PLAYER_NUM)],
-                "winner": int(game["player_id"][1 - pid]),
-                "reason": "诈胡判负",
-            })
+            self._report_result(gid, {"game": "mahjong17", "players": players,
+                                      "winner": int(game["player_id"][1 - pid]),
+                                      "reason": "诈胡判负"})
+            for line in self._settle(game, pid, score, fan):
+                self._send_group_text(gid, line)
+        elif score < MIN_WIN_SCORE:
+            # 荣和但得分不足满贯：视为平局，不判胜负（锦标赛据此加赛）
+            self._report_result(gid, {"game": "mahjong17", "players": players,
+                                      "winner": None,
+                                      "reason": f"得分不足满贯（{score}）"})
+            self._send_group_text(
+                gid, f"{game['player_name'][pid]} 得分 {score} 分，"
+                     f"不足满贯（{MIN_WIN_SCORE} 分），本局按平局处理")
         else:
-            self._report_result(gid, {
-                "game": "mahjong17",
-                "players": [{"id": int(game["player_id"][i]),
-                             "name": game["player_name"][i]}
-                            for i in range(PLAYER_NUM)],
-                "winner": int(game["player_id"][pid]),
-                "reason": "荣和",
-            })
-        for line in self._settle(game, pid, score, fan):
-            self._send_group_text(gid, line)
+            self._report_result(gid, {"game": "mahjong17", "players": players,
+                                      "winner": int(game["player_id"][pid]),
+                                      "reason": "荣和"})
+            for line in self._settle(game, pid, score, fan):
+                self._send_group_text(gid, line)
         self._remove_game(gid)
 
     # ==================== 猫眼石结算 ====================
@@ -943,8 +960,6 @@ class Mahjong17Plugin:
             amount = FALSE_WIN_PENALTY
             payer, receiver = winner, loser
         else:
-            if score < MIN_WIN_SCORE:
-                return [f"本局赢家得分 {score} 分，不足 {MIN_WIN_SCORE} 分，不赢猫眼石"]
             amount = score // STONES_PER_SCORE
             payer, receiver = loser, winner
 
@@ -1226,8 +1241,9 @@ class Mahjong17Plugin:
             "   荣和：17步麻将 荣（对手刚打出的牌成和即可）\n"
             "· 双方各打17巡，最后一巡只能「荣」或「流局」\n"
             "· 振听：自己打出的或对手打出的牌里有能和牌的牌，本局之后不能再荣和，再荣和算诈和\n"
+            "· 荣和但得分不足满贯（8000 分）视为平局，不判胜负、不结算\n"
             "【猫眼石结算】仅猫眼石局生效：\n"
-            "· 赢家得分不足 8000 分不赢猫眼石；满 8000 分后每 4000 分由输家支付 1 猫眼石"
+            "· 满贯（8000 分）起才会结算，每 4000 分由输家支付 1 猫眼石"
             "（役满按32000分计=8猫眼石）\n"
             "· 诈胡（宣布荣和但不成和，含振听后硬和）由诈胡者赔给对方 5 猫眼石\n"
             "· 猫眼石不够则余额记成负数（欠债），欠债者不能参与猫眼石局，"

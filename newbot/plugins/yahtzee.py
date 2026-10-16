@@ -151,10 +151,18 @@ class YahtzeePlugin:
         self._sender = sender
         self._cat = cat_plugin  # 猫猫远征队插件，用于发放鱼干奖励
         self._result_reporter = None
+        self._tournament_checker = None
 
     def set_result_reporter(self, reporter) -> None:
         """锦标赛等外部编排器注册结果回调：reporter(group_id, result)"""
         self._result_reporter = reporter
+
+    def set_tournament_checker(self, checker) -> None:
+        """锦标赛注册：checker(group_id) 返回该群是否正在进行锦标赛"""
+        self._tournament_checker = checker
+
+    def _tournament_active(self, gid: int) -> bool:
+        return bool(self._tournament_checker) and self._tournament_checker(gid)
 
     def _report_result(self, gid: int, result: dict) -> None:
         """对局结束时把结果上报给外部编排器（未注册则忽略）"""
@@ -206,6 +214,11 @@ class YahtzeePlugin:
         action = _SUB_ALIASES.get(sub)
         if action is None:
             self._sender.reply(ctx, f"指令有误喵，发送「快艇骰子」查看当前局面")
+            return
+
+        if action in ("join", "start") and self._tournament_active(ctx.group_id):
+            self._sender.reply(
+                ctx, "本群锦标赛进行中喵，先打完锦标赛再开普通快艇骰子局")
             return
 
         if action == "help":

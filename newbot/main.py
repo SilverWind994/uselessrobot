@@ -77,6 +77,10 @@ class Bot:
         self._yahtzee.set_result_reporter(self._tournament.on_match_result)
         self._mahjong17.set_result_reporter(self._tournament.on_match_result)
         self._farkle.set_result_reporter(self._tournament.on_match_result)
+        # 锦标赛进行期间，禁止在群里手动开这三种游戏的普通对局
+        self._yahtzee.set_tournament_checker(self._tournament.is_active)
+        self._mahjong17.set_tournament_checker(self._tournament.is_active)
+        self._farkle.set_tournament_checker(self._tournament.is_active)
 
     def _register_routes(self) -> None:
         self.app.post("/")(self._handle_event)

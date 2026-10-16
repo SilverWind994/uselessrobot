@@ -2,6 +2,8 @@
 
 参赛人数支持 4 / 8 / 16 三种；奖金按名次阶梯「对半砍」向下取整；
 比赛项目由创建者指定（现有：快艇骰子 / 17步麻将 / Farkle），可指定一个或多个。
+创建者不自动参赛（想参赛需自己「锦标赛 加入」）；
+锦标赛报名中 / 进行中时，本群禁止手动开这三种游戏的普通对局。
 
 赛制：
 · 开局按随机分组两两配对，负者淘汰、胜者晋级。
@@ -273,7 +275,7 @@ class TournamentPlugin:
             "champion_fish": fish,
             "champion_stone": stone,
             "status": "waiting",
-            "players": [{"id": ctx.user_id, "name": ctx.user_name}],
+            "players": [],   # 创建者不自动参赛，想参赛需自己「锦标赛 加入」
             "pool": pool,
             "round": 0,
             "matches": [],
@@ -286,14 +288,15 @@ class TournamentPlugin:
         pool_text = "、".join(_PROJECT_NAME[k] for k in pool)
         self._sender.reply(
             ctx, f"🏆 已创建锦标赛：{size} 人 · 项目：{pool_text} · {reward}\n"
-                 f"发送「锦标赛 加入」报名，报满 {size} 人后由创建者发送「锦标赛 开始」开始")
+                 f"创建者不自动参赛，想参赛请自己也发「锦标赛 加入」\n"
+                 f"报名用「锦标赛 加入」，报满 {size} 人后由创建者发送「锦标赛 开始」开始")
         self._sender.reply(ctx, self._status_text(t))
 
     def _cmd_join(self, ctx: CommandContext) -> None:
         gid = ctx.group_id
         t = self._load(gid)
         if t is None:
-            self._sender.reply(ctx, "本群还没有锦标赛喵，发送「锦标赛 创建 <人数> <项目数>」创建")
+            self._sender.reply(ctx, "本群还没有锦标赛喵，发送「锦标赛 创建 <人数> <项目…>」创建")
             return
         if t["status"] != "waiting":
             self._sender.reply(ctx, "这场锦标赛已经开始或结束了喵")
@@ -361,7 +364,7 @@ class TournamentPlugin:
         t = self._load(ctx.group_id)
         if t is None:
             self._sender.reply(
-                ctx, "本群还没有锦标赛喵，发送「锦标赛 创建 <人数> <项目数>」创建\n"
+                ctx, "本群还没有锦标赛喵，发送「锦标赛 创建 <人数> <项目…>」创建\n"
                      "发送「锦标赛 帮助」查看玩法")
             return
         if t["status"] in ("playing", "done"):
@@ -833,6 +836,16 @@ class TournamentPlugin:
             del state[str(gid)]
             _save_json(_STATE_PATH, state)
 
+    def is_active(self, gid: int) -> bool:
+        """本群是否有报名中/进行中的锦标赛（供对战插件拦截手动开新局）"""
+        t = self._load(gid)
+        if not t or t.get("status") not in ("waiting", "playing"):
+            return False
+        if time.time() - t.get("updated_at", 0) > IDLE_SECONDS:
+            self._remove(gid)   # 闲置过久自动作废，避免一直卡着不能开新局
+            return False
+        return True
+
     def _drop_stale(self, ctx: CommandContext) -> None:
         """锦标赛闲置过久则作废，避免卡住后续创建"""
         t = self._load(ctx.group_id)
@@ -869,18 +882,21 @@ class TournamentPlugin:
             "八强 = 冠军/8、十六强 = 冠军/16\n"
             "· 只有管理员可以开出带鱼干 / 猫眼石奖励的锦标赛；其他玩家请把奖励填 0\n"
             "【报名与开始】\n"
+            "· 创建者不自动参赛，想参赛需自己「锦标赛 加入」\n"
             "· 「锦标赛 加入」报名，报满设定人数后由创建者「锦标赛 开始」开始赛程\n"
             "· 报名期间创建者可「锦标赛 取消」解散；开始后必须打完整场\n"
             "· 带猫眼石奖励时，欠债（猫眼石为负）的玩家不能报名\n"
             "【赛制】\n"
             "· 开局随机分组两两对局、负者淘汰；每场的「谁先开局」也随机\n"
-            "· 只选 1 个项目：全程固定该项目。非决赛单场定胜负，平局（如17步麻将流局）"
-            "加赛一次，仍平局则随机晋级；决赛三局两胜\n"
+            "· 只选 1 个项目：全程固定该项目。非决赛单场定胜负，"
+            "平局（如17步麻将流局、或荣和得分不足满贯）加赛一次，仍平局则随机晋级；"
+            "决赛三局两胜\n"
             "· 选了多个项目：每一场从这些项目里随机抽取；决赛尽量抽不同项目"
             "（够三个就三个不同，只有两个就都用上）打三局两胜\n"
             "【进行方式】\n"
             "· 每场开始时机器人公告对阵与项目，并直接为两位选手自动开局"
             "（不开放手动加入，杜绝外人乱入）\n"
+            "· 锦标赛期间本群禁止手动开这三种游戏的普通对局，避免与赛程冲突\n"
             "（17步麻将需双方到私聊选牌出牌；对局奖励由锦标赛单独结算，故对局本身按普通局进行）\n"
             "· 「锦标赛」/「锦标赛 状态」可随时查看晋级图与赛程\n"
             "· 锦标赛闲置超过 6 小时自动作废"

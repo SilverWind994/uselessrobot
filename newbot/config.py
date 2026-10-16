@@ -64,6 +64,9 @@ class Config:
     AVALON_DATA_PATH = os.path.join(AVALON_DIR, "avalon_data.json")
     AVALON_SETTERS = [3187638890, 2544910201]  # 出题人白名单
 
+    # ==================== 锦标赛 ====================
+    TOURNAMENT_ADMIN_QQ = 2544910201  # 仅该管理员可开出带鱼干/猫眼石奖励的锦标赛
+
     @classmethod
     def get_db_url(cls):
         db = cls.DATABASE

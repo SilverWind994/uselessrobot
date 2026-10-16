@@ -49,6 +49,8 @@ newbot/assets/yahtzee/*
 newbot/assets/mahjong17/*
 # Farkle 骰子：对局状态与棋盘图（运行时内容，不纳入版本库）
 newbot/assets/farkle/*
+# 锦标赛：赛程状态（运行时内容，不纳入版本库）
+newbot/assets/tournament/*
 
 # ===== 老代码归档（archive/mybot）中的运行时数据 =====
 archive/mybot/jsonFile/*

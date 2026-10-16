@@ -547,6 +547,49 @@ class Mahjong17Plugin:
     def __init__(self, sender: MessageSender, cat_plugin=None):
         self._sender = sender
         self._cat = cat_plugin  # 猫猫远征队插件，用于猫眼石结算
+        self._result_reporter = None
+
+    def set_result_reporter(self, reporter) -> None:
+        """锦标赛等外部编排器注册结果回调：reporter(group_id, result)"""
+        self._result_reporter = reporter
+
+    def _report_result(self, gid: int, result: dict) -> None:
+        """对局结束时把结果上报给外部编排器（未注册则忽略）"""
+        if self._result_reporter is not None:
+            self._result_reporter(gid, result)
+
+    def start_tournament_match(self, gid: int, players) -> bool:
+        """锦标赛直接开局：用指定两位选手创建并开始一局普通（无猫眼石）17步麻将。
+
+        成功返回 True；本群已有未结束的对局、或某位选手已在别的对局中时返回 False。
+        """
+        if self._load_game(gid) is not None:
+            return False
+        for uid, _name in players:
+            other, _ = self._find_player_game(uid)
+            if other is not None:
+                return False
+        game = {
+            "stones": False,
+            "started": True,
+            "player_id": [players[0][0], players[1][0]],
+            "player_name": [players[0][1], players[1][1]],
+            "turn": -1,
+            "player_turn": 0,
+            "furiten": [False, False],
+            "dora": [-1, -1],
+            "tiles": [[0] * 38, [0] * 38],
+            "hand_tiles": [[-1] + [0] * 37, [-1] + [0] * 37],
+            "left_tiles": [[0] * 38, [0] * 38],
+            "take_tiles": [[-1] * LAST_TURN, [-1] * LAST_TURN],
+        }
+        self._deal(game)
+        self._save_game(gid, game)
+        self._send_initial_tiles(game)
+        self._send_group_text(
+            gid, f"🀄 锦标赛17步麻将：{players[0][1]} 与 {players[1][1]} 对局，"
+                 f"双方请在私聊组建手牌并出牌")
+        return True
 
     # ==================== 注册命令 ====================
 
@@ -769,6 +812,14 @@ class Mahjong17Plugin:
                 self._send_group_text(gid, "流局")
                 self._send_private_text(game["player_id"][1 - pid], "流局")
                 self._send_end_table(gid, game)
+                self._report_result(gid, {
+                    "game": "mahjong17",
+                    "players": [{"id": int(game["player_id"][i]),
+                                 "name": game["player_name"][i]}
+                                for i in range(PLAYER_NUM)],
+                    "winner": None,
+                    "reason": "流局",
+                })
                 self._remove_game(gid)
                 return
             self._sender.reply(ctx, "当前只能选择荣和或者流局")
@@ -837,6 +888,14 @@ class Mahjong17Plugin:
             self._send_group_text(gid, game["player_name"][pid] + "已经振听，宣布荣和算诈和！")
             for line in self._settle(game, pid, 0, 0):
                 self._send_group_text(gid, line)
+            self._report_result(gid, {
+                "game": "mahjong17",
+                "players": [{"id": int(game["player_id"][i]),
+                             "name": game["player_name"][i]}
+                            for i in range(PLAYER_NUM)],
+                "winner": int(game["player_id"][1 - pid]),
+                "reason": "诈胡判负",
+            })
             self._remove_game(gid)
             return
         if pid == 0:
@@ -846,6 +905,25 @@ class Mahjong17Plugin:
 
         score, fu, fan, fans = _score_hand(game["hand_tiles"][pid], cut, game["dora"])
         self._send_result(gid, game["hand_tiles"][pid], cut, game["dora"], score, fu, fan, fans)
+        if fan == 0:
+            # 无役不成和：宣布荣和按诈胡处理，宣布者判负
+            self._report_result(gid, {
+                "game": "mahjong17",
+                "players": [{"id": int(game["player_id"][i]),
+                             "name": game["player_name"][i]}
+                            for i in range(PLAYER_NUM)],
+                "winner": int(game["player_id"][1 - pid]),
+                "reason": "诈胡判负",
+            })
+        else:
+            self._report_result(gid, {
+                "game": "mahjong17",
+                "players": [{"id": int(game["player_id"][i]),
+                             "name": game["player_name"][i]}
+                            for i in range(PLAYER_NUM)],
+                "winner": int(game["player_id"][pid]),
+                "reason": "荣和",
+            })
         for line in self._settle(game, pid, score, fan):
             self._send_group_text(gid, line)
         self._remove_game(gid)

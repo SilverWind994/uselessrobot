@@ -18,6 +18,7 @@ from plugins.avalon_quiz import AvalonQuizPlugin
 from plugins.yahtzee import YahtzeePlugin
 from plugins.mahjong17 import Mahjong17Plugin
 from plugins.farkle import FarklePlugin
+from plugins.tournament import TournamentPlugin
 
 
 class Bot:
@@ -67,6 +68,15 @@ class Bot:
         # Farkle 骰子插件（猫眼石复用猫猫远征队的猫眼石）
         self._farkle = FarklePlugin(self._sender, cat_game)
         self._farkle.register(self._router)
+
+        # 锦标赛插件（把上面三种对战游戏当作比赛项目）
+        self._tournament = TournamentPlugin(
+            self._sender, cat_game, self._yahtzee, self._mahjong17, self._farkle)
+        self._tournament.register(self._router)
+        # 三个对战游戏对局结束时把结果回调给锦标赛，用于推进赛程
+        self._yahtzee.set_result_reporter(self._tournament.on_match_result)
+        self._mahjong17.set_result_reporter(self._tournament.on_match_result)
+        self._farkle.set_result_reporter(self._tournament.on_match_result)
 
     def _register_routes(self) -> None:
         self.app.post("/")(self._handle_event)

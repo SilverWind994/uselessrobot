@@ -150,6 +150,36 @@ class YahtzeePlugin:
     def __init__(self, sender: MessageSender, cat_plugin=None):
         self._sender = sender
         self._cat = cat_plugin  # 猫猫远征队插件，用于发放鱼干奖励
+        self._result_reporter = None
+
+    def set_result_reporter(self, reporter) -> None:
+        """锦标赛等外部编排器注册结果回调：reporter(group_id, result)"""
+        self._result_reporter = reporter
+
+    def _report_result(self, gid: int, result: dict) -> None:
+        """对局结束时把结果上报给外部编排器（未注册则忽略）"""
+        if self._result_reporter is not None:
+            self._result_reporter(gid, result)
+
+    def start_tournament_match(self, gid: int, players) -> bool:
+        """锦标赛直接开局：用指定两位选手创建并开始一局（不开放加入，防止外人乱入）。
+
+        成功返回 True；本群已有未结束的对局时返回 False（交由锦标赛提示）。
+        """
+        if self._get_game(gid) is not None:
+            return False
+        game = {"started": False, "turn": 0, "roll": 1, "dice": [],
+                "players": [self._new_player(pid, name) for pid, name in players]}
+        self._start_game(game)
+        self._save_game(gid, game)
+        target = Target(user_id=0, group_id=gid, is_group=True)
+        names = "、".join(p["name"] for p in game["players"])
+        self._sender.send_text(target, f"🎲 锦标赛快艇骰子：{names} 开始，轮流掷骰计分")
+        try:
+            self._sender.send_image(target, self._render_dice(game, gid))
+        except Exception:
+            pass
+        return True
 
     # ==================== 注册命令 ====================
 
@@ -457,8 +487,10 @@ class YahtzeePlugin:
         """结算本局：记录各玩家本周首次分数、公布总分、清除对局"""
         weekly = self._ensure_week()
         lines = [reason, ""]
+        totals = []
         for p in game["players"]:
             total = _total(p["score"])
+            totals.append((p, total))
             tag = "（已放弃）" if p.get("given_up") else ""
             key = str(p["id"])
             if key not in weekly["scores"]:
@@ -468,6 +500,20 @@ class YahtzeePlugin:
                 note = "（本周已有首次分数，不重复计）"
             lines.append(f"{p['name']}{tag}：{total}分 {note}")
         _save_json(_WEEKLY_PATH, weekly)
+        best = max(t for _, t in totals)
+        top = [p for p, t in totals if t == best]
+        if len(top) == 1:
+            winner = int(top[0]["id"])
+            win_reason = "放弃" if "放弃" in reason else "全员打完"
+        else:
+            winner = None
+            win_reason = "平分"
+        self._report_result(self._room_key(ctx), {
+            "game": "yahtzee",
+            "players": [{"id": int(p["id"]), "name": p["name"]} for p in game["players"]],
+            "winner": winner,
+            "reason": win_reason,
+        })
         self._remove_game(self._room_key(ctx))
         self._sender.reply(ctx, "\n".join(lines))
 

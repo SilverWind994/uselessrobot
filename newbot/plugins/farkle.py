@@ -171,6 +171,42 @@ class FarklePlugin:
     def __init__(self, sender: MessageSender, cat_plugin=None):
         self._sender = sender
         self._cat = cat_plugin  # 猫猫远征队插件，用于猫眼石结算
+        self._result_reporter = None
+
+    def set_result_reporter(self, reporter) -> None:
+        """锦标赛等外部编排器注册结果回调：reporter(group_id, result)"""
+        self._result_reporter = reporter
+
+    def _report_result(self, gid: int, result: dict) -> None:
+        """对局结束时把结果上报给外部编排器（未注册则忽略）"""
+        if self._result_reporter is not None:
+            self._result_reporter(gid, result)
+
+    def start_tournament_match(self, gid: int, players) -> bool:
+        """锦标赛直接开局：用指定两位选手创建并直接进入先手拍卖（不开放加入）。
+
+        成功返回 True；本群已有未结束的对局、或某位选手已在别的对局中时返回 False。
+        """
+        if self._load_game(gid) is not None:
+            return False
+        if any(self._player_in_other_game(uid, gid) for uid, _name in players):
+            return False
+        game = self._new_game(DEFAULT_TARGET, 0)
+        game["players"] = [self._new_player(pid, name) for pid, name in players]
+        game["started"] = True
+        self._reset_turn(game)
+        game["phase"] = "auction"
+        game["auction"] = {"bid": None, "holder": None, "turn": 1}
+        self._save_game(gid, game)
+        target = Target(user_id=0, group_id=gid, is_group=True)
+        self._sender.send_text(
+            target,
+            f"🎲 锦标赛 Farkle：{players[0][1]} vs {players[1][1]}，"
+            f"目标 {DEFAULT_TARGET} 分。\n"
+            f"开局前先拍卖先手：由 {players[1][1]} 先出价，"
+            f"说出愿意以「负多少分」的代价换取先手。")
+        self._sender.send_text(target, self._auction_prompt(game))
+        return True
 
     # ==================== 注册命令 ====================
 
@@ -338,7 +374,7 @@ class FarklePlugin:
             return
         winner = next(p for p in game["players"] if p["id"] != ctx.user_id)
         self._finish(
-            ctx, game, winner,
+            ctx, game, winner, reason="投降",
             headline=f"🏳️ {surrender['name']} 投降，{winner['name']} 赢下本局 Farkle！")
 
     def _show(self, ctx: CommandContext) -> None:
@@ -578,12 +614,18 @@ class FarklePlugin:
         self._do_roll(ctx, gid, game)
 
     def _finish(self, ctx: CommandContext, game: dict, winner: dict,
-                headline: str = None) -> None:
+                headline: str = None, reason: str = "达成目标分") -> None:
         """结算本局：公布总分，按猫眼石数目结算后清除对局"""
         lines = [headline or f"🏆 {winner['name']} 达到 {game['target']} 分，赢下本局 Farkle！"]
         for p in game["players"]:
             lines.append(f"{p['name']}：{p['total']} 分")
         lines += self._settle(game, winner)
+        self._report_result(ctx.group_id, {
+            "game": "farkle",
+            "players": [{"id": int(p["id"]), "name": p["name"]} for p in game["players"]],
+            "winner": int(winner["id"]),
+            "reason": reason,
+        })
         self._remove_game(ctx.group_id)
         self._sender.reply(ctx, "\n".join(lines))
 

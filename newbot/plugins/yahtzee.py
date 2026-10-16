@@ -44,7 +44,7 @@ _SUB_ALIASES = {
     "开始": "start", "start": "start",
     "重投": "reroll", "reroll": "reroll",
     "计分": "score", "score": "score",
-    "放弃": "giveup", "投降": "giveup", "surrender": "giveup",
+    "放弃": "giveup", "投降": "giveup", "surrender": "giveup","giveup":"giveup",
     "排行榜": "rank", "rank": "rank", "rankinglist": "rank",
     "状态": "status", "status": "status",
     "帮助": "help", "help": "help",
@@ -521,13 +521,14 @@ class YahtzeePlugin:
         else:
             winner = None
             win_reason = "平分"
-        self._report_result(self._room_key(ctx), {
+        gid = self._room_key(ctx)
+        self._remove_game(gid)   # 先清状态，锦标赛回调才能紧接着开下一局
+        self._report_result(gid, {
             "game": "yahtzee",
             "players": [{"id": int(p["id"]), "name": p["name"]} for p in game["players"]],
             "winner": winner,
             "reason": win_reason,
         })
-        self._remove_game(self._room_key(ctx))
         self._sender.reply(ctx, "\n".join(lines))
 
     def _send_board(self, ctx: CommandContext, game: dict) -> None:

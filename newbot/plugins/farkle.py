@@ -33,6 +33,7 @@ IDLE_SECONDS = 6 * 60 * 60   # 对局闲置超过该时长自动作废，避免�
 PLAYER_NUM = 2               # 固定两人
 DICE_NUM = 6                 # 每回合掷的骰子数
 DEFAULT_TARGET = 4000        # 未指定分数目标时的默认值
+TOURNAMENT_TARGETS = (2000, 4000)   # 锦标赛随机分数目标（二选一）
 MIN_TARGET = 500             # 分数目标下限
 MAX_TARGET = 50000           # 分数目标上限
 MAX_STONES = 10              # 猫眼石数目上限
@@ -199,7 +200,8 @@ class FarklePlugin:
             return False
         if any(self._player_in_other_game(uid, gid) for uid, _name in players):
             return False
-        game = self._new_game(DEFAULT_TARGET, 0)
+        target_score = random.choice(TOURNAMENT_TARGETS)   # 锦标赛目标分随机 2000 / 4000
+        game = self._new_game(target_score, 0)
         game["players"] = [self._new_player(pid, name) for pid, name in players]
         game["started"] = True
         self._reset_turn(game)
@@ -210,7 +212,7 @@ class FarklePlugin:
         self._sender.send_text(
             target,
             f"🎲 锦标赛 Farkle：{players[0][1]} vs {players[1][1]}，"
-            f"目标 {DEFAULT_TARGET} 分。\n"
+            f"目标 {target_score} 分。\n"
             f"开局前先拍卖先手：由 {players[1][1]} 先出价，"
             f"说出愿意以「负多少分」的代价换取先手。")
         self._sender.send_text(target, self._auction_prompt(game))
@@ -633,13 +635,13 @@ class FarklePlugin:
         for p in game["players"]:
             lines.append(f"{p['name']}：{p['total']} 分")
         lines += self._settle(game, winner)
+        self._remove_game(ctx.group_id)   # 先清状态，锦标赛回调才能紧接着开下一局
         self._report_result(ctx.group_id, {
             "game": "farkle",
             "players": [{"id": int(p["id"]), "name": p["name"]} for p in game["players"]],
             "winner": int(winner["id"]),
             "reason": reason,
         })
-        self._remove_game(ctx.group_id)
         self._sender.reply(ctx, "\n".join(lines))
 
     def _settle(self, game: dict, winner: dict) -> list:

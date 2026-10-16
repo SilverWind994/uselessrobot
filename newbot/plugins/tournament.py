@@ -62,6 +62,7 @@ _SUB_ALIASES = {
     "退出": "leave", "退赛": "leave", "leave": "leave", "quit": "leave",
     "开始": "start", "start": "start",
     "取消": "cancel", "解散": "cancel", "cancel": "cancel",
+    "继续": "resume", "resume": "resume",
     "状态": "status", "查看": "status", "status": "status",
     "帮助": "help", "help": "help",
 }
@@ -209,6 +210,8 @@ class TournamentPlugin:
             self._cmd_start(ctx)
         elif action == "cancel":
             self._cmd_cancel(ctx)
+        elif action == "resume":
+            self._cmd_resume(ctx)
         elif action == "status":
             self._cmd_status(ctx)
 
@@ -292,7 +295,7 @@ class TournamentPlugin:
         self._sender.reply(
             ctx, f"🏆 已创建锦标赛：{size} 人 · 项目：{pool_text} · {reward}\n"
                  f"创建者不自动参赛，想参赛请自己也发「锦标赛 加入」\n"
-                 f"报名用「锦标赛 加入」，报满 {size} 人后由创建者发送「锦标赛 开始」开始")
+                 f"报名用「锦标赛 加入」，报满 {size} 人后任何人发送「锦标赛 开始」即可开始")
         self._sender.reply(ctx, self._status_text(t))
 
     def _cmd_join(self, ctx: CommandContext) -> None:
@@ -354,9 +357,6 @@ class TournamentPlugin:
             return
         if t["status"] != "waiting":
             self._sender.reply(ctx, "这场锦标赛已经开始或结束了喵")
-            return
-        if ctx.user_id != t["owner"] and ctx.user_id != Config.TOURNAMENT_ADMIN_QQ:
-            self._sender.reply(ctx, "只有创建者可以开始锦标赛喵")
             return
         n = len(t["players"])
         if n != t["size"]:
@@ -480,10 +480,18 @@ class TournamentPlugin:
             f"{label}项目：{_PROJECT_NAME[key]}，已自动开局",
         ]
         self._send_group(t["group_id"], "\n".join(lines))
-        self._start_match(t, pending)
+        if not self._start_match(t, pending):
+            key = pending["projects"][pending["game_no"]]
+            self._send_group(
+                t["group_id"],
+                f"⚠️ 本群已有未结束的{_PROJECT_NAME[key]}对局，无法为锦标赛自动开局；"
+                f"请先打完或取消它，再发送「锦标赛 继续」")
 
-    def _start_match(self, t, pending: dict) -> None:
-        """直接为匹配的两位选手开局：不开放手动加入，杜绝外人乱入"""
+    def _start_match(self, t, pending: dict) -> bool:
+        """直接为匹配的两位选手开局：不开放手动加入，杜绝外人乱入。
+
+        成功返回 True；本群已有未结束的同款对局时返回 False（交由调用方提示）。
+        """
         gid = t["group_id"]
         name_of = {p["id"]: p["name"] for p in t["players"]}
         starter = pending["starter"]
@@ -494,11 +502,32 @@ class TournamentPlugin:
         plugin = {"yahtzee": self._yahtzee, "mahjong17": self._mahjong17,
                   "farkle": self._farkle}.get(key)
         if plugin is None:
+            return False
+        return plugin.start_tournament_match(gid, players)
+
+    def _cmd_resume(self, ctx: CommandContext) -> None:
+        """手动继续卡住的场次：为当前 pending 场次重新开局"""
+        gid = ctx.group_id
+        t = self._load(gid)
+        if t is None:
+            self._sender.reply(ctx, "本群还没有锦标赛喵")
             return
-        if not plugin.start_tournament_match(gid, players):
-            self._send_group(
-                gid, f"⚠️ 本群已有未结束的{_PROJECT_NAME[key]}对局，"
-                     f"无法为锦标赛自动开局，请先打完或取消它再继续")
+        if t["status"] != "playing" or not t.get("pending"):
+            self._sender.reply(ctx, "现在没有卡住的锦标赛场次喵")
+            return
+
+        pending = t["pending"]
+        key = pending["projects"][pending["game_no"]]
+        if self._start_match(t, pending):
+            t["updated_at"] = time.time()
+            self._save(t)
+            self._sender.reply(
+                ctx, f"已为 {pending['names'][0]} vs {pending['names'][1]} "
+                     f"重新开局（{_PROJECT_NAME[key]}）")
+        else:
+            self._sender.reply(
+                ctx, f"本群已有未结束的{_PROJECT_NAME[key]}对局，"
+                     f"先打完或取消它，再发送「锦标赛 继续」")
 
     def _resolve(self, pending: dict):
         """根据已完成各场结果判定本场是否结束，返回 (胜者id | None, 是否还需继续)"""
@@ -677,7 +706,7 @@ class TournamentPlugin:
             lines.append(f"已报名（{n}/{t['size']}）："
                          + "、".join(p["name"] for p in t["players"]))
             if n >= t["size"]:
-                lines.append("报名已满，请创建者发送「锦标赛 开始」")
+                lines.append("报名已满，任何人发送「锦标赛 开始」即可开始")
             else:
                 lines.append("发送「锦标赛 加入」报名（已报名的可用「锦标赛 退出」取消）")
         elif t["status"] == "playing":
@@ -905,7 +934,7 @@ class TournamentPlugin:
             "· 只有管理员可以开出带鱼干 / 猫眼石奖励的锦标赛；其他玩家请把奖励填 0\n"
             "【报名与开始】\n"
             "· 创建者不自动参赛，想参赛需自己「锦标赛 加入」\n"
-            "· 「锦标赛 加入」报名，报满设定人数后由创建者「锦标赛 开始」开始赛程\n"
+            "· 「锦标赛 加入」报名，报满设定人数后任何人「锦标赛 开始」即可开始赛程\n"
             "· 报名期间可用「锦标赛 退出」取消自己的报名；开始后不能再退出\n"
             "· 报名期间创建者可「锦标赛 取消」解散；开始后必须打完整场\n"
             "· 带猫眼石奖励时，欠债（猫眼石为负）的玩家不能报名\n"
@@ -920,6 +949,9 @@ class TournamentPlugin:
             "· 每场开始时机器人公告对阵与项目，并直接为两位选手自动开局"
             "（不开放手动加入，杜绝外人乱入）\n"
             "· 锦标赛期间本群禁止手动开这三种游戏的普通对局，避免与赛程冲突\n"
+            "· 项目为 Farkle 时，本场目标分数随机从 2000 / 4000 中抽取\n"
+            "· 若某场开局失败（本群还有未结束的同款对局）：打完或取消那局后，"
+            "任何人发「锦标赛 继续」即可为该场重新开局\n"
             "（17步麻将需双方到私聊选牌出牌；对局奖励由锦标赛单独结算，故对局本身按普通局进行）\n"
             "· 「锦标赛」/「锦标赛 状态」可随时查看晋级图与赛程\n"
             "· 锦标赛闲置超过 6 小时自动作废"

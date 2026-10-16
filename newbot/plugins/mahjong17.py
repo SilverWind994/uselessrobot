@@ -827,6 +827,7 @@ class Mahjong17Plugin:
                 self._send_group_text(gid, "流局")
                 self._send_private_text(game["player_id"][1 - pid], "流局")
                 self._send_end_table(gid, game)
+                self._remove_game(gid)   # 先清状态，锦标赛回调才能紧接着开下一局
                 self._report_result(gid, {
                     "game": "mahjong17",
                     "players": [{"id": int(game["player_id"][i]),
@@ -835,7 +836,6 @@ class Mahjong17Plugin:
                     "winner": None,
                     "reason": "流局",
                 })
-                self._remove_game(gid)
                 return
             self._sender.reply(ctx, "当前只能选择荣和或者流局")
             return
@@ -903,6 +903,7 @@ class Mahjong17Plugin:
             self._send_group_text(gid, game["player_name"][pid] + "已经振听，宣布荣和算诈和！")
             for line in self._settle(game, pid, 0, 0):
                 self._send_group_text(gid, line)
+            self._remove_game(gid)   # 先清状态，锦标赛回调才能紧接着开下一局
             self._report_result(gid, {
                 "game": "mahjong17",
                 "players": [{"id": int(game["player_id"][i]),
@@ -911,7 +912,6 @@ class Mahjong17Plugin:
                 "winner": int(game["player_id"][1 - pid]),
                 "reason": "诈胡判负",
             })
-            self._remove_game(gid)
             return
         if pid == 0:
             cut = game["take_tiles"][1][game["turn"] - 1]
@@ -922,6 +922,7 @@ class Mahjong17Plugin:
         self._send_result(gid, game["hand_tiles"][pid], cut, game["dora"], score, fu, fan, fans)
         players = [{"id": int(game["player_id"][i]), "name": game["player_name"][i]}
                    for i in range(PLAYER_NUM)]
+        self._remove_game(gid)   # 先清状态，锦标赛回调才能紧接着开下一局
         if fan == 0:
             # 无役不成和：宣布荣和按诈胡处理，宣布者判负
             self._report_result(gid, {"game": "mahjong17", "players": players,
@@ -943,7 +944,6 @@ class Mahjong17Plugin:
                                       "reason": "荣和"})
             for line in self._settle(game, pid, score, fan):
                 self._send_group_text(gid, line)
-        self._remove_game(gid)
 
     # ==================== 猫眼石结算 ====================
 

@@ -49,6 +49,7 @@ DORA_TO = {0: 6, 1: 2, 2: 3, 3: 4, 4: 5, 5: 6, 6: 7, 7: 8, 8: 9, 9: 1,
 
 _RON_WORDS = ("荣", "和", "荣和", "rong")
 _PASS_WORDS = ("过", "流局", "pass")
+_VIEW_WORDS = ("看牌", "手牌", "牌面", "看手牌", "view", "status", "状态")
 
 # 群聊子指令别名
 _STONE_WORDS = {"猫眼石", "猫眼石局", "有猫眼石", "stones"}
@@ -759,6 +760,12 @@ class Mahjong17Plugin:
         if not game["started"]:
             self._sender.reply(ctx, "游戏暂未开始")
             return
+
+        # 重新查看当前牌面（网络失败时可补发）
+        if head in _VIEW_WORDS:
+            self._resend_view(ctx, game)
+            return
+
         if not args:
             self._sender.reply(ctx, "缺少需要整理或者打出的牌")
             return
@@ -1096,6 +1103,26 @@ class Mahjong17Plugin:
             self._send_private_text(game["player_id"][pid], f"手牌绘制失败了喵：{e}")
             return
         self._send_private_image(game["player_id"][pid], path)
+
+    def _resend_view(self, ctx: CommandContext, game: dict) -> None:
+        """重新发送当前玩家的牌面（网络失败导致图片没收到时补发）。
+        选牌阶段发 34 张原始牌；打牌阶段发当前局面视图。"""
+        pid = 0 if game["player_id"][0] == ctx.user_id else 1
+        try:
+            if game["turn"] == -1:
+                path = self._render_34(game, pid)
+                self._send_private_image(ctx.user_id, path)
+                dora_text = self._tile_text(game["dora"][0])
+                self._send_private_text(
+                    ctx.user_id,
+                    f"本局宝牌指示牌为{dora_text}；发送「17步麻将 123m456p789s11z」"
+                    f"选13张手牌（红五写作0，如 0m）")
+            else:
+                path = self._render_view(game, pid)
+                self._send_private_image(ctx.user_id, path)
+                self._send_private_text(ctx.user_id, "（补发当前牌面）")
+        except Exception as e:
+            self._sender.reply(ctx, f"牌面绘制失败了喵：{e}")
 
     def _send_table(self, gid: int, game: dict) -> None:
         try:

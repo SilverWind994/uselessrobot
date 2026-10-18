@@ -46,7 +46,8 @@ class Config:
     }
 
     SYSTEM_USER_IDS = []
-    ADMIN_USER_IDS = []
+    # 默认管理员：未单独指定管理员的功能默认用这两个人
+    ADMIN_USER_IDS = [3187638890, 2544910201]
 
     SPECIAL_GROUPS = []
 
@@ -65,7 +66,13 @@ class Config:
     AVALON_SETTERS = [3187638890, 2544910201]  # 出题人白名单
 
     # ==================== 锦标赛 ====================
-    TOURNAMENT_ADMIN_QQ = 2544910201  # 仅该管理员可开出带鱼干/猫眼石奖励的锦标赛
+    # 锦标赛管理员：默认管理员都能开出带奖励的锦标赛并强制结束
+    TOURNAMENT_ADMIN_QQ = 2544910201  # 兼容旧字段，实际权限以 is_admin 为准
+
+    @classmethod
+    def is_admin(cls, user_id: int) -> bool:
+        """是否为默认管理员（未单独指定管理员的功能默认用这个）"""
+        return user_id in cls.ADMIN_USER_IDS
 
     @classmethod
     def get_db_url(cls):

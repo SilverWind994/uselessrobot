@@ -1,6 +1,7 @@
 import os
 import random
 import sys
+import time
 import uvicorn
 from fastapi import FastAPI, Request
 
@@ -11,6 +12,7 @@ from core.message_sender import MessageSender, Target
 from core.command_router import CommandRouter, CommandContext
 from core.database import Database, JSONRepository
 from core.qq_file_manager import QQNumberFileManager
+from core.image_cleanup import cleanup_old_images
 from plugins.simple_functions import SimpleFunctionsPlugin
 from plugins.ai_functions import AIFunctionsPlugin
 from plugins.cat_expedition import CatExpeditionPlugin
@@ -33,6 +35,7 @@ class Bot:
         self._message_ids = [0] * 60
         self._msg_loc = 0
         self._msg_cache = {}
+        self._last_cleanup = 0.0  # 上次运行时图片清理的时间戳
         self._group_chat2 = {
             689886013: [], 385394206: [], 913954208: [],
             949736354: [], 480507946: [], 1080341951: [],
@@ -41,6 +44,13 @@ class Bot:
         self._ai_plugin = AIFunctionsPlugin(self._sender, Config.ASSETS)
         self._register_plugins()
         self._register_routes()
+        # 启动时清理各插件超过 12 小时的运行时合成图，避免堆积
+        try:
+            n = cleanup_old_images(Config.ASSETS)
+            if n > 0:
+                print(f"[cleanup] removed {n} stale runtime images")
+        except Exception as e:
+            print(f"[cleanup] failed: {e}")
 
     def _register_plugins(self) -> None:
         simple = SimpleFunctionsPlugin(
@@ -111,6 +121,9 @@ class Bot:
         if user_id in Config.SYSTEM_USER_IDS:
             return {}
 
+        # 运行期间每小时尝试清理一次超过 12 小时的运行时合成图
+        self._maybe_cleanup_images()
+
         ctx = CommandContext(data)
 
         if self._handle_connection(instruction, ctx):
@@ -138,6 +151,19 @@ class Bot:
         self._message_ids[self._msg_loc] = msg_id
         self._msg_loc = (self._msg_loc + 1) % 60
         return False
+
+    def _maybe_cleanup_images(self) -> None:
+        """每小时清理一次超过 12 小时的运行时合成图"""
+        now = time.time()
+        if now - self._last_cleanup < 3600:
+            return
+        self._last_cleanup = now
+        try:
+            n = cleanup_old_images(Config.ASSETS)
+            if n > 0:
+                print(f"[cleanup] removed {n} stale runtime images")
+        except Exception as e:
+            print(f"[cleanup] failed: {e}")
 
     def _handle_connection(self, instruction: str, ctx: CommandContext) -> bool:
         target = Target.from_data(ctx.raw_data)

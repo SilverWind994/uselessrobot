@@ -63,6 +63,7 @@ _SUB_ALIASES = {
     "开始": "start", "start": "start",
     "取消": "cancel", "解散": "cancel", "cancel": "cancel",
     "继续": "resume", "resume": "resume",
+    "强制结束": "force_end", "结束": "force_end", "强制取消": "force_end", "force_end": "force_end",
     "状态": "status", "查看": "status", "status": "status",
     "帮助": "help", "help": "help",
 }
@@ -175,7 +176,7 @@ class TournamentPlugin:
         router.register(
             ["锦标赛", "tournament", ".tournament", "/tournament"],
             self.cmd_entry,
-            description="锦标赛·用对战游戏进行淘汰赛（子指令：创建/加入/开始/取消/状态）"
+            description="锦标赛·用对战游戏进行淘汰赛（子指令：创建/加入/开始/取消/强制结束/状态）"
         )
 
     def cmd_entry(self, ctx: CommandContext) -> None:
@@ -212,6 +213,8 @@ class TournamentPlugin:
             self._cmd_cancel(ctx)
         elif action == "resume":
             self._cmd_resume(ctx)
+        elif action == "force_end":
+            self._cmd_force_end(ctx)
         elif action == "status":
             self._cmd_status(ctx)
 
@@ -267,7 +270,7 @@ class TournamentPlugin:
         fish = numbers[0] if len(numbers) >= 1 else 0
         stone = numbers[1] if len(numbers) >= 2 else 0
 
-        if (fish > 0 or stone > 0) and ctx.user_id != Config.TOURNAMENT_ADMIN_QQ:
+        if (fish > 0 or stone > 0) and not Config.is_admin(ctx.user_id):
             self._sender.reply(
                 ctx, "只有管理员可以开出带鱼干 / 猫眼石奖励的锦标赛喵，"
                      "其他人可以把奖励填成 0（空奖励锦标赛）")
@@ -373,7 +376,7 @@ class TournamentPlugin:
         if t is None:
             self._sender.reply(ctx, "本群没有锦标赛喵")
             return
-        if t["owner"] != ctx.user_id and ctx.user_id != Config.TOURNAMENT_ADMIN_QQ:
+        if t["owner"] != ctx.user_id and not Config.is_admin(ctx.user_id):
             self._sender.reply(ctx, "只有创建者可以取消锦标赛喵")
             return
         if t["status"] == "playing":
@@ -381,6 +384,24 @@ class TournamentPlugin:
             return
         self._remove(gid)
         self._sender.reply(ctx, f"{ctx.user_name} 取消了本场锦标赛")
+
+    def _cmd_force_end(self, ctx: CommandContext) -> None:
+        """管理员强制结束进行中的锦标赛（避免有人缺席导致卡住）"""
+        gid = ctx.group_id
+        t = self._load(gid)
+        if t is None:
+            self._sender.reply(ctx, "本群没有锦标赛喵")
+            return
+        if not Config.is_admin(ctx.user_id):
+            self._sender.reply(ctx, "只有管理员可以强制结束锦标赛喵")
+            return
+        status_text = {"waiting": "报名中", "playing": "进行中", "done": "已结束"}.get(
+            t.get("status"), t.get("status"))
+        self._remove(gid)
+        self._sender.reply(
+            ctx,
+            f"🛑 管理员已强制结束本场锦标赛（原状态：{status_text}）。\n"
+            f"如还有未打完的对战对局，可由对局双方自行放弃或取消。")
 
     def _cmd_status(self, ctx: CommandContext) -> None:
         t = self._load(ctx.group_id)

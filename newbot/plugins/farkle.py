@@ -779,7 +779,7 @@ class FarklePlugin:
             ctx, f"{player['name']} 锁定 {_faces_text(selected)}，本次 +{score} 分，"
                  f"本回合累计 {game['turn_score']} 分（剩余可掷 {len(game['hand'])} 颗）"
                  + ("\n热骰！骰子全部计分用完，拿回全部骰子，可继续或入账" if hot else ""))
-        self._send_board(ctx, game)
+        # keep 后不再画图：分数已在文本里，掷骰时才会画图
 
         # 紧跟的动作：继续掷 / 入账
         if followup == "roll":

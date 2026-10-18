@@ -92,7 +92,7 @@ _DIE_NAMES = {
 DICE_INFO = {
     DICE_ODD: "奇数骰80%出奇数",
     DICE_EVEN: "偶数骰80%出偶数",
-    DICE_DEVIL: "恶魔骰掷出1=万能面（锁定时可顶替任意点数）",
+    DICE_DEVIL: "恶魔骰掷出1=万能面（只能用于三张/顺子组合，不能单独当1或5）",
     DICE_LOADED: "灌铅骰2/3概率出1",
 }
 
@@ -277,12 +277,27 @@ def _score_selection(counts: dict) -> int:
 def _roll_has_score(dice) -> bool:
     """这一把骰子是否存在任何可计分的组合（没有则爆骰）。
 
-    dice 为骰子对象列表；万能面必可当 1 计分。"""
-    if any(_is_wild(d) for d in dice):
+    dice 为骰子对象列表。万能面不能单独当 1/5 散点用，
+    只有能参与组合（三张同点/顺子/小顺子）时才算可计分。"""
+    wilds = sum(1 for d in dice if _is_wild(d))
+    real = Counter(d["value"] for d in dice if not _is_wild(d))
+    # 真实的 1 / 5 散点
+    if 1 in real or 5 in real:
         return True
-    counts = Counter(d["value"] for d in dice)
-    # 只要有 1 或 5，或有任意三张同点，就一定能计分（顺子必然含 1，已被覆盖）
-    return 1 in counts or 5 in counts or any(c >= 3 for c in counts.values())
+    # 三张同点：真实数量 + 万能面补齐 >= 3
+    if any(real.get(f, 0) + wilds >= 3 for f in range(1, 7)):
+        return True
+    n = sum(real.values()) + wilds
+    # 顺子 1~6：恰好 6 颗、真实骰无重复面、缺的面可用万能面补齐
+    if n == 6 and all(v == 1 for v in real.values()) and (6 - len(real)) <= wilds:
+        return True
+    # 小顺子 1~5 / 2~6：恰好 5 颗
+    if n == 5 and all(v == 1 for v in real.values()):
+        for lo in (1, 2):
+            span = set(range(lo, lo + 5))
+            if set(real) <= span and (5 - len(real)) <= wilds:
+                return True
+    return False
 
 
 # ==================== 插件 ====================
@@ -738,6 +753,7 @@ class FarklePlugin:
             return taken, left, n
 
         selected = []
+        wild_faces = []   # 万能面顶替到的点数（用于组合校验）
         for face in sorted(counts, reverse=True):
             taken, hand, lack = _take(
                 lambda d, f=face: d.get("kind") == DICE_NORMAL and d["value"] == f,
@@ -755,13 +771,23 @@ class FarklePlugin:
                              f"（本次掷出 {_faces_text(game['hand'])}）")
                     return
                 selected += taken
-        game["hand"] = hand
+                wild_faces += [face] * len(taken)
 
         score = _score_selection(counts)
         if score is None:
             self._sender.reply(
                 ctx, "这组骰子无法计分喵：散落的 2/3/4/6 点要凑成三张及以上才能算")
             return
+
+        # 万能面不能单独使用：顶替到的点数必须参与组合（三张同点或顺子），
+        # 不能单独当 1/5 散点
+        for face in wild_faces:
+            if counts[face] < 3 and len(counts) < 5:
+                self._sender.reply(
+                    ctx, f"恶魔骰的万能面必须用于组合（三张同点/顺子），"
+                         f"不能单独顶替 {face} 点当散分喵")
+                return
+        game["hand"] = hand
 
         player = game["players"][game["turn"]]
         game["locked"] += selected
@@ -1058,7 +1084,8 @@ class FarklePlugin:
             "· 两人到齐时先公告两个位置的骰组，再进行先手拍卖；\n"
             "  谁最终拿到先手，谁就用「先手位」骰组，后手用「后手位」骰组\n"
             "· 奇数骰：80% 出奇数｜偶数骰：80% 出偶数\n"
-            "· 恶魔骰：掷出 1 即万能面，锁定时可顶替任意点数（点数不够的部分自动用万能面补）\n"
+            "· 恶魔骰：掷出 1 即万能面，锁定时可顶替任意点数，"
+            "但必须用于组合（三张同点/顺子），不能单独当 1 或 5 散点\n"
             "· 灌铅骰：2/3 概率出 1\n"
             "· 锁定时优先消耗普通骰子，其次作弊骰的非万能面，最后才动用万能面\n"
             "· 现有骰组：6偶数 / 1灌铅+5普通 / 1恶魔+5普通 / 2奇数+4普通\n"

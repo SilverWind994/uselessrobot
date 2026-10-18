@@ -336,7 +336,8 @@ class FarklePlugin:
             target,
             f"🎲 锦标赛 Farkle：{p0['name']} vs {p1['name']}，目标 {target_score} 分。\n"
             f"{self._dice_announce(game)}\n"
-            f"开局前先拍卖先手：由 {p1['name']} 先出价，根据双方骰组决定策略。")
+            f"开局前先拍卖先手：由 {p1['name']} 先出价，"
+            f"拿到先手就继承「先手位」骰组。")
         self._sender.send_text(target, self._auction_prompt(game))
         return True
 
@@ -478,7 +479,7 @@ class FarklePlugin:
             ctx, f"Farkle 两人到齐，目标 {game['target']} 分。\n"
                  f"{self._dice_announce(game)}\n"
                  f"开局前先拍卖先手：由后加入的 {first_bidder} 先出价，"
-                 f"根据双方骰组决定策略。\n"
+                 f"拿到先手就继承「先手位」骰组。\n"
                  f"发送「farkle 出价 <分数>」，如「farkle 出价 300」= 拿先手但开局 -300 分")
         self._sender.reply(ctx, self._auction_prompt(game))
 
@@ -538,17 +539,20 @@ class FarklePlugin:
     # ==================== 先手拍卖 ====================
 
     def _assign_dice(self, game: dict) -> None:
-        """两人到齐时随机分配各自的骰子（各 50% 概率作弊骰组）"""
+        """两人到齐时随机决定「先手位/后手位」的骰子（各 50% 概率为作弊骰组）。
+        竞价只决定谁坐先手位：先手拿先手位骰组，后手拿后手位骰组。"""
+        game["seat_dice"] = [_random_dice_set(), _random_dice_set()]
+        # 竞价前玩家先用普通骰占位，竞价结束后按位置发放
         for p in game["players"]:
-            p["dice"] = _random_dice_set()
+            p["dice"] = [DICE_NORMAL] * DICE_NUM
 
     @staticmethod
     def _dice_announce(game: dict) -> str:
-        """骰组分配公告文本"""
-        lines = ["骰组分配（各 50% 概率获得作弊骰组）："]
-        for p in game["players"]:
-            lines.append(f"· {p['name']}：{_dice_set_desc(p.get('dice') or [DICE_NORMAL] * DICE_NUM)}")
-        return "\n".join(lines)
+        """骰组分配公告文本（按先手/后手位公告，竞价定归属）"""
+        seat = game.get("seat_dice") or [[DICE_NORMAL] * DICE_NUM] * 2
+        return ("骰组分配（先手/后手位各 50% 概率为作弊骰组，竞价决定归属）：\n"
+                f"· 先手位：{_dice_set_desc(seat[0])}\n"
+                f"· 后手位：{_dice_set_desc(seat[1])}")
 
     @staticmethod
     def _fmt_open_score(bid: int) -> str:
@@ -627,6 +631,10 @@ class FarklePlugin:
         holder = game["players"][au["holder"]]
         bid = au["bid"]
         holder["total"] = -bid       # 中标者按出价结算开局分（负出价=正分开局）
+        # 按最终先后手归属发放对应位置的骰组
+        seat = game.get("seat_dice") or [[DICE_NORMAL] * DICE_NUM] * 2
+        holder["dice"] = list(seat[0])
+        game["players"][1 - au["holder"]]["dice"] = list(seat[1])
         game["auction"] = None
         game["turn"] = au["holder"]
         self._reset_turn(game)
@@ -714,7 +722,7 @@ class FarklePlugin:
             self._sender.reply(ctx, perr)
             return
 
-        # 从手中挑选骰子：优先用点数匹配的真实骰，缺的用恶魔骰万能面顶替；
+        # 从手中挑选骰子：优先消耗普通骰，其次作弊骰的非万能面，最后才用万能面顶替；
         # 未被指定的万能面留在手中（下一轮重掷）
         hand = list(game["hand"])
 
@@ -732,8 +740,13 @@ class FarklePlugin:
         selected = []
         for face in sorted(counts, reverse=True):
             taken, hand, lack = _take(
-                lambda d, f=face: not _is_wild(d) and d["value"] == f, counts[face])
+                lambda d, f=face: d.get("kind") == DICE_NORMAL and d["value"] == f,
+                counts[face])
             selected += taken
+            if lack:
+                taken, hand, lack = _take(
+                    lambda d, f=face: not _is_wild(d) and d["value"] == f, lack)
+                selected += taken
             if lack:
                 taken, hand, lack = _take(_is_wild, lack)
                 if lack:
@@ -872,6 +885,7 @@ class FarklePlugin:
             "turn": 0,
             "phase": "roll",
             "auction": None,
+            "seat_dice": [],
             "locked": [],
             "turn_score": 0,
             "hand": [],
@@ -892,6 +906,8 @@ class FarklePlugin:
     @staticmethod
     def _migrate_game(g: dict) -> dict:
         """旧版存档补骰子字段：玩家骰组默认全普通，手牌/锁定转成骰子对象"""
+        if "seat_dice" not in g:
+            g["seat_dice"] = [[DICE_NORMAL] * DICE_NUM, [DICE_NORMAL] * DICE_NUM]
         for p in g.get("players", []):
             if "dice" not in p:
                 p["dice"] = [DICE_NORMAL] * DICE_NUM
@@ -1038,10 +1054,13 @@ class FarklePlugin:
             "· 另一位：「farkle 加入」，两人到齐后分配骰组并进入先手拍卖\n"
             "· 开局前可「farkle 取消」解散；两人到齐后必须打完\n"
             "· 有猫眼石的对局，开局者与加入者的猫眼石余额都不能为负（欠债者禁入）\n"
-            "【骰组】（两人到齐时各 50% 概率抽到作弊骰组）\n"
+            "【骰组】（先手位/后手位各 50% 概率为作弊骰组，竞价决定归属）\n"
+            "· 两人到齐时先公告两个位置的骰组，再进行先手拍卖；\n"
+            "  谁最终拿到先手，谁就用「先手位」骰组，后手用「后手位」骰组\n"
             "· 奇数骰：80% 出奇数｜偶数骰：80% 出偶数\n"
             "· 恶魔骰：掷出 1 即万能面，锁定时可顶替任意点数（点数不够的部分自动用万能面补）\n"
             "· 灌铅骰：2/3 概率出 1\n"
+            "· 锁定时优先消耗普通骰子，其次作弊骰的非万能面，最后才动用万能面\n"
             "· 现有骰组：6偶数 / 1灌铅+5普通 / 1恶魔+5普通 / 3奇数+3普通\n"
             "· 棋盘图按骰子类型着色：白=普通 蓝=奇数 绿=偶数 红=恶魔 金=灌铅\n"
             "【先手拍卖】（正式掷骰前，骰组公告后进行）\n"

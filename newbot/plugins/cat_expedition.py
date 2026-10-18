@@ -205,6 +205,11 @@ class CatExpeditionPlugin:
             self.cmd_expedition,
             description="猫猫远征队·每日远征Boss"
         )
+        router.register(
+            ["喵扫荡", "扫荡", "catsweep", ".catsweep"],
+            self.cmd_sweep,
+            description="猫猫远征队·一键扫荡（签到+抽干鱼干+远征）"
+        )
 
         router.register(
             ["boss", "bossinfo", ".bossinfo"],
@@ -242,12 +247,17 @@ class CatExpeditionPlugin:
 
     def cmd_signin(self, ctx: CommandContext) -> None:
         player = self._get_player(ctx.user_id)
+        lines = self._signin_core(player)
+        self._update_player(ctx.user_id, player)
+        self._sender.reply(ctx, "\n".join(lines))
+
+    def _signin_core(self, player: dict) -> list:
+        """签到核心逻辑（就地修改 player，不落盘），返回消息行列表"""
         today = date.today()
         today_str = today.isoformat()
 
         if player["last_signin"] == today_str:
-            self._sender.reply(ctx, "今天已经签过啦~明天再来喵 (=^･ω･^=)")
-            return
+            return ["今天已经签过啦~明天再来喵 (=^･ω･^=)"]
 
         # 连续签到：昨天签过则 +1，否则（首次或断签）重新计为 1 天；累计签到只增不减
         yesterday_str = (today - timedelta(days=1)).isoformat()
@@ -288,21 +298,17 @@ class CatExpeditionPlugin:
             bonus = min(raw_bonus, CatConfig.CAT_SIGNIN_BONUS_CAP)
             player["fish"] += bonus
 
-        self._update_player(ctx.user_id, player)
-
-        # 拼消息
         crit_icon = ""
         if crit_type == "super":
             crit_icon = "🌟 超级暴击！"
         elif crit_type == "crit":
             crit_icon = "⚡ 暴击！"
 
-        msg = f"签到成功！{crit_icon}+{base} 鱼干 🐟\n"
+        lines = [f"签到成功！{crit_icon}+{base} 鱼干 🐟"]
         if bonus > 0:
-            msg += f"🎉 累计签到 {player['signin_total']} 天！额外奖励 +{bonus} 鱼干\n"
-        msg += f"当前余额：{player['fish']} 鱼干 | 连续签到：{player['signin_streak']}天"
-
-        self._sender.reply(ctx, msg)
+            lines.append(f"🎉 累计签到 {player['signin_total']} 天！额外奖励 +{bonus} 鱼干")
+        lines.append(f"当前余额：{player['fish']} 鱼干 | 连续签到：{player['signin_streak']}天")
+        return lines
 
     # ==================== 抽喵 ====================
 
@@ -350,20 +356,11 @@ class CatExpeditionPlugin:
             )
             return
 
-        # 幸运：单抽有概率直接变成十连，仍只按 1 抽扣费
-        lucky = (count == 1
-                 and random.random() < CatConfig.CAT_SUMMON_LUCKY_CHANCE)
-        draw_count = CatConfig.CAT_SUMMON_LUCKY_COUNT if lucky else count
-
-        results = self._do_summon(player, draw_count, pool_key)
-        player["fish"] -= total_cost
-        # 每次抽卡获得猫眼石（幸运十连只按实际付费抽数计）
-        player["eye_stones"] = player.get("eye_stones", 0) + count * CatConfig.CAT_EYE_STONE_PER_SUMMON
-        player["summon_count"] = player.get("summon_count", 0) + count
+        results, cost, lucky = self._summon_batch_core(player, count, pool_key)
         self._update_player(ctx.user_id, player)
 
         # 拼消息
-        header = f"【抽喵结果】共 {len(results)} 只，消耗 {total_cost} 鱼干"
+        header = f"【抽喵结果】共 {len(results)} 只，消耗 {cost} 鱼干"
         if lucky:
             header = f"✨ 欧气爆发！一抽变十连！\n{header}"
         lines = [header]
@@ -385,6 +382,22 @@ class CatExpeditionPlugin:
 
         lines.append(f"\n当前余额：{player['fish']} 鱼干 | 猫眼石：{player['eye_stones']}")
         self._sender.reply(ctx, "\n".join(lines))
+
+    def _summon_batch_core(self, player: dict, count: int,
+                           pool_key: Optional[str] = None):
+        """执行一次抽卡扣费与结算（就地修改 player），返回 (results, total_cost, lucky)。
+        调用方需自行保证鱼干足够。"""
+        total_cost = count * CatConfig.CAT_SUMMON_COST
+        # 幸运：单抽有概率直接变成十连，仍只按 1 抽扣费
+        lucky = (count == 1
+                 and random.random() < CatConfig.CAT_SUMMON_LUCKY_CHANCE)
+        draw_count = CatConfig.CAT_SUMMON_LUCKY_COUNT if lucky else count
+        results = self._do_summon(player, draw_count, pool_key)
+        player["fish"] -= total_cost
+        # 每次抽卡获得猫眼石（幸运十连只按实际付费抽数计）
+        player["eye_stones"] = player.get("eye_stones", 0) + count * CatConfig.CAT_EYE_STONE_PER_SUMMON
+        player["summon_count"] = player.get("summon_count", 0) + count
+        return results, total_cost, lucky
 
     # ==================== 卡池查询 ====================
 
@@ -647,19 +660,22 @@ class CatExpeditionPlugin:
     def cmd_expedition(self, ctx: CommandContext) -> None:
         """每日远征Boss。一键远征，自动检索所有喵喵"""
         player = self._get_player(ctx.user_id)
+        lines = self._expedition_core(ctx, player)
+        self._sender.reply(ctx, "\n".join(lines))
+
+    def _expedition_core(self, ctx: CommandContext, player: dict) -> list:
+        """远征核心逻辑（就地修改 player 并落盘；全局远征状态落盘），返回消息行列表"""
         today = date.today().isoformat()
 
         if player.get("last_expedition") == today:
-            self._sender.reply(ctx, "今天已经远征过了，明天再来喵～")
-            return
+            return ["今天已经远征过了，明天再来喵～"]
 
         # 读取全局远征状态
         exp = self._load_expedition()
         act_cfg = self._get_act_config(exp["act"])
         stages = act_cfg.get("stages", [])
         if not stages:
-            self._sender.reply(ctx, "远征关卡配置异常喵～")
-            return
+            return ["远征关卡配置异常喵～"]
 
         stage_cfg = None
         for s in stages:
@@ -667,8 +683,7 @@ class CatExpeditionPlugin:
                 stage_cfg = s
                 break
         if stage_cfg is None:
-            self._sender.reply(ctx, "远征关卡数据异常喵～")
-            return
+            return ["远征关卡数据异常喵～"]
 
         # 天气每次远征都随机，不告诉玩家
         weather = random.choice(CatConfig.CAT_WEATHER_TYPES)
@@ -714,8 +729,7 @@ class CatExpeditionPlugin:
         total_power = int(base_total * (1 + total_bonus_ratio))
 
         if total_power <= 0:
-            self._sender.reply(ctx, "你还没有喵喵喵～")
-            return
+            return ["你还没有喵喵喵～"]
 
         # 随机系数
         ratio = random.uniform(CatConfig.CAT_EXPEDITION_RANDOM_MIN,
@@ -745,34 +759,120 @@ class CatExpeditionPlugin:
 
         # 判断是否通关
         if exp["boss_hp"] <= 0:
-            self._handle_stage_clear(ctx, exp, stage_cfg, act_cfg)
-        else:
-            hp_percent = exp["boss_hp"] / stage_cfg["boss_hp"] * 100
-            if hp_percent > 25:
-                # 血量>25%：显示详细伤害明细
-                lines = [
-                    f"【远征】{act_cfg.get('name', '???')} 第{exp['stage']}关",
-                    f"天气：{weather} | 地形：{terrain}",
-                    f"基础战力：{base_total}",
-                    "特性加成明细：",
-                ]
-                if detail_lines:
-                    lines.extend(detail_lines)
-                else:
-                    lines.append("  无匹配天气/地形的猫猫")
-                lines.append(f"总战力：{base_total}×{1+total_bonus_ratio:.2f}={total_power}，随机倍率：{ratio:.2f}")
-                crit_text = f"（⚡暴击 ×{CatConfig.CAT_EXPEDITION_CRIT_MULT}）" if is_crit else ""
-                lines.append(f"本次伤害：{damage}{crit_text}")
-                lines.append(f"Boss剩余血量：{exp['boss_hp']}/{stage_cfg['boss_hp']}（{hp_percent:.1f}%）")
-                self._sender.reply(ctx, "\n".join(lines))
+            return self._handle_stage_clear(ctx, exp, stage_cfg, act_cfg)
+
+        hp_percent = exp["boss_hp"] / stage_cfg["boss_hp"] * 100
+        if hp_percent > 25:
+            # 血量>25%：显示详细伤害明细
+            lines = [
+                f"【远征】{act_cfg.get('name', '???')} 第{exp['stage']}关",
+                f"天气：{weather} | 地形：{terrain}",
+                f"基础战力：{base_total}",
+                "特性加成明细：",
+            ]
+            if detail_lines:
+                lines.extend(detail_lines)
             else:
-                # 血量≤25%：只显示"???"，不说伤害
-                lines = [
-                    f"【远征】{act_cfg.get('name', '???')} 第{exp['stage']}关",
-                    f"天气：{weather} | 地形：{terrain}",
-                    "Boss剩余血量：???",
-                ]
-                self._sender.reply(ctx, "\n".join(lines))
+                lines.append("  无匹配天气/地形的猫猫")
+            lines.append(f"总战力：{base_total}×{1+total_bonus_ratio:.2f}={total_power}，随机倍率：{ratio:.2f}")
+            crit_text = f"（⚡暴击 ×{CatConfig.CAT_EXPEDITION_CRIT_MULT}）" if is_crit else ""
+            lines.append(f"本次伤害：{damage}{crit_text}")
+            lines.append(f"Boss剩余血量：{exp['boss_hp']}/{stage_cfg['boss_hp']}（{hp_percent:.1f}%）")
+            return lines
+        # 血量≤25%：只显示"???"，不说伤害
+        return [
+            f"【远征】{act_cfg.get('name', '???')} 第{exp['stage']}关",
+            f"天气：{weather} | 地形：{terrain}",
+            "Boss剩余血量：???",
+        ]
+
+    # ==================== 喵扫荡 ====================
+
+    def cmd_sweep(self, ctx: CommandContext) -> None:
+        """一键扫荡：签到 → 循环抽全卡池直到鱼干不足 → 远征，合并为一条消息"""
+        player = self._get_player(ctx.user_id)
+        name = ctx.user_name or f"玩家{ctx.user_id}"
+        lines = [f"【喵扫荡】{name} 一键日常"]
+
+        # —— 1. 签到 ——
+        lines.append("—— 签到 ——")
+        lines.extend(self._signin_core(player))
+        self._update_player(ctx.user_id, player)
+
+        # —— 2. 抽卡：全卡池单抽循环，直到鱼干不足（满星返还会回血，故逐次循环）——
+        lines.append("—— 抽喵（全卡池）——")
+        cost = CatConfig.CAT_SUMMON_COST
+        total_draws = 0      # 实际付费抽数
+        total_got = 0        # 实际到手只数（含欧气十连）
+        total_spent = 0
+        total_refund = 0
+        lucky_times = 0
+        rarity_counts = {"legend": 0, "epic": 0, "rare": 0, "normal": 0}
+        highlights = []
+        MAX_SWEEP_DRAWS = 500   # 安全上限，防止极端返还导致长时间循环
+        while player["fish"] >= cost and total_draws < MAX_SWEEP_DRAWS:
+            results, spent, lucky = self._summon_batch_core(player, 1, None)
+            total_draws += 1
+            total_got += len(results)
+            total_spent += spent
+            if lucky:
+                lucky_times += 1
+            for r in results:
+                rarity_counts[r["rarity"]] = rarity_counts.get(r["rarity"], 0) + 1
+                rname = CatConfig.CAT_RARITY_NAMES.get(r["rarity"], r["rarity"])
+                job_text = f"（{r['job']}）" if r.get("job") else ""
+                if r.get("refunded"):
+                    total_refund += r["refund_amt"]
+                    if r["rarity"] in ("legend", "epic"):
+                        highlights.append(
+                            f"♻️ [{rname}] {r['name']}{job_text} 已满星，返还 {r['refund_amt']} 鱼干")
+                elif not r.get("is_dup"):
+                    icon = "🌟" if r["rarity"] == "legend" else ("✨" if r["rarity"] == "epic" else "🐱")
+                    highlights.append(f"{icon} 新获得 [{rname}] {r['name']}{job_text}")
+                else:
+                    if r["rarity"] in ("legend", "epic"):
+                        icon = "🌟" if r["rarity"] == "legend" else "✨"
+                        hl = f"{icon} [{rname}] {r['name']}{job_text}"
+                        if r.get("star_up"):
+                            hl += f" 升到 ★{r['star']}！"
+                        highlights.append(hl)
+                    elif r.get("job_up"):
+                        highlights.append(f"⬆️ [{rname}] {r['name']} 转职为 {r['job']}！")
+
+        if total_draws == 0:
+            lines.append(f"鱼干不足 {cost}，跳过抽卡")
+        else:
+            head = f"共抽 {total_draws} 次"
+            if total_got > total_draws:
+                head += f"（欧气加成到手 {total_got} 只）"
+            head += f"，花费 {total_spent} 鱼干"
+            if total_refund:
+                head += f"，满星返还 {total_refund} 鱼干"
+            lines.append(head)
+            if lucky_times:
+                lines.append(f"✨ 欧气爆发 ×{lucky_times}（单抽变十连）")
+            parts = [f"{CatConfig.CAT_RARITY_NAMES.get(r, r)}×{c}"
+                     for r, c in (("legend", rarity_counts.get("legend", 0)),
+                                  ("epic", rarity_counts.get("epic", 0)),
+                                  ("rare", rarity_counts.get("rare", 0)),
+                                  ("normal", rarity_counts.get("normal", 0))) if c]
+            if parts:
+                lines.append("获得：" + "、".join(parts))
+            if highlights:
+                for hl in highlights[:25]:
+                    lines.append(f"  {hl}")
+                if len(highlights) > 25:
+                    lines.append(f"  …等共 {len(highlights)} 条亮点")
+
+        # —— 3. 远征 ——
+        lines.append("—— 远征 ——")
+        lines.extend(self._expedition_core(ctx, player))
+
+        # 通关奖励可能已另行落盘，余额以重新读取为准
+        final = self._peek_player(ctx.user_id) or player
+        lines.append("—— 扫荡完毕 ——")
+        lines.append(f"当前余额：{final['fish']} 鱼干 | 猫眼石：{final.get('eye_stones', 0)}")
+        self._sender.reply(ctx, "\n".join(lines))
 
     def cmd_boss(self, ctx: CommandContext) -> None:
         """查看当前Boss信息"""
@@ -860,8 +960,8 @@ class CatExpeditionPlugin:
         self._sender.reply(ctx, "\n".join(lines))
 
     def _handle_stage_clear(self, ctx: CommandContext, exp: dict,
-                            stage_cfg: dict, act_cfg: dict) -> None:
-        """通关处理：发放奖励、进入下一关"""
+                            stage_cfg: dict, act_cfg: dict) -> list:
+        """通关处理：发放奖励、进入下一关，返回消息行列表"""
         lines = [
             f"🎉 恭喜通关！【{act_cfg.get('name', '???')}】第{exp['stage']}关！",
             f"Boss「{stage_cfg['boss_name']}」被击败了！",
@@ -966,7 +1066,7 @@ class CatExpeditionPlugin:
                 lines.append("———\n远征队正在等待新的任务...")
 
         self._save_expedition(exp)
-        self._sender.reply(ctx, "\n".join(lines))
+        return lines
 
     def _load_expedition(self) -> dict:
         """加载全局远征状态"""

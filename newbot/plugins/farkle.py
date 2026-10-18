@@ -60,6 +60,12 @@ _SUB_ALIASES = {
     "帮助": "help", "help": "help",
 }
 
+# 留骰子时可紧跟的下一步动作：r=继续掷，b=入账
+_KEEP_FOLLOWUP = {
+    "r": "roll", "roll": "roll", "掷": "roll", "继续": "roll",
+    "b": "bank", "bank": "bank", "入账": "bank", "收": "bank", "收分": "bank", "停": "bank",
+}
+
 
 # ==================== 通用小工具 ====================
 
@@ -512,7 +518,8 @@ class FarklePlugin:
         self._save_game(gid, game)
         self._sender.reply(
             ctx, f"{player['name']} 掷出 {_faces_text(pool)}。\n"
-                 f"发送「farkle 留 <点数>」锁定至少一颗计分骰，例如「farkle 留 15」")
+                 f"发送「farkle 留 <点数>」锁定至少一颗计分骰，例如「farkle 留 15」；"
+                 f"也可在点数后直接加 r（继续掷）或 b（入账），如「farkle 留 14445 b」")
         self._send_board(ctx, game)
 
     def _cmd_roll(self, ctx: CommandContext) -> None:
@@ -544,8 +551,19 @@ class FarklePlugin:
             self._sender.reply(ctx, "现在没有刚掷出的骰子可以锁定喵")
             return
 
+        # 允许把点数和后续动作写在一起，如「farkle 留 14445 b」
+        # 末尾若是动作字（r/掷/继续 = 继续掷，b/入账/收/停 = 入账）则拆出执行
+        tokens = rest.split()
+        followup = None
+        if tokens:
+            last = tokens[-1].lower()
+            if last in _KEEP_FOLLOWUP:
+                followup = _KEEP_FOLLOWUP[last]
+                tokens = tokens[:-1]
+        dice_str = " ".join(tokens)
+
         pool = game["pool"]
-        counts, perr = self._parse_keep(rest)
+        counts, perr = self._parse_keep(dice_str)
         if perr:
             self._sender.reply(ctx, perr)
             return
@@ -585,6 +603,12 @@ class FarklePlugin:
                  f"本回合累计 {game['turn_score']} 分（剩余可掷 {game['remaining']} 颗）"
                  + ("\n热骰！6 颗骰子全部计分用完，拿回全部骰子，可继续或入账" if hot else ""))
         self._send_board(ctx, game)
+
+        # 紧跟的动作：继续掷 / 入账
+        if followup == "roll":
+            self._cmd_roll(ctx)
+        elif followup == "bank":
+            self._cmd_bank(ctx)
 
     def _cmd_bank(self, ctx: CommandContext) -> None:
         gid = ctx.group_id
@@ -808,7 +832,7 @@ class FarklePlugin:
                 _draw_die(draw, x0 + i * (size + gap), 306, size, v)
 
         hint = {
-            "keep": "发送「farkle 留 <点数>」锁定计分骰，如 farkle 留 15（锁1个1点、1个5点）",
+            "keep": "「farkle 留 <点数>」锁定计分骰，末尾可加 r/b 直接掷或入账（如 farkle 留 15 b）",
             "decide": "发送「farkle 掷」继续博分，或「farkle 入账」收分",
         }.get(game["phase"], "")
         _center_text(draw, (0, height - 42, width, height - 14), hint, _font(22), (150, 140, 128))
@@ -842,6 +866,8 @@ class FarklePlugin:
             "· 轮到你的第一次掷骰会自动进行，不需要手动发送\n"
             "· 「farkle 留 <点数>」：锁定至少一颗能计分的骰子，"
             "如「farkle 留 15」（=锁 1 个 1 点、1 个 5 点）、「farkle 留 1 5 5」\n"
+            "· 也可把后续动作写在点数末尾，省一条指令："
+            "末尾加 r 继续掷（如「farkle 留 14445 r」）、加 b 入账（如「farkle 留 14445 b」）\n"
             "· 锁定后可「farkle 掷」继续博更多分（有爆骰风险），或「farkle 入账」收分换手\n"
             "【爆骰】\n"
             "· 掷出的骰子完全无法计分 → 爆骰，本回合已累计的分全部作废，回合结束并换手\n"

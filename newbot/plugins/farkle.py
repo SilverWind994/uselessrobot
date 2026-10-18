@@ -35,8 +35,12 @@ DICE_NUM = 6                 # 每回合掷的骰子数
 DEFAULT_TARGET = 4000        # 未指定分数目标时的默认值
 TOURNAMENT_TARGETS = (2000, 4000)   # 锦标赛随机分数目标（二选一）
 MIN_TARGET = 500             # 分数目标下限
-MAX_TARGET = 50000           # 分数目标上限
-MAX_STONES = 10              # 猫眼石数目上限
+MAX_TARGET = 10000           # 分数目标上限
+MAX_STONES = 20              # 猫眼石数目上限
+
+# 先手拍卖规则
+BID_STEP = 50                # 出价必须为该数的倍数
+BID_LIMIT = 1000000          # 出价绝对值上限（基本等同无上限）
 
 # 三张同点的基础分（点数×100，三个 1 特殊计 1000）
 _TRIPLE_BASE = {1: 1000, 2: 200, 3: 300, 4: 400, 5: 500, 6: 600}
@@ -64,6 +68,50 @@ _SUB_ALIASES = {
 _KEEP_FOLLOWUP = {
     "r": "roll", "roll": "roll", "掷": "roll", "继续": "roll",
     "b": "bank", "bank": "bank", "入账": "bank", "收": "bank", "收分": "bank", "停": "bank",
+}
+
+# ==================== 骰子与骰组 ====================
+# 新增骰子类型：在 _roll_die 加分支、_DIE_NAMES/_DICE_INFO/_DIE_COLORS 各补一条即可；
+# 新增作弊骰组：在 CHEAT_LOADOUTS 登记。玩家骰子存档为 kind 字符串列表。
+
+DICE_NORMAL = "normal"   # 普通骰：各面等概率
+DICE_ODD = "odd"         # 奇数骰：80% 出奇数，20% 出偶数
+DICE_EVEN = "even"       # 偶数骰：80% 出偶数，20% 出奇数
+DICE_DEVIL = "devil"     # 恶魔骰：掷出 1 即万能面，可顶替任意点数
+DICE_LOADED = "loaded"   # 灌铅骰：2/3 概率出 1，其余均分 2~6
+
+_DIE_ODD_FACES = (1, 3, 5)
+_DIE_EVEN_FACES = (2, 4, 6)
+
+_DIE_NAMES = {
+    DICE_NORMAL: "普通", DICE_ODD: "奇数", DICE_EVEN: "偶数",
+    DICE_DEVIL: "恶魔", DICE_LOADED: "灌铅",
+}
+
+# 作弊骰子的效果说明（公告与图例用）
+DICE_INFO = {
+    DICE_ODD: "奇数骰80%出奇数",
+    DICE_EVEN: "偶数骰80%出偶数",
+    DICE_DEVIL: "恶魔骰掷出1=万能面（锁定时可顶替任意点数）",
+    DICE_LOADED: "灌铅骰2/3概率出1",
+}
+
+# 作弊骰组（方便以后加：直接在此登记新的组合）
+CHEAT_LOADOUTS = {
+    "even6":   [DICE_EVEN] * 6,                       # 6偶数
+    "loaded1": [DICE_LOADED] + [DICE_NORMAL] * 5,     # 1灌铅+5普通
+    "devil1":  [DICE_DEVIL] + [DICE_NORMAL] * 5,      # 1恶魔+5普通
+    "odd3":    [DICE_ODD] * 3 + [DICE_NORMAL] * 3,    # 3奇数+3普通
+}
+CHEAT_CHANCE = 0.5   # 每位玩家拿到作弊骰组的概率
+
+# 渲染配色（棋盘上按骰子类型着色）
+_DIE_COLORS = {
+    DICE_NORMAL: {"fill": (252, 252, 250), "outline": (190, 186, 176)},
+    DICE_ODD:    {"fill": (208, 226, 250), "outline": (110, 155, 215)},
+    DICE_EVEN:   {"fill": (208, 244, 216), "outline": (100, 185, 125)},
+    DICE_DEVIL:  {"fill": (250, 212, 212), "outline": (215, 100, 100)},
+    DICE_LOADED: {"fill": (248, 232, 185), "outline": (205, 165, 75)},
 }
 
 
@@ -98,10 +146,17 @@ def _center_text(draw: ImageDraw.ImageDraw, box, text: str, fnt, fill) -> None:
     draw.text((x, y), text, font=fnt, fill=fill)
 
 
-def _draw_die(draw: ImageDraw.ImageDraw, x: int, y: int, size: int, value: int) -> None:
-    """画一颗骰子（圆角白底 + 点数）"""
+def _draw_die(draw: ImageDraw.ImageDraw, x: int, y: int, size: int, value: int,
+              kind: str = DICE_NORMAL, wild: bool = False) -> None:
+    """画一颗骰子（圆角底 + 点数），底色按骰子类型区分；万能面中央画「万」"""
+    colors = _DIE_COLORS.get(kind, _DIE_COLORS[DICE_NORMAL])
     draw.rounded_rectangle((x, y, x + size, y + size), radius=int(size * 0.18),
-                           fill=(252, 252, 250), outline=(190, 186, 176), width=2)
+                           fill=colors["fill"], outline=colors["outline"], width=2)
+    if wild:
+        # 恶魔骰的万能面：中央一个「万」字
+        _center_text(draw, (x, y, x + size, y + size), "万",
+                     _font(int(size * 0.5)), (160, 30, 30))
+        return
     gx = [x + size * 0.26, x + size * 0.5, x + size * 0.74]
     gy = [y + size * 0.26, y + size * 0.5, y + size * 0.74]
     patterns = {
@@ -119,8 +174,64 @@ def _draw_die(draw: ImageDraw.ImageDraw, x: int, y: int, size: int, value: int) 
 
 
 def _faces_text(dice) -> str:
-    """骰子点数的展示文本，如 [1, 5, 5] -> 「1 5 5」"""
-    return " ".join(str(d) for d in sorted(dice))
+    """骰子点数的展示文本（骰子对象列表），万能面标注「万」，如 1万 3 5"""
+    parts = []
+    for d in sorted(dice, key=lambda x: x.get("value", 0)):
+        if _is_wild(d):
+            parts.append(f"{d['value']}万")
+        else:
+            parts.append(str(d.get("value", 0)))
+    return " ".join(parts)
+
+
+def _roll_die(kind: str) -> int:
+    """按骰子类型掷出 1~6 点"""
+    if kind == DICE_ODD:
+        if random.random() < 0.8:
+            return random.choice(_DIE_ODD_FACES)
+        return random.choice(_DIE_EVEN_FACES)
+    if kind == DICE_EVEN:
+        if random.random() < 0.8:
+            return random.choice(_DIE_EVEN_FACES)
+        return random.choice(_DIE_ODD_FACES)
+    if kind == DICE_LOADED:
+        if random.random() < 2 / 3:
+            return 1
+        return random.randint(2, 6)
+    return random.randint(1, 6)   # 普通骰（未知类型也按普通处理）
+
+
+def _is_wild(die: dict) -> bool:
+    """恶魔骰掷出的 1 是万能面，锁定时可顶替任意点数"""
+    return die.get("kind") == DICE_DEVIL and die.get("value") == 1
+
+
+def _new_die(kind: str) -> dict:
+    """未掷状态的骰子对象"""
+    return {"kind": kind, "value": 0}
+
+
+def _loadout_summary(dice) -> str:
+    """骰组构成摘要，如「1灌铅+5普通」"""
+    counts = Counter(dice)
+    order = (DICE_DEVIL, DICE_LOADED, DICE_ODD, DICE_EVEN, DICE_NORMAL)
+    return "+".join(f"{counts[k]}{_DIE_NAMES[k]}" for k in order if counts.get(k))
+
+
+def _dice_set_desc(dice) -> str:
+    """骰组完整描述：构成 + 作弊骰效果说明"""
+    if all(k == DICE_NORMAL for k in dice):
+        return "普通骰组（6普通）"
+    cheats = [k for k in (DICE_DEVIL, DICE_LOADED, DICE_ODD, DICE_EVEN) if k in dice]
+    explain = "；".join(DICE_INFO[k] for k in cheats)
+    return f"{_loadout_summary(dice)}｜{explain}"
+
+
+def _random_dice_set() -> list:
+    """随机分配一人的骰子：CHEAT_CHANCE 概率拿作弊骰组，否则全普通"""
+    if random.random() < CHEAT_CHANCE:
+        return list(random.choice(list(CHEAT_LOADOUTS.values())))
+    return [DICE_NORMAL] * DICE_NUM
 
 
 # ==================== 计分 ====================
@@ -164,8 +275,12 @@ def _score_selection(counts: dict) -> int:
 
 
 def _roll_has_score(dice) -> bool:
-    """这一把骰子是否存在任何可计分的组合（没有则爆骰）"""
-    counts = Counter(dice)
+    """这一把骰子是否存在任何可计分的组合（没有则爆骰）。
+
+    dice 为骰子对象列表；万能面必可当 1 计分。"""
+    if any(_is_wild(d) for d in dice):
+        return True
+    counts = Counter(d["value"] for d in dice)
     # 只要有 1 或 5，或有任意三张同点，就一定能计分（顺子必然含 1，已被覆盖）
     return 1 in counts or 5 in counts or any(c >= 3 for c in counts.values())
 
@@ -210,17 +325,18 @@ class FarklePlugin:
         game = self._new_game(target_score, 0)
         game["players"] = [self._new_player(pid, name) for pid, name in players]
         game["started"] = True
+        self._assign_dice(game)
         self._reset_turn(game)
         game["phase"] = "auction"
         game["auction"] = {"bid": None, "holder": None, "turn": 1}
         self._save_game(gid, game)
         target = Target(user_id=0, group_id=gid, is_group=True)
+        p0, p1 = game["players"]
         self._sender.send_text(
             target,
-            f"🎲 锦标赛 Farkle：{players[0][1]} vs {players[1][1]}，"
-            f"目标 {target_score} 分。\n"
-            f"开局前先拍卖先手：由 {players[1][1]} 先出价，"
-            f"说出愿意以「负多少分」的代价换取先手。")
+            f"🎲 锦标赛 Farkle：{p0['name']} vs {p1['name']}，目标 {target_score} 分。\n"
+            f"{self._dice_announce(game)}\n"
+            f"开局前先拍卖先手：由 {p1['name']} 先出价，根据双方骰组决定策略。")
         self._sender.send_text(target, self._auction_prompt(game))
         return True
 
@@ -351,6 +467,7 @@ class FarklePlugin:
 
         game["players"].append(self._new_player(ctx.user_id, ctx.user_name))
         game["started"] = True
+        self._assign_dice(game)
         self._reset_turn(game)
         # 进入先手拍卖：由后加入的人（下标 1）先出价
         game["phase"] = "auction"
@@ -359,9 +476,10 @@ class FarklePlugin:
         first_bidder = game["players"][1]["name"]
         self._sender.reply(
             ctx, f"Farkle 两人到齐，目标 {game['target']} 分。\n"
+                 f"{self._dice_announce(game)}\n"
                  f"开局前先拍卖先手：由后加入的 {first_bidder} 先出价，"
-                 f"说出愿意以「负多少分」的代价换取先手。\n"
-                 f"发送「farkle 出价 <分数>」，如「farkle 出价 300」= 愿意开局 -300 分")
+                 f"根据双方骰组决定策略。\n"
+                 f"发送「farkle 出价 <分数>」，如「farkle 出价 300」= 拿先手但开局 -300 分")
         self._sender.reply(ctx, self._auction_prompt(game))
 
     def _cmd_cancel(self, ctx: CommandContext) -> None:
@@ -419,19 +537,39 @@ class FarklePlugin:
 
     # ==================== 先手拍卖 ====================
 
+    def _assign_dice(self, game: dict) -> None:
+        """两人到齐时随机分配各自的骰子（各 50% 概率作弊骰组）"""
+        for p in game["players"]:
+            p["dice"] = _random_dice_set()
+
     @staticmethod
-    def _auction_prompt(game: dict) -> str:
+    def _dice_announce(game: dict) -> str:
+        """骰组分配公告文本"""
+        lines = ["骰组分配（各 50% 概率获得作弊骰组）："]
+        for p in game["players"]:
+            lines.append(f"· {p['name']}：{_dice_set_desc(p.get('dice') or [DICE_NORMAL] * DICE_NUM)}")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _fmt_open_score(bid: int) -> str:
+        """出价对应的开局分：出价 300 → -300，出价 -300 → +300"""
+        return f"{-bid:+d}"
+
+    def _auction_prompt(self, game: dict) -> str:
         """当前拍卖进度与下一步操作的说明"""
         au = game["auction"]
         cur = game["players"][au["turn"]]
         if au["bid"] is None:
-            return (f"先手拍卖（目标 {game['target']} 分）：由后加入的 {cur['name']} 先出价，"
-                    f"说出愿意以负多少分换取先手。\n"
-                    f"发送「farkle 出价 <分数>」，如「farkle 出价 300」= 愿意开局 -300 分")
+            return (f"先手拍卖（目标 {game['target']} 分）：由 {cur['name']} 先出价，"
+                    f"出价必须是 {BID_STEP} 的倍数，可为 0 或负数。\n"
+                    f"正数 = 拿先手但以该负分开局（如「farkle 出价 300」= 开局 -300 分）；"
+                    f"负数 = 拿先手还能以正分开局（如「farkle 出价 -300」= 开局 +300 分）")
         holder = game["players"][au["holder"]]
-        return (f"当前最高出价：{holder['name']} 愿意开局 -{au['bid']} 分换先手。\n"
-                f"{cur['name']} 请选择：「farkle 出价 <高于 {au['bid']} 分>」加价抢先手，"
-                f"或「farkle 接受」让 {holder['name']} 以 -{au['bid']} 分先手开局")
+        return (f"当前最高出价：{holder['name']} 出 {au['bid']}"
+                f"（先手以 {self._fmt_open_score(au['bid'])} 分开局）。\n"
+                f"{cur['name']} 请选择：「farkle 出价 <高于 {au['bid']}>」加价抢先手，"
+                f"或「farkle 接受」让 {holder['name']} "
+                f"以 {self._fmt_open_score(au['bid'])} 分先手开局")
 
     def _cmd_bid(self, ctx: CommandContext, rest: str) -> None:
         gid = ctx.group_id
@@ -445,12 +583,18 @@ class FarklePlugin:
             self._sender.reply(ctx, f"现在轮到 {cur['name']} 出价喵")
             return
         rest = rest.strip()
-        if not rest.isdigit():
-            self._sender.reply(ctx, "出价要填整数分喵，例如「farkle 出价 300」")
+        try:
+            val = int(rest)
+        except ValueError:
+            self._sender.reply(
+                ctx, f"出价要填整数分喵，且必须是 {BID_STEP} 的倍数，"
+                     f"如「farkle 出价 300」或「farkle 出价 -300」")
             return
-        val = int(rest)
-        if not (1 <= val <= game["target"]):
-            self._sender.reply(ctx, f"出价要在 1~{game['target']} 分之间喵")
+        if val % BID_STEP != 0:
+            self._sender.reply(ctx, f"出价必须是 {BID_STEP} 的倍数喵")
+            return
+        if not (-BID_LIMIT <= val <= BID_LIMIT):
+            self._sender.reply(ctx, f"出价要在 ±{BID_LIMIT} 之内喵")
             return
         if au["bid"] is not None and val <= au["bid"]:
             self._sender.reply(
@@ -462,7 +606,7 @@ class FarklePlugin:
         au["turn"] = (au["turn"] + 1) % PLAYER_NUM
         self._save_game(gid, game)
         self._sender.reply(
-            ctx, f"{cur['name']} 出价 {val} 分（愿意开局 -{val} 分换先手）。\n"
+            ctx, f"{cur['name']} 出价 {val} 分（先手以 {self._fmt_open_score(val)} 分开局）。\n"
                  + self._auction_prompt(game))
 
     def _cmd_accept(self, ctx: CommandContext) -> None:
@@ -482,13 +626,14 @@ class FarklePlugin:
             return
         holder = game["players"][au["holder"]]
         bid = au["bid"]
-        holder["total"] = -bid       # 中标者按自己的负分开局
+        holder["total"] = -bid       # 中标者按出价结算开局分（负出价=正分开局）
         game["auction"] = None
         game["turn"] = au["holder"]
         self._reset_turn(game)
         self._save_game(gid, game)
         self._sender.reply(
-            ctx, f"{cur['name']} 接受。{holder['name']} 以 -{bid} 分开局并获得先手，"
+            ctx, f"{cur['name']} 接受。{holder['name']} 以 "
+                 f"{self._fmt_open_score(bid)} 分开局并获得先手，"
                  f"{cur['name']} 以 0 分开局。")
         self._do_roll(ctx, gid, game)
 
@@ -501,25 +646,27 @@ class FarklePlugin:
         return self._check_turn(ctx, game)
 
     def _do_roll(self, ctx: CommandContext, gid: int, game: dict) -> None:
-        """掷当前剩余的骰子；爆骰则作废并换手（换手后自动进行新回合的首掷）"""
+        """掷手中剩余的骰子；爆骰则作废并换手（换手后自动进行新回合的首掷）"""
         player = game["players"][game["turn"]]
-        pool = sorted(random.randint(1, DICE_NUM) for _ in range(game["remaining"]))
+        hand = game["hand"]
+        for die in hand:
+            die["value"] = _roll_die(die["kind"])
 
-        if not _roll_has_score(pool):
+        if not _roll_has_score(hand):
             lost = game["turn_score"]
             self._sender.reply(
-                ctx, f"{player['name']} 掷出 {_faces_text(pool)}，无法计分——爆骰！"
+                ctx, f"{player['name']} 掷出 {_faces_text(hand)}，无法计分——爆骰！"
                      + (f"本回合累计的 {lost} 分全部作废" if lost > 0 else "本回合没有得分"))
             self._end_turn(ctx, gid, game)
             return
 
-        game["pool"] = pool
         game["phase"] = "keep"
         self._save_game(gid, game)
         self._sender.reply(
-            ctx, f"{player['name']} 掷出 {_faces_text(pool)}。\n"
+            ctx, f"{player['name']} 掷出 {_faces_text(hand)}。\n"
                  f"发送「farkle 留 <点数>」锁定至少一颗计分骰，例如「farkle 留 15」；"
-                 f"也可在点数后直接加 r（继续掷）或 b（入账），如「farkle 留 14445 b」")
+                 f"也可在点数后直接加 r（继续掷）或 b（入账），如「farkle 留 14445 b」；"
+                 f"点数不够的部分会自动用恶魔骰的万能面顶替")
         self._send_board(ctx, game)
 
     def _cmd_roll(self, ctx: CommandContext) -> None:
@@ -562,17 +709,41 @@ class FarklePlugin:
                 tokens = tokens[:-1]
         dice_str = " ".join(tokens)
 
-        pool = game["pool"]
         counts, perr = self._parse_keep(dice_str)
         if perr:
             self._sender.reply(ctx, perr)
             return
-        avail = Counter(pool)
-        for face, c in counts.items():
-            if c > avail.get(face, 0):
-                self._sender.reply(
-                    ctx, f"掷出的骰子里没有 {c} 个 {face} 点喵（本次掷出 {_faces_text(pool)}）")
-                return
+
+        # 从手中挑选骰子：优先用点数匹配的真实骰，缺的用恶魔骰万能面顶替；
+        # 未被指定的万能面留在手中（下一轮重掷）
+        hand = list(game["hand"])
+
+        def _take(matcher, n):
+            """从 hand 取出 n 颗满足条件的骰子，返回 (取出的, 剩余的, 还缺几颗)"""
+            taken, left = [], []
+            for d in hand:
+                if n > 0 and matcher(d):
+                    taken.append(d)
+                    n -= 1
+                else:
+                    left.append(d)
+            return taken, left, n
+
+        selected = []
+        for face in sorted(counts, reverse=True):
+            taken, hand, lack = _take(
+                lambda d, f=face: not _is_wild(d) and d["value"] == f, counts[face])
+            selected += taken
+            if lack:
+                taken, hand, lack = _take(_is_wild, lack)
+                if lack:
+                    self._sender.reply(
+                        ctx, f"掷出的骰子（含万能面）凑不出 {counts[face]} 个 {face} 点喵"
+                             f"（本次掷出 {_faces_text(game['hand'])}）")
+                    return
+                selected += taken
+        game["hand"] = hand
+
         score = _score_selection(counts)
         if score is None:
             self._sender.reply(
@@ -580,28 +751,21 @@ class FarklePlugin:
             return
 
         player = game["players"][game["turn"]]
-        kept = []
-        for face, c in counts.items():
-            kept += [face] * c
-        game["locked"] += kept
+        game["locked"] += selected
         game["turn_score"] += score
-        game["remaining"] -= len(kept)
-        game["pool"] = []
 
-        if game["remaining"] <= 0:
-            # 热骰：6 颗全部用完，拿回全部骰子继续
+        hot = not game["hand"]
+        if hot:
+            # 热骰：全部骰子计分用完，拿回全部骰子继续
             game["locked"] = []
-            game["remaining"] = DICE_NUM
-            hot = True
-        else:
-            hot = False
+            game["hand"] = [_new_die(k) for k in player.get("dice") or [DICE_NORMAL] * DICE_NUM]
         game["phase"] = "decide"
         self._save_game(gid, game)
 
         self._sender.reply(
-            ctx, f"{player['name']} 锁定 {_faces_text(kept)}，本次 +{score} 分，"
-                 f"本回合累计 {game['turn_score']} 分（剩余可掷 {game['remaining']} 颗）"
-                 + ("\n热骰！6 颗骰子全部计分用完，拿回全部骰子，可继续或入账" if hot else ""))
+            ctx, f"{player['name']} 锁定 {_faces_text(selected)}，本次 +{score} 分，"
+                 f"本回合累计 {game['turn_score']} 分（剩余可掷 {len(game['hand'])} 颗）"
+                 + ("\n热骰！骰子全部计分用完，拿回全部骰子，可继续或入账" if hot else ""))
         self._send_board(ctx, game)
 
         # 紧跟的动作：继续掷 / 入账
@@ -638,12 +802,12 @@ class FarklePlugin:
     # ==================== 回合流转与结算 ====================
 
     def _reset_turn(self, game: dict) -> None:
-        """重置当前玩家的回合状态（不改动 turn 下标）"""
+        """重置当前玩家的回合状态（不改动 turn 下标）：手牌重置为该玩家的骰组"""
+        player = game["players"][game["turn"]]
         game["phase"] = "roll"
-        game["pool"] = []
         game["locked"] = []
         game["turn_score"] = 0
-        game["remaining"] = DICE_NUM
+        game["hand"] = [_new_die(k) for k in player.get("dice") or [DICE_NORMAL] * DICE_NUM]
 
     def _end_turn(self, ctx: CommandContext, gid: int, game: dict) -> None:
         """换手给另一位玩家并重置回合状态，随后自动进行新回合的首掷"""
@@ -708,19 +872,42 @@ class FarklePlugin:
             "turn": 0,
             "phase": "roll",
             "auction": None,
-            "pool": [],
             "locked": [],
             "turn_score": 0,
-            "remaining": DICE_NUM,
+            "hand": [],
             "players": [],
         }
 
     @staticmethod
     def _new_player(uid: int, name: str) -> dict:
-        return {"id": uid, "name": name, "total": 0}
+        return {"id": uid, "name": name, "total": 0,
+                "dice": [DICE_NORMAL] * DICE_NUM}
 
     def _load_game(self, gid: int):
-        return _load_json(_STATE_PATH).get(str(gid))
+        raw = _load_json(_STATE_PATH).get(str(gid))
+        if raw is None:
+            return None
+        return self._migrate_game(raw)
+
+    @staticmethod
+    def _migrate_game(g: dict) -> dict:
+        """旧版存档补骰子字段：玩家骰组默认全普通，手牌/锁定转成骰子对象"""
+        for p in g.get("players", []):
+            if "dice" not in p:
+                p["dice"] = [DICE_NORMAL] * DICE_NUM
+        if "hand" not in g:
+            if g.get("phase") == "keep" and g.get("pool"):
+                # 旧 keep 阶段：掷出的骰子（点数列表）转成普通骰对象作为手牌
+                g["hand"] = [{"kind": DICE_NORMAL, "value": v} for v in g["pool"]]
+            else:
+                g["hand"] = [{"kind": DICE_NORMAL, "value": 0}
+                             for _ in range(g.get("remaining", DICE_NUM))]
+        g.pop("pool", None)
+        g.pop("remaining", None)
+        locked = g.get("locked", [])
+        if locked and isinstance(locked[0], int):
+            g["locked"] = [{"kind": DICE_NORMAL, "value": v} for v in locked]
+        return g
 
     def _save_game(self, gid: int, game: dict) -> None:
         game["updated_at"] = time.time()
@@ -787,7 +974,7 @@ class FarklePlugin:
 
     def _render_board(self, game: dict, gid: int) -> str:
         width = 700
-        height = 470
+        height = 380
         img = Image.new("RGB", (width, height), (252, 250, 244))
         draw = ImageDraw.Draw(img)
         draw.rectangle((6, 6, width - 7, height - 7), outline=(205, 196, 180), width=3)
@@ -806,34 +993,29 @@ class FarklePlugin:
             _center_text(draw, (0, y, width, y + 40),
                          f"{p['name']}{tag}：{p['total']} 分", _font(30), color)
 
-        # 当前回合信息
-        cur = game["players"][game["turn"]]
-        info = (f"{cur['name']} 本回合已累计 {game['turn_score']} 分"
-                f"｜已锁定 {len(game['locked'])} 颗｜剩余可掷 {game['remaining']} 颗")
-        _center_text(draw, (0, 176, width, 214), info, _font(24), (110, 100, 90))
-
-        # 已锁定的骰子（小图）
-        locked = game["locked"]
-        if locked:
-            size, gap = 44, 10
-            row_w = len(locked) * (size + gap) - gap
-            x0 = (width - row_w) // 2
-            for i, v in enumerate(locked):
-                _draw_die(draw, x0 + i * (size + gap), 224, size, v)
-            _center_text(draw, (0, 272, width, 296), "已锁定", _font(20), (150, 140, 128))
-
-        # 当前掷出的骰子（大图）
-        pool = game["pool"]
-        if pool:
+        # 只画刚投出的那一下（keep 阶段），按骰子类型着色
+        if game["phase"] == "keep" and game["hand"]:
+            pool = game["hand"]
             size, gap = 76, 16
             row_w = len(pool) * (size + gap) - gap
             x0 = (width - row_w) // 2
-            for i, v in enumerate(pool):
-                _draw_die(draw, x0 + i * (size + gap), 306, size, v)
+            for i, d in enumerate(pool):
+                _draw_die(draw, x0 + i * (size + gap), 186, size,
+                          d.get("value", 0), d.get("kind", DICE_NORMAL), _is_wild(d))
+            # 图例：骰子类型颜色说明
+            legend = [(DICE_NORMAL, "普通"), (DICE_ODD, "奇数"), (DICE_EVEN, "偶数"),
+                      (DICE_DEVIL, "恶魔(1=万)"), (DICE_LOADED, "灌铅")]
+            lx = 60
+            for kind, label in legend:
+                colors = _DIE_COLORS[kind]
+                draw.rounded_rectangle((lx, 284, lx + 20, 304), radius=5,
+                                       fill=colors["fill"], outline=colors["outline"], width=2)
+                draw.text((lx + 26, 283), label, font=_font(18), fill=(110, 100, 90))
+                lx += 26 + _font(18).getlength(label) + 26
 
         hint = {
-            "keep": "「farkle 留 <点数>」锁定计分骰，末尾可加 r/b 直接掷或入账（如 farkle 留 15 b）",
-            "decide": "发送「farkle 掷」继续博分，或「farkle 入账」收分",
+            "keep": "「farkle 留 <点数>」锁定，末尾可加 r/b（如 留 15 b）",
+            "decide": "「farkle 掷」继续博分，或「farkle 入账」收分",
         }.get(game["phase"], "")
         _center_text(draw, (0, height - 42, width, height - 14), hint, _font(22), (150, 140, 128))
 
@@ -853,15 +1035,22 @@ class FarklePlugin:
             "· 开局者：「farkle 开局 <目标分> [猫眼石]」，如「farkle 开局 5000 10」\n"
             f"   目标分 {MIN_TARGET}~{MAX_TARGET}（缺省 {DEFAULT_TARGET}）；"
             f"猫眼石 0~{MAX_STONES}（缺省 0，即普通局）\n"
-            "· 另一位：「farkle 加入」，两人到齐后进入先手拍卖\n"
+            "· 另一位：「farkle 加入」，两人到齐后分配骰组并进入先手拍卖\n"
             "· 开局前可「farkle 取消」解散；两人到齐后必须打完\n"
             "· 有猫眼石的对局，开局者与加入者的猫眼石余额都不能为负（欠债者禁入）\n"
-            "【先手拍卖】（正式掷骰前）\n"
-            "· 两人到齐后先拍卖谁拿先手，由后加入的人先出价\n"
-            "· 出价 = 你愿意以「负多少分」的代价换取先手，"
-            "如「farkle 出价 300」= 愿意开局 -300 分\n"
+            "【骰组】（两人到齐时各 50% 概率抽到作弊骰组）\n"
+            "· 奇数骰：80% 出奇数｜偶数骰：80% 出偶数\n"
+            "· 恶魔骰：掷出 1 即万能面，锁定时可顶替任意点数（点数不够的部分自动用万能面补）\n"
+            "· 灌铅骰：2/3 概率出 1\n"
+            "· 现有骰组：6偶数 / 1灌铅+5普通 / 1恶魔+5普通 / 3奇数+3普通\n"
+            "· 棋盘图按骰子类型着色：白=普通 蓝=奇数 绿=偶数 红=恶魔 金=灌铅\n"
+            "【先手拍卖】（正式掷骰前，骰组公告后进行）\n"
+            f"· 由后加入的人先出价；出价必须是 {BID_STEP} 的倍数，可为 0 或负数，"
+            f"范围 ±{BID_LIMIT}\n"
+            "· 正数 = 拿先手但以该负分开局（如「farkle 出价 300」= 开局 -300 分）\n"
+            "· 负数 = 拿先手还能以正分开局（如「farkle 出价 -300」= 开局 +300 分）\n"
             "· 双方轮流出价，每次出价必须高于对方；也可以直接「farkle 接受」\n"
-            "· 接受方把先手让给出价方：出价方先手并以自己的出价负分开局，接受方以 0 分开局\n"
+            "· 接受方把先手让给出价方：出价方先手并按出价结算开局分，接受方以 0 分开局\n"
             "【回合作战】（轮到你时）\n"
             "· 轮到你的第一次掷骰会自动进行，不需要手动发送\n"
             "· 「farkle 留 <点数>」：锁定至少一颗能计分的骰子，"
@@ -872,7 +1061,7 @@ class FarklePlugin:
             "【爆骰】\n"
             "· 掷出的骰子完全无法计分 → 爆骰，本回合已累计的分全部作废，回合结束并换手\n"
             "【热骰】\n"
-            "· 6 颗骰子全部计分用完 → 拿回全部骰子继续掷，回合延续\n"
+            "· 骰子全部计分用完 → 拿回全部骰子继续掷，回合延续\n"
             "【计分规则】\n"
             "· 单颗 1 = 100；单颗 5 = 50；散落的 2/3/4/6 不能单独计分\n"
             "· 三张同点 = 点数×100（2~6 点依次 200/300/400/500/600）；三个 1 特殊 = 1000\n"

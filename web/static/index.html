@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>喵喵远征队 · 网页端</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="bg-glow"></div>
+
+  <header class="topbar">
+    <div class="brand">喵喵远征队</div>
+    <div class="brand-sub">网页端</div>
+  </header>
+
+  <main class="wrap">
+    <!-- 登录 -->
+    <section id="login-panel" class="card login-card">
+      <h1 class="card-title">登录</h1>
+      <p class="card-desc">用你的 QQ 号 + 网页密码登录</p>
+
+      <form id="login-form" autocomplete="off">
+        <label class="field">
+          <span>QQ 号</span>
+          <input id="input-qq" type="text" inputmode="numeric" placeholder="例如 2544910201" required>
+        </label>
+        <label class="field">
+          <span>网页密码</span>
+          <input id="input-pwd" type="password" placeholder="6~32 位，不含空格" required>
+        </label>
+        <button id="btn-login" class="btn btn-primary" type="submit">登录</button>
+        <p id="login-msg" class="msg"></p>
+      </form>
+
+      <div class="tips">
+        <p class="tips-title">第一次来？</p>
+        <ol>
+          <li>在 QQ 群里发「喵签到」，先建好你的存档</li>
+          <li>私聊机器人发送「喵密码 你的密码」</li>
+          <li>回到本页用 QQ 号 + 该密码登录</li>
+        </ol>
+        <p class="tips-note">私聊即身份验证，所以不需要旧密码；重复发送同一指令就是改密码。密码只保存哈希、无法找回，请自行记好。</p>
+      </div>
+    </section>
+
+    <!-- 主页 -->
+    <section id="home-panel" class="hidden">
+      <div class="card player-card">
+        <div class="player-head">
+          <div>
+            <div id="player-name" class="player-name">玩家</div>
+            <div id="player-qq" class="player-qq"></div>
+          </div>
+          <button id="btn-logout" class="btn btn-ghost" type="button">登出</button>
+        </div>
+
+        <div class="stats">
+          <div class="stat"><div class="stat-num" id="stat-fish">0</div><div class="stat-label">鱼干</div></div>
+          <div class="stat"><div class="stat-num" id="stat-stone">0</div><div class="stat-label">猫眼石</div></div>
+          <div class="stat"><div class="stat-num" id="stat-cats">0</div><div class="stat-label">喵喵</div></div>
+          <div class="stat"><div class="stat-num" id="stat-summon">0</div><div class="stat-label">抽喵次数</div></div>
+          <div class="stat"><div class="stat-num" id="stat-signin">0</div><div class="stat-label">累计签到</div></div>
+        </div>
+      </div>
+
+      <h2 class="section-title">对战游戏</h2>
+      <div class="game-grid">
+        <div class="card game-card">
+          <div class="game-name">快艇骰子</div>
+          <div class="game-desc">3 次投掷、12 格计分，比总分</div>
+          <div class="game-tag">网页版开发中</div>
+        </div>
+        <div class="card game-card">
+          <div class="game-name">Farkle</div>
+          <div class="game-desc">锁定骰子、先手拍卖、目标分随机</div>
+          <div class="game-tag">网页版开发中</div>
+        </div>
+        <div class="card game-card">
+          <div class="game-name">17步麻将</div>
+          <div class="game-desc">17 巡两人对局，荣和 / 流局</div>
+          <div class="game-tag">网页版开发中</div>
+        </div>
+      </div>
+
+      <h2 class="section-title">在群里玩</h2>
+      <div class="card cmd-card">
+        <p>这些指令仍然在 QQ 群里使用，网页端会逐步把它们搬上来：</p>
+        <ul class="cmd-list">
+          <li><code>喵签到</code> 每日签到领鱼干</li>
+          <li><code>抽喵喵</code> 抽卡获得喵喵与猫眼石</li>
+          <li><code>远征</code> 每日远征 Boss</li>
+          <li><code>喵扫荡</code> 一键做完以上三件事</li>
+          <li><code>锦标赛</code> 用对战游戏办比赛</li>
+        </ul>
+      </div>
+    </section>
+  </main>
+
+  <footer class="foot">喵喵远征队 · 网页端</footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

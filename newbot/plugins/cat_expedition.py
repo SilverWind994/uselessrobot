@@ -11,6 +11,7 @@ from config import Config
 from plugins.cat_config import CatConfig
 from core.message_sender import MessageSender, Target
 from core.command_router import CommandRouter, CommandContext
+from core.web_auth import check_password_text, hash_password, make_salt
 
 # 稀有度：排序、编号字母、文字颜色（图鉴用）
 CAT_RARITY_ORDER = ["normal", "rare", "epic", "legend"]
@@ -149,7 +150,9 @@ class CatExpeditionPlugin:
                 "summon_count": 0,
                 "deploy_team": [],
                 "research_limit": CatConfig.CAT_INITIAL_RESEARCH_LIMIT,
-                "collection": []
+                "collection": [],
+                "web_pwd_salt": "",   # 网页登录密码的盐与哈希（仅存哈希，不可回显）
+                "web_pwd_hash": ""
             }
             self._save_players(players)
         return players[str(qq)]
@@ -209,6 +212,12 @@ class CatExpeditionPlugin:
             ["喵扫荡", "扫荡", "catsweep", ".catsweep"],
             self.cmd_sweep,
             description="猫猫远征队·一键扫荡（签到+抽干鱼干+远征）"
+        )
+
+        router.register(
+            ["喵密码", "网页密码", "catpwd", ".catpwd"],
+            self.cmd_web_password,
+            description="猫猫远征队·设置/修改网页登录密码（仅私聊）"
         )
 
         router.register(
@@ -876,6 +885,47 @@ class CatExpeditionPlugin:
         lines.append("—— 扫荡完毕 ——")
         lines.append(f"当前余额：{final['fish']} 鱼干 | 猫眼石：{final.get('eye_stones', 0)}")
         self._sender.reply(ctx, "\n".join(lines))
+
+    # ==================== 网页登录密码 ====================
+
+    def cmd_web_password(self, ctx: CommandContext) -> None:
+        """设置（或覆盖）网页登录密码（仅私聊；只存哈希，无法回显）
+
+        私聊本身就是身份验证，因此不需要旧密码：直接「喵密码 <新密码>」即可，
+        设置过之后再次发送同样指令就是改密码。
+        """
+        if not ctx.is_private:
+            self._sender.reply(
+                ctx, "网页密码只能私聊设置喵，因为要确认你的身份\n"
+                     "请私聊机器人发送「喵密码 你的密码」")
+            return
+
+        args = ctx.get_args().split()
+        if len(args) != 1:
+            player = self._get_player(ctx.user_id)
+            tip = "改密码" if player.get("web_pwd_hash") else "设置密码"
+            self._sender.reply(
+                ctx, "【网页密码】设置后用 QQ 号 + 密码登录网页端喵\n"
+                     f"· {tip}：喵密码 <新密码>（6~32 位，不能有空格）\n"
+                     "· 私聊即身份验证，所以不需要旧密码；重复发送就是改密码\n"
+                     "· 密码只保存哈希、无法回显，请自行记好")
+            return
+
+        new_pwd = args[0]
+        err = check_password_text(new_pwd)
+        if err:
+            self._sender.reply(ctx, err)
+            return
+
+        player = self._get_player(ctx.user_id)
+        is_reset = bool(player.get("web_pwd_hash"))
+        salt = make_salt()
+        player["web_pwd_salt"] = salt
+        player["web_pwd_hash"] = hash_password(new_pwd, salt)
+        self._update_player(ctx.user_id, player)
+        action = "已更新" if is_reset else "已设置"
+        self._sender.reply(
+            ctx, f"网页密码{action}喵，之后可用 QQ 号 + 该密码登录网页端（密码不可回显，请自行记好）")
 
     def cmd_boss(self, ctx: CommandContext) -> None:
         """查看当前Boss信息"""

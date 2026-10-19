@@ -65,6 +65,11 @@ class Config:
     AVALON_DATA_PATH = os.path.join(AVALON_DIR, "avalon_data.json")
     AVALON_SETTERS = [3187638890, 2544910201]  # 出题人白名单
 
+    # ==================== 网页端（web/ 服务） ====================
+    WEB_HOST = "0.0.0.0"
+    WEB_PORT = 8090
+    WEB_SECRET = ""   # 登录令牌签名密钥；留空则每次启动随机生成（重启后需要重新登录）
+
     # ==================== 锦标赛 ====================
     # 锦标赛管理员：默认管理员都能开出带奖励的锦标赛并强制结束
     TOURNAMENT_ADMIN_QQ = 2544910201  # 兼容旧字段，实际权限以 is_admin 为准

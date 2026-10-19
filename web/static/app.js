@@ -1,5 +1,8 @@
 const loginPanel = document.getElementById('login-panel');
 const homePanel = document.getElementById('home-panel');
+const pwdPanel = document.getElementById('pwd-panel');
+const pwdForm = document.getElementById('pwd-form');
+const pwdMsg = document.getElementById('pwd-msg');
 const loginForm = document.getElementById('login-form');
 const loginMsg = document.getElementById('login-msg');
 const btnLogin = document.getElementById('btn-login');
@@ -16,12 +19,26 @@ function setMsg(text, ok) {
 }
 
 function showLogin(notice) {
+  pwdPanel.classList.add('hidden');
   loginPanel.classList.remove('hidden');
   homePanel.classList.add('hidden');
   if (notice) setMsg(notice, false);
 }
 
+function showPwd(forced) {
+  loginPanel.classList.add('hidden');
+  homePanel.classList.add('hidden');
+  pwdPanel.classList.remove('hidden');
+  document.getElementById('btn-pwd-back').classList.toggle('hidden', !!forced);
+  document.getElementById('pwd-desc').textContent = forced
+    ? '首次登录默认密码就是你的 QQ 号，请先设置一个新密码'
+    : '修改网页密码需要先输入原密码';
+  pwdMsg.textContent = '';
+  pwdForm.reset();
+}
+
 function showHome(player) {
+  pwdPanel.classList.add('hidden');
   loginPanel.classList.add('hidden');
   homePanel.classList.remove('hidden');
   document.getElementById('player-name').textContent = player.nick || `玩家${player.qq}`;
@@ -35,8 +52,12 @@ function showHome(player) {
 
 async function refresh() {
   const { status, data } = await api('/api/me');
-  if (status === 200 && data.ok) showHome(data.player);
-  else showLogin();
+  if (status === 200 && data.ok) {
+    if (data.player.must_change_pwd) showPwd(true);
+    else showHome(data.player);
+  } else {
+    showLogin();
+  }
 }
 
 loginForm.addEventListener('submit', async (event) => {
@@ -55,7 +76,8 @@ loginForm.addEventListener('submit', async (event) => {
   if (status === 200 && data.ok) {
     document.getElementById('input-pwd').value = '';
     setMsg('');
-    showHome(data.player);
+    if (data.player.must_change_pwd) showPwd(true);
+    else showHome(data.player);
   } else {
     setMsg(data.msg || '登录失败喵', false);
   }
@@ -65,6 +87,33 @@ document.getElementById('btn-logout').addEventListener('click', async () => {
   await api('/api/logout', { method: 'POST' });
   document.getElementById('input-pwd').value = '';
   showLogin('已登出喵');
+});
+
+document.getElementById('btn-change-pwd').addEventListener('click', () => showPwd(false));
+document.getElementById('btn-pwd-back').addEventListener('click', () => refresh());
+
+pwdForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const oldPwd = document.getElementById('pwd-old').value;
+  const newPwd = document.getElementById('pwd-new').value;
+  const newPwd2 = document.getElementById('pwd-new2').value;
+  if (newPwd !== newPwd2) {
+    pwdMsg.textContent = '两次输入的新密码不一致喵';
+    return;
+  }
+  pwdMsg.textContent = '提交中…';
+  const { status, data } = await api('/api/change_password', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ old: oldPwd, new: newPwd }),
+  });
+  if (status === 200 && data.ok) {
+    pwdForm.reset();
+    pwdMsg.textContent = '';
+    await refresh();
+  } else {
+    pwdMsg.textContent = data.msg || '修改失败喵';
+  }
 });
 
 refresh();
@@ -147,6 +196,7 @@ function fkToggle(id, show) {
 async function enterFarkle() {
   loginPanel.classList.add('hidden');
   homePanel.classList.add('hidden');
+  pwdPanel.classList.add('hidden');
   fkPanel.classList.remove('hidden');
   fkLobby.classList.remove('hidden');
   fkRoom.classList.add('hidden');

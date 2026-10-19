@@ -24,7 +24,8 @@ for _p in (_NEWBOT_DIR, _WEB_DIR):
 
 from config import Config                                            # noqa: E402
 from plugins.cat_config import CatConfig                             # noqa: E402
-from core.web_auth import make_token, parse_token, verify_password   # noqa: E402
+from core.web_auth import (make_token, parse_token, verify_password,           # noqa: E402
+                          check_password_text, hash_password, make_salt)
 import farkle_web                                                    # noqa: E402
 
 _STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
@@ -44,6 +45,13 @@ def _load_players() -> dict:
         return json.load(f)
 
 
+def _save_players(players: dict) -> None:
+    """写回全部玩家存档"""
+    os.makedirs(os.path.dirname(CatConfig.CAT_PLAYERS_PATH), exist_ok=True)
+    with open(CatConfig.CAT_PLAYERS_PATH, "w", encoding="utf-8") as f:
+        json.dump(players, f, ensure_ascii=False, indent=2)
+
+
 def _player_card(player: dict) -> dict:
     """返回给网页的玩家信息（不含任何密码字段）"""
     return {
@@ -54,6 +62,8 @@ def _player_card(player: dict) -> dict:
         "summon_count": player.get("summon_count", 0),
         "signin_total": player.get("signin_total", 0),
         "research_limit": player.get("research_limit", 0),
+        # 尚未设置密码时，默认密码就是 QQ 号，登录后需强制改密
+        "must_change_pwd": not player.get("web_pwd_hash"),
     }
 
 
@@ -76,11 +86,12 @@ def login(payload: dict) -> JSONResponse:
             {"ok": False, "msg": "还没有这个 QQ 的存档喵，先在群里发「喵签到」建档"},
             status_code=404)
     if not player.get("web_pwd_hash"):
-        return JSONResponse(
-            {"ok": False,
-             "msg": "这个 QQ 还没设置网页密码喵，请在 QQ 私聊里发送「喵密码 你的密码」"},
-            status_code=403)
-    if not verify_password(password, player.get("web_pwd_salt", ""), player["web_pwd_hash"]):
+        # 还没设过密码：默认密码就是 QQ 号本身，登录后强制跳转改密
+        if password != str(qq):
+            return JSONResponse(
+                {"ok": False, "msg": "QQ 号或密码不对喵（首次登录的默认密码就是你的 QQ 号）"},
+                status_code=403)
+    elif not verify_password(password, player.get("web_pwd_salt", ""), player["web_pwd_hash"]):
         return JSONResponse({"ok": False, "msg": "QQ 号或密码不对喵"}, status_code=403)
 
     resp = JSONResponse({"ok": True, "player": _player_card(player)})
@@ -109,6 +120,39 @@ def me(cat_token: str = Cookie(default="")) -> JSONResponse:
     card = _player_card(player)
     card["qq"] = qq
     return JSONResponse({"ok": True, "player": card})
+
+
+@app.post("/api/change_password")
+def change_password(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
+    """网页端修改密码：需输入原密码；未设密码时原密码即 QQ 号"""
+    qq = parse_token(cat_token, _SECRET)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+
+    players = _load_players()
+    player = players.get(str(qq))
+    if player is None:
+        return JSONResponse({"ok": False, "msg": "存档不存在喵"}, status_code=404)
+
+    old = str(payload.get("old", ""))
+    if player.get("web_pwd_hash"):
+        if not verify_password(old, player.get("web_pwd_salt", ""), player["web_pwd_hash"]):
+            return JSONResponse({"ok": False, "msg": "原密码不对喵"}, status_code=403)
+    elif old != str(qq):
+        return JSONResponse(
+            {"ok": False, "msg": "原密码不对喵（还没设过密码时，原密码就是你的 QQ 号）"},
+            status_code=403)
+
+    new = str(payload.get("new", ""))
+    err = check_password_text(new)
+    if err:
+        return JSONResponse({"ok": False, "msg": err}, status_code=400)
+
+    salt = make_salt()
+    player["web_pwd_salt"] = salt
+    player["web_pwd_hash"] = hash_password(new, salt)
+    _save_players(players)
+    return JSONResponse({"ok": True, "msg": "密码已更新喵"})
 
 
 # ==================== Farkle 网页版 ====================

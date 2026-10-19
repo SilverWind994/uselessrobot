@@ -72,46 +72,70 @@ _KEEP_FOLLOWUP = {
 
 # ==================== 骰子与骰组 ====================
 # 新增骰子类型：在 _roll_die 加分支、_DIE_NAMES/_DICE_INFO/_DIE_COLORS 各补一条即可；
-# 新增作弊骰组：在 CHEAT_LOADOUTS 登记。玩家骰子存档为 kind 字符串列表。
+# 新增骰组：在 DICE_LOADOUTS 登记。玩家骰子存档为 kind 字符串列表。
 
-DICE_NORMAL = "normal"   # 普通骰：各面等概率
-DICE_ODD = "odd"         # 奇数骰：80% 出奇数，20% 出偶数
-DICE_EVEN = "even"       # 偶数骰：80% 出偶数，20% 出奇数
-DICE_DEVIL = "devil"     # 恶魔骰：掷出 1 即万能面，可顶替任意点数
-DICE_LOADED = "loaded"   # 灌铅骰：2/3 概率出 1，其余均分 2~6
+DICE_NORMAL = "normal"    # 普通骰：各面等概率
+DICE_ODD = "odd"          # 奇数骰：80% 出奇数，20% 出偶数
+DICE_EVEN = "even"        # 偶数骰：80% 出偶数，20% 出奇数
+DICE_DEVIL = "devil"      # 恶魔骰：掷出 1 即万能面，可顶替任意点数
+DICE_LOADED = "loaded"    # 灌铅骰：2/3 概率出 1，其余均分 2~6
+DICE_GROZAV = "grozav"    # 格罗扎夫骰：2/3 概率出 2，其余 1/3 均分 1/3/4/5/6
+DICE_TRICKY = "tricky"    # 骗子的骰：1/5 各 24%，2/4/6 各 14%，3 只有 10%
+DICE_KAIJI = "kaiji"      # 开司骰：只能出 1
+DICE_BANCHOU = "banchou"  # 班长骰：只能出 4/5/6
 
 _DIE_ODD_FACES = (1, 3, 5)
 _DIE_EVEN_FACES = (2, 4, 6)
+_DIE_GROZAV_FACES = (1, 3, 4, 5, 6)
+_DIE_TRICKY_FACES = (1, 2, 3, 4, 5, 6)
+_DIE_TRICKY_WEIGHTS = (24, 14, 10, 14, 24, 14)
+_DIE_BANCHOU_FACES = (4, 5, 6)
 
 _DIE_NAMES = {
     DICE_NORMAL: "普通", DICE_ODD: "奇数", DICE_EVEN: "偶数",
-    DICE_DEVIL: "恶魔", DICE_LOADED: "灌铅",
+    DICE_DEVIL: "恶魔", DICE_LOADED: "灌铅", DICE_GROZAV: "格罗扎夫",
+    DICE_TRICKY: "骗子", DICE_KAIJI: "开司", DICE_BANCHOU: "班长",
 }
 
-# 作弊骰子的效果说明（公告与图例用）
+# 特制骰子的效果说明（公告与图例用）
 DICE_INFO = {
     DICE_ODD: "奇数骰80%出奇数",
     DICE_EVEN: "偶数骰80%出偶数",
     DICE_DEVIL: "恶魔骰掷出1=万能面（只能用于三张/顺子组合，不能单独当1或5）",
     DICE_LOADED: "灌铅骰2/3概率出1",
+    DICE_GROZAV: "格罗扎夫骰2/3概率出2",
+    DICE_TRICKY: "骗子的骰更容易出1/5（各24%），3只有10%",
+    DICE_KAIJI: "开司骰只能出1",
+    DICE_BANCHOU: "班长骰只能出4/5/6",
 }
 
-# 作弊骰组（方便以后加：直接在此登记新的组合）
-CHEAT_LOADOUTS = {
-    "even6":   [DICE_EVEN] * 6,                       # 6偶数
-    "loaded1": [DICE_LOADED] + [DICE_NORMAL] * 5,     # 1灌铅+5普通
-    "devil1":  [DICE_DEVIL] + [DICE_NORMAL] * 5,      # 1恶魔+5普通
-    "odd3":    [DICE_ODD] * 2 + [DICE_NORMAL] * 4,    # 2奇数+4普通
+# 骰组构成里各骰子的展示顺序
+_LOADOUT_ORDER = (DICE_DEVIL, DICE_LOADED, DICE_GROZAV, DICE_TRICKY, DICE_KAIJI,
+                  DICE_BANCHOU, DICE_ODD, DICE_EVEN, DICE_NORMAL)
+
+# 骰组池：先手位/后手位各从这里等概率抽一组（含全普通）
+DICE_LOADOUTS = {
+    "normal6": [DICE_NORMAL] * 6,                                  # 6普通
+    "even6":   [DICE_EVEN] * 6,                                    # 6偶数
+    "loaded1": [DICE_LOADED] + [DICE_NORMAL] * 5,                  # 1灌铅+5普通
+    "devil1":  [DICE_DEVIL] + [DICE_NORMAL] * 5,                   # 1恶魔+5普通
+    "odd3":    [DICE_ODD] * 2 + [DICE_NORMAL] * 4,                 # 2奇数+4普通
+    "grozav5": [DICE_GROZAV] * 5 + [DICE_NORMAL],                  # 5格罗扎夫+1普通
+    "tricky3": [DICE_NORMAL] * 3 + [DICE_TRICKY] * 3,              # 3普通+3骗子
+    "kaiji1":  [DICE_KAIJI] + [DICE_NORMAL] + [DICE_BANCHOU] * 4,  # 1开司+1普通+4班长
 }
-CHEAT_CHANCE = 0.5   # 每位玩家拿到作弊骰组的概率
 
 # 渲染配色（棋盘上按骰子类型着色）
 _DIE_COLORS = {
-    DICE_NORMAL: {"fill": (252, 252, 250), "outline": (190, 186, 176)},
-    DICE_ODD:    {"fill": (208, 226, 250), "outline": (110, 155, 215)},
-    DICE_EVEN:   {"fill": (208, 244, 216), "outline": (100, 185, 125)},
-    DICE_DEVIL:  {"fill": (250, 212, 212), "outline": (215, 100, 100)},
-    DICE_LOADED: {"fill": (248, 232, 185), "outline": (205, 165, 75)},
+    DICE_NORMAL:  {"fill": (252, 252, 250), "outline": (190, 186, 176)},
+    DICE_ODD:     {"fill": (208, 226, 250), "outline": (110, 155, 215)},
+    DICE_EVEN:    {"fill": (208, 244, 216), "outline": (100, 185, 125)},
+    DICE_DEVIL:   {"fill": (250, 212, 212), "outline": (215, 100, 100)},
+    DICE_LOADED:  {"fill": (248, 232, 185), "outline": (205, 165, 75)},
+    DICE_GROZAV:  {"fill": (228, 214, 250), "outline": (148, 110, 205)},
+    DICE_TRICKY:  {"fill": (252, 205, 228), "outline": (212, 100, 165)},
+    DICE_KAIJI:   {"fill": (196, 234, 246), "outline": (80, 165, 200)},
+    DICE_BANCHOU: {"fill": (218, 218, 222), "outline": (125, 125, 138)},
 }
 
 
@@ -198,6 +222,16 @@ def _roll_die(kind: str) -> int:
         if random.random() < 2 / 3:
             return 1
         return random.randint(2, 6)
+    if kind == DICE_GROZAV:
+        if random.random() < 2 / 3:
+            return 2
+        return random.choice(_DIE_GROZAV_FACES)
+    if kind == DICE_TRICKY:
+        return random.choices(_DIE_TRICKY_FACES, _DIE_TRICKY_WEIGHTS)[0]
+    if kind == DICE_KAIJI:
+        return 1
+    if kind == DICE_BANCHOU:
+        return random.choice(_DIE_BANCHOU_FACES)
     return random.randint(1, 6)   # 普通骰（未知类型也按普通处理）
 
 
@@ -214,24 +248,21 @@ def _new_die(kind: str) -> dict:
 def _loadout_summary(dice) -> str:
     """骰组构成摘要，如「1灌铅+5普通」"""
     counts = Counter(dice)
-    order = (DICE_DEVIL, DICE_LOADED, DICE_ODD, DICE_EVEN, DICE_NORMAL)
-    return "+".join(f"{counts[k]}{_DIE_NAMES[k]}" for k in order if counts.get(k))
+    return "+".join(f"{counts[k]}{_DIE_NAMES[k]}" for k in _LOADOUT_ORDER if counts.get(k))
 
 
 def _dice_set_desc(dice) -> str:
-    """骰组完整描述：构成 + 作弊骰效果说明"""
+    """骰组完整描述：构成 + 特制骰效果说明"""
     if all(k == DICE_NORMAL for k in dice):
         return "普通骰组（6普通）"
-    cheats = [k for k in (DICE_DEVIL, DICE_LOADED, DICE_ODD, DICE_EVEN) if k in dice]
-    explain = "；".join(DICE_INFO[k] for k in cheats)
+    specials = [k for k in _LOADOUT_ORDER if k != DICE_NORMAL and k in dice]
+    explain = "；".join(DICE_INFO[k] for k in specials)
     return f"{_loadout_summary(dice)}｜{explain}"
 
 
 def _random_dice_set() -> list:
-    """随机分配一人的骰子：CHEAT_CHANCE 概率拿作弊骰组，否则全普通"""
-    if random.random() < CHEAT_CHANCE:
-        return list(random.choice(list(CHEAT_LOADOUTS.values())))
-    return [DICE_NORMAL] * DICE_NUM
+    """随机分配一人的骰子：从骰组池里等概率抽一组（含全普通骰组）"""
+    return list(random.choice(list(DICE_LOADOUTS.values())))
 
 
 # ==================== 计分 ====================
@@ -554,7 +585,7 @@ class FarklePlugin:
     # ==================== 先手拍卖 ====================
 
     def _assign_dice(self, game: dict) -> None:
-        """两人到齐时随机决定「先手位/后手位」的骰子（各 50% 概率为作弊骰组）。
+        """两人到齐时随机决定「先手位/后手位」的骰子（各自从骰组池等概率抽一组，含全普通）。
         竞价只决定谁坐先手位：先手拿先手位骰组，后手拿后手位骰组。"""
         game["seat_dice"] = [_random_dice_set(), _random_dice_set()]
         # 竞价前玩家先用普通骰占位，竞价结束后按位置发放
@@ -565,7 +596,7 @@ class FarklePlugin:
     def _dice_announce(game: dict) -> str:
         """骰组分配公告文本（按先手/后手位公告，竞价定归属）"""
         seat = game.get("seat_dice") or [[DICE_NORMAL] * DICE_NUM] * 2
-        return ("骰组分配（先手/后手位各 50% 概率为作弊骰组，竞价决定归属）：\n"
+        return ("骰组分配（先手/后手位各从骰组池等概率抽取，竞价决定归属）：\n"
                 f"· 先手位：{_dice_set_desc(seat[0])}\n"
                 f"· 后手位：{_dice_set_desc(seat[1])}")
 
@@ -1044,14 +1075,18 @@ class FarklePlugin:
             for i, d in enumerate(pool):
                 _draw_die(draw, x0 + i * (size + gap), 186, size,
                           d.get("value", 0), d.get("kind", DICE_NORMAL), _is_wild(d))
-            # 图例：骰子类型颜色说明
-            legend = [(DICE_NORMAL, "普通"), (DICE_ODD, "奇数"), (DICE_EVEN, "偶数"),
-                      (DICE_DEVIL, "恶魔(1=万)"), (DICE_LOADED, "灌铅")]
+            # 图例：只列出当前手牌出现的骰子类型（按固定顺序），避免超出画面宽度
+            present = {d.get("kind", DICE_NORMAL) for d in pool}
+            fixed = [k for k in _LOADOUT_ORDER if k in present]
+            if len(fixed) > 5 and DICE_NORMAL in fixed:
+                fixed = [k for k in fixed if k != DICE_NORMAL]   # 项数过多时省略「普通」项
+            labels = {DICE_DEVIL: "恶魔(1=万)"}
             lx = 60
-            for kind, label in legend:
+            for kind in fixed[:6]:
                 colors = _DIE_COLORS[kind]
                 draw.rounded_rectangle((lx, 284, lx + 20, 304), radius=5,
                                        fill=colors["fill"], outline=colors["outline"], width=2)
+                label = labels.get(kind, _DIE_NAMES[kind])
                 draw.text((lx + 26, 283), label, font=_font(18), fill=(110, 100, 90))
                 lx += 26 + _font(18).getlength(label) + 26
 
@@ -1080,16 +1115,22 @@ class FarklePlugin:
             "· 另一位：「farkle 加入」，两人到齐后分配骰组并进入先手拍卖\n"
             "· 开局前可「farkle 取消」解散；两人到齐后必须打完\n"
             "· 有猫眼石的对局，开局者与加入者的猫眼石余额都不能为负（欠债者禁入）\n"
-            "【骰组】（先手位/后手位各 50% 概率为作弊骰组，竞价决定归属）\n"
+            "【骰组】（先手位/后手位各从骰组池等概率抽取，竞价决定归属）\n"
             "· 两人到齐时先公告两个位置的骰组，再进行先手拍卖；\n"
             "  谁最终拿到先手，谁就用「先手位」骰组，后手用「后手位」骰组\n"
             "· 奇数骰：80% 出奇数｜偶数骰：80% 出偶数\n"
             "· 恶魔骰：掷出 1 即万能面，锁定时可顶替任意点数，"
             "但必须用于组合（三张同点/顺子），不能单独当 1 或 5 散点\n"
             "· 灌铅骰：2/3 概率出 1\n"
-            "· 锁定时优先消耗普通骰子，其次作弊骰的非万能面，最后才动用万能面\n"
-            "· 现有骰组：6偶数 / 1灌铅+5普通 / 1恶魔+5普通 / 2奇数+4普通\n"
-            "· 棋盘图按骰子类型着色：白=普通 蓝=奇数 绿=偶数 红=恶魔 金=灌铅\n"
+            "· 格罗扎夫骰：2/3 概率出 2\n"
+            "· 骗子的骰：更容易出 1/5（各 24%），3 只有 10%\n"
+            "· 开司骰：只能出 1｜班长骰：只能出 4/5/6\n"
+            "· 锁定时优先消耗普通骰子，其次特制骰的非万能面，最后才动用万能面\n"
+            "· 现有骰组（各 1/8 概率）：\n"
+            "  6普通 / 6偶数 / 1灌铅+5普通 / 1恶魔+5普通 / 2奇数+4普通 /\n"
+            "  5格罗扎夫+1普通 / 3普通+3骗子 / 1开司+1普通+4班长\n"
+            "· 棋盘图按骰子类型着色：白=普通 蓝=奇数 绿=偶数 红=恶魔 金=灌铅 "
+            "紫=格罗扎夫 粉=骗子 青=开司 灰=班长\n"
             "【先手拍卖】（正式掷骰前，骰组公告后进行）\n"
             f"· 由后加入的人先出价；出价必须是 {BID_STEP} 的倍数，可为 0 或负数，"
             f"范围 ±{BID_LIMIT}\n"

@@ -83,6 +83,7 @@ DICE_GROZAV = "grozav"    # 格罗扎夫骰：2/3 概率出 2，其余 1/3 均�
 DICE_TRICKY = "tricky"    # 骗子的骰：1/5 各 24%，2/4/6 各 14%，3 只有 10%
 DICE_KAIJI = "kaiji"      # 开司骰：只能出 1
 DICE_BANCHOU = "banchou"  # 班长骰：只能出 4/5/6
+DICE_SENBEI = "senbei"    # 仙贝骰：与普通骰完全相同（无特效），仅颜色为粉色
 
 _DIE_ODD_FACES = (1, 3, 5)
 _DIE_EVEN_FACES = (2, 4, 6)
@@ -95,6 +96,7 @@ _DIE_NAMES = {
     DICE_NORMAL: "普通", DICE_ODD: "奇数", DICE_EVEN: "偶数",
     DICE_DEVIL: "恶魔", DICE_LOADED: "灌铅", DICE_GROZAV: "格罗扎夫",
     DICE_TRICKY: "骗子", DICE_KAIJI: "开司", DICE_BANCHOU: "班长",
+    DICE_SENBEI: "仙贝",
 }
 
 # 特制骰子的效果说明（公告与图例用）
@@ -111,7 +113,7 @@ DICE_INFO = {
 
 # 骰组构成里各骰子的展示顺序
 _LOADOUT_ORDER = (DICE_DEVIL, DICE_LOADED, DICE_GROZAV, DICE_TRICKY, DICE_KAIJI,
-                  DICE_BANCHOU, DICE_ODD, DICE_EVEN, DICE_NORMAL)
+                  DICE_BANCHOU, DICE_ODD, DICE_EVEN, DICE_SENBEI, DICE_NORMAL)
 
 # 骰组池：先手位/后手位各从这里等概率抽一组（含全普通）
 DICE_LOADOUTS = {
@@ -136,6 +138,7 @@ _DIE_COLORS = {
     DICE_TRICKY:  {"fill": (252, 205, 228), "outline": (212, 100, 165)},
     DICE_KAIJI:   {"fill": (196, 234, 246), "outline": (80, 165, 200)},
     DICE_BANCHOU: {"fill": (218, 218, 222), "outline": (125, 125, 138)},
+    DICE_SENBEI:  {"fill": (255, 198, 214), "outline": (228, 82, 130)},
 }
 
 
@@ -232,7 +235,7 @@ def _roll_die(kind: str) -> int:
         return 1
     if kind == DICE_BANCHOU:
         return random.choice(_DIE_BANCHOU_FACES)
-    return random.randint(1, 6)   # 普通骰（未知类型也按普通处理）
+    return random.randint(1, 6)   # 普通骰 / 仙贝骰（未知类型也按普通处理）
 
 
 def _is_wild(die: dict) -> bool:
@@ -253,16 +256,26 @@ def _loadout_summary(dice) -> str:
 
 def _dice_set_desc(dice) -> str:
     """骰组完整描述：构成 + 特制骰效果说明"""
-    if all(k == DICE_NORMAL for k in dice):
-        return "普通骰组（6普通）"
-    specials = [k for k in _LOADOUT_ORDER if k != DICE_NORMAL and k in dice]
+    # 仙贝骰无特效，视作普通骰的粉色外观变体
+    if all(k in (DICE_NORMAL, DICE_SENBEI) for k in dice):
+        n = dice.count(DICE_SENBEI)
+        if n == 0:
+            return "普通骰组（6普通）"
+        return f"普通骰组（6普通，其中 {n} 颗为仙贝骰，无特效、仅颜色不同）"
+    specials = [k for k in _LOADOUT_ORDER
+                if k not in (DICE_NORMAL, DICE_SENBEI) and k in dice]
     explain = "；".join(DICE_INFO[k] for k in specials)
     return f"{_loadout_summary(dice)}｜{explain}"
 
 
 def _random_dice_set() -> list:
-    """随机分配一人的骰子：从骰组池里等概率抽一组（含全普通骰组）"""
-    return list(random.choice(list(DICE_LOADOUTS.values())))
+    """随机分配一人的骰子：从骰组池里等概率抽一组（含全普通骰组）；
+    抽到普通骰组时随机把 1~6 颗换成仙贝骰（无特效，仅外观不同）"""
+    dice = list(random.choice(list(DICE_LOADOUTS.values())))
+    if all(k == DICE_NORMAL for k in dice):
+        for i in random.sample(range(len(dice)), random.randint(1, DICE_NUM)):
+            dice[i] = DICE_SENBEI
+    return dice
 
 
 # ==================== 计分 ====================
@@ -1125,12 +1138,14 @@ class FarklePlugin:
             "· 格罗扎夫骰：2/3 概率出 2\n"
             "· 骗子的骰：更容易出 1/5（各 24%），3 只有 10%\n"
             "· 开司骰：只能出 1｜班长骰：只能出 4/5/6\n"
+            "· 仙贝骰：与普通骰完全相同（无特效），仅颜色为粉色；"
+            "抽到普通骰组时会随机有 1~6 颗变成仙贝骰\n"
             "· 锁定时优先消耗普通骰子，其次特制骰的非万能面，最后才动用万能面\n"
             "· 现有骰组（各 1/8 概率）：\n"
             "  6普通 / 6偶数 / 1灌铅+5普通 / 1恶魔+5普通 / 2奇数+4普通 /\n"
             "  5格罗扎夫+1普通 / 3普通+3骗子 / 1开司+1普通+4班长\n"
             "· 棋盘图按骰子类型着色：白=普通 蓝=奇数 绿=偶数 红=恶魔 金=灌铅 "
-            "紫=格罗扎夫 粉=骗子 青=开司 灰=班长\n"
+            "紫=格罗扎夫 粉=骗子 青=开司 灰=班长 玫粉=仙贝\n"
             "【先手拍卖】（正式掷骰前，骰组公告后进行）\n"
             f"· 由后加入的人先出价；出价必须是 {BID_STEP} 的倍数，可为 0 或负数，"
             f"范围 ±{BID_LIMIT}\n"

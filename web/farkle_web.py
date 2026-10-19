@@ -414,11 +414,22 @@ def _in_other_room_locked(qq: int, exclude: str = None):
 # ==================== 对外接口（供 server.py 调用）====================
 
 def list_rooms() -> list:
+    """大厅房间列表：等待中的可加入，进行中的可观战（已结束的不列出）"""
     with _ROOMS_LOCK:
         _reap_locked()
-        return [{"code": r.code, "host": r.players[0]["name"], "target": r.target,
-                 "stones": r.stones}
-                for r in _ROOMS.values() if r.phase == "waiting"]
+        rooms = []
+        for r in _ROOMS.values():
+            if r.phase == "finished":
+                continue
+            rooms.append({
+                "code": r.code,
+                "host": r.players[0]["name"],
+                "target": r.target,
+                "stones": r.stones,
+                "phase": r.phase,
+                "players": [p["name"] for p in r.players],
+            })
+        return rooms
 
 
 def my_room(qq: int):

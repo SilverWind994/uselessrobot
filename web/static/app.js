@@ -236,18 +236,20 @@ async function refreshRooms() {
   data.rooms.forEach((r) => {
     const row = document.createElement('div');
     row.className = 'room-row';
+    const ongoing = r.phase !== 'waiting';
     const meta = document.createElement('div');
     meta.className = 'room-meta';
-    meta.innerHTML = `目标 ${r.target} 分 · `
+    meta.innerHTML = (ongoing ? '<span class="room-stone">对局中</span> · ' : '')
+      + `目标 ${r.target} 分 · `
       + (r.stones > 0 ? `<span class="room-stone">猫眼石 ${r.stones}</span>` : '普通局')
       + ` · 房间号 ${esc(r.code)}`;
     const host = document.createElement('div');
     host.className = 'room-host';
-    host.textContent = r.host;
+    host.textContent = ongoing ? (r.players || []).join(' vs ') : r.host;
     const btn = document.createElement('button');
     btn.className = 'btn btn-primary btn-sm';
-    btn.textContent = '加入';
-    btn.addEventListener('click', () => joinRoom(r.code));
+    btn.textContent = ongoing ? '观战' : '加入';
+    btn.addEventListener('click', () => (ongoing ? spectateRoom(r.code) : joinRoom(r.code)));
     row.appendChild(host);
     row.appendChild(meta);
     row.appendChild(btn);
@@ -278,6 +280,12 @@ async function joinRoom(code) {
   });
   if (status === 200 && data.ok) enterRoom(data.code);
   else fkLobbyMsg.textContent = data.msg || '加入失败喵';
+}
+
+function spectateRoom(code) {
+  // 观战不加入对局，直接进入只读视图
+  fkLobbyMsg.textContent = '';
+  enterRoom(code);
 }
 
 async function cancelRoom() {
@@ -355,7 +363,10 @@ function buildRoomDom() {
     <div class="card fk-head">
       <div class="fk-head-top">
         <div class="fk-title">Farkle · 目标 <span id="fk-target-show"></span> 分<span id="fk-stones-show"></span></div>
-        <div class="fk-code">房间号 <b id="fk-code-show"></b></div>
+        <div class="fk-head-right">
+          <div class="fk-code">房间号 <b id="fk-code-show"></b></div>
+          <div id="fk-spectate-badge" class="fk-spectate hidden">观战中</div>
+        </div>
       </div>
       <div id="fk-players" class="fk-players"></div>
     </div>
@@ -369,7 +380,7 @@ function buildRoomDom() {
       <div class="panel-title">先手拍卖</div>
       <div id="fk-seat" class="fk-seat"></div>
       <div id="fk-auction-info" class="fk-info"></div>
-      <div class="actions">
+      <div id="fk-auction-actions" class="actions">
         <input id="fk-bid-input" type="number" step="50" placeholder="出价（50 的倍数，可为负）">
         <button id="fk-bid" class="btn btn-primary btn-sm">出价</button>
         <button id="fk-accept" class="btn btn-ghost btn-sm">接受</button>
@@ -385,7 +396,7 @@ function buildRoomDom() {
       <div id="fk-locked-label" class="locked-label hidden">已锁定</div>
       <div id="fk-locked" class="dice-row locked"></div>
       <div id="fk-hand" class="dice-row"></div>
-      <div class="actions">
+      <div id="fk-table-actions" class="actions">
         <button id="fk-lock" class="btn btn-primary btn-sm">锁定选中</button>
         <button id="fk-roll" class="btn btn-ghost btn-sm">继续掷</button>
         <button id="fk-bank" class="btn btn-ghost btn-sm">入账</button>
@@ -446,7 +457,13 @@ function renderRoom(state) {
   fkToggle('fk-auction', isAuction);
   fkToggle('fk-table', isPlay);
   fkToggle('fk-result', isOver);
-  document.getElementById('fk-surrender').classList.toggle('hidden', isWaiting || isOver);
+
+  // 观战者：只读，隐藏所有操作入口
+  const spectator = !state.is_player;
+  document.getElementById('fk-spectate-badge').classList.toggle('hidden', !spectator);
+  document.getElementById('fk-auction-actions').classList.toggle('hidden', spectator);
+  document.getElementById('fk-table-actions').classList.toggle('hidden', spectator);
+  document.getElementById('fk-surrender').classList.toggle('hidden', isWaiting || isOver || spectator);
   if (isWaiting) {
     document.getElementById('fk-cancel').classList.toggle('hidden', state.my_index !== 0);
   }

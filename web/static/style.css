@@ -181,6 +181,8 @@ code { background: #120f0d; border: 1px solid var(--line); border-radius: 6px; p
 .fk-title { font-size: 18px; font-weight: 700; }
 .fk-code { color: var(--text-dim); font-size: 13px; }
 .fk-code b { color: var(--gold); letter-spacing: 2px; font-size: 16px; }
+.fk-head-right { text-align: right; }
+.fk-spectate { color: var(--blue); font-size: 13px; font-weight: 700; letter-spacing: 1px; }
 .fk-players { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 16px; }
 .fk-player { background: #120f0d; border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
 .fk-player.active { border-color: var(--gold); }

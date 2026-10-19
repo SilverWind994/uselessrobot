@@ -73,8 +73,8 @@
         </div>
         <div class="card game-card">
           <div class="game-name">Farkle</div>
-          <div class="game-desc">锁定骰子、先手拍卖、目标分随机</div>
-          <div class="game-tag">网页版开发中</div>
+          <div class="game-desc">锁定骰子、先手拍卖、可选猫眼石</div>
+          <button id="btn-farkle" class="btn btn-primary btn-sm" type="button">进入大厅</button>
         </div>
         <div class="card game-card">
           <div class="game-name">17步麻将</div>
@@ -94,6 +94,49 @@
           <li><code>锦标赛</code> 用对战游戏办比赛</li>
         </ul>
       </div>
+    </section>
+
+    <!-- Farkle 网页版 -->
+    <section id="farkle-panel" class="hidden">
+      <div class="card panel-head">
+        <div>
+          <div class="panel-title">Farkle 对战</div>
+          <div class="panel-sub">两人对局 · 先手拍卖 · 猫眼石可选</div>
+        </div>
+        <button id="btn-fk-back" class="btn btn-ghost" type="button">返回主页</button>
+      </div>
+
+      <p id="fk-toast" class="msg"></p>
+
+      <!-- 大厅 -->
+      <div id="fk-lobby">
+        <div class="card create-card">
+          <div class="panel-title">创建房间</div>
+          <div class="create-row">
+            <label class="field inline">
+              <span>目标分</span>
+              <input id="fk-target" type="number" value="4000" min="500" max="10000" step="1000">
+            </label>
+            <label class="chk">
+              <input id="fk-stones-on" type="checkbox"> 猫眼石局
+            </label>
+            <label class="field inline">
+              <span>猫眼石</span>
+              <input id="fk-stones" type="number" value="1" min="1" max="20" disabled>
+            </label>
+            <button id="btn-fk-create" class="btn btn-primary" type="button">创建房间</button>
+          </div>
+          <p id="fk-lobby-msg" class="msg"></p>
+        </div>
+
+        <h2 class="section-title">进行中的房间</h2>
+        <div id="fk-rooms" class="room-list">
+          <p class="room-empty">还没有房间，创建一个等对手来吧</p>
+        </div>
+      </div>
+
+      <!-- 对局中 -->
+      <div id="fk-room" class="hidden"></div>
     </section>
   </main>
 

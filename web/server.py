@@ -17,12 +17,15 @@ from fastapi.staticfiles import StaticFiles
 
 _REPO_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _NEWBOT_DIR = os.path.join(_REPO_DIR, "newbot")
-if _NEWBOT_DIR not in sys.path:
-    sys.path.insert(0, _NEWBOT_DIR)
+_WEB_DIR = os.path.dirname(os.path.abspath(__file__))
+for _p in (_NEWBOT_DIR, _WEB_DIR):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 from config import Config                                            # noqa: E402
 from plugins.cat_config import CatConfig                             # noqa: E402
 from core.web_auth import make_token, parse_token, verify_password   # noqa: E402
+import farkle_web                                                    # noqa: E402
 
 _STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 _SECRET = Config.WEB_SECRET.encode("utf-8") or os.urandom(32)
@@ -106,3 +109,89 @@ def me(cat_token: str = Cookie(default="")) -> JSONResponse:
     card = _player_card(player)
     card["qq"] = qq
     return JSONResponse({"ok": True, "player": card})
+
+
+# ==================== Farkle 网页版 ====================
+
+def _auth_qq(cat_token: str):
+    """从登录 Cookie 解析 QQ 号，未登录返回 None"""
+    return parse_token(cat_token, _SECRET)
+
+
+def _nick_of(qq: int) -> str:
+    player = _load_players().get(str(qq)) or {}
+    return player.get("nick") or f"玩家{qq}"
+
+
+@app.get("/api/farkle/rooms")
+def farkle_rooms(cat_token: str = Cookie(default="")) -> JSONResponse:
+    if _auth_qq(cat_token) is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    return JSONResponse({"ok": True, "rooms": farkle_web.list_rooms()})
+
+
+@app.get("/api/farkle/mine")
+def farkle_mine(cat_token: str = Cookie(default="")) -> JSONResponse:
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    return JSONResponse({"ok": True, "code": farkle_web.my_room(qq)})
+
+
+@app.post("/api/farkle/create")
+def farkle_create(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    code, err = farkle_web.create_room(qq, _nick_of(qq),
+                                       payload.get("target"), payload.get("stones"))
+    if err:
+        return JSONResponse({"ok": False, "msg": err}, status_code=400)
+    return JSONResponse({"ok": True, "code": code})
+
+
+@app.post("/api/farkle/join")
+def farkle_join(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    code = str(payload.get("code", "")).strip()
+    err = farkle_web.join_room(code, qq, _nick_of(qq))
+    if err:
+        return JSONResponse({"ok": False, "msg": err}, status_code=400)
+    return JSONResponse({"ok": True, "code": code})
+
+
+@app.post("/api/farkle/cancel")
+def farkle_cancel(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    err = farkle_web.cancel_room(str(payload.get("code", "")).strip(), qq)
+    if err:
+        return JSONResponse({"ok": False, "msg": err}, status_code=400)
+    return JSONResponse({"ok": True})
+
+
+@app.get("/api/farkle/state")
+def farkle_state(code: str, cat_token: str = Cookie(default="")) -> JSONResponse:
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    room = farkle_web.snapshot(code, qq)
+    if room is None:
+        return JSONResponse({"ok": False, "msg": "房间不存在或已结束喵"}, status_code=404)
+    return JSONResponse({"ok": True, "room": room})
+
+
+@app.post("/api/farkle/action")
+def farkle_action(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    code = str(payload.get("code", "")).strip()
+    action = str(payload.get("action", "")).strip()
+    err, room = farkle_web.act(code, qq, action, payload)
+    if err:
+        return JSONResponse({"ok": False, "msg": err}, status_code=400)
+    return JSONResponse({"ok": True, "room": room})

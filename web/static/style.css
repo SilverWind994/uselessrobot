@@ -146,3 +146,93 @@ code { background: #120f0d; border: 1px solid var(--line); border-radius: 6px; p
   .stats { grid-template-columns: repeat(2, 1fr); }
   .game-grid { grid-template-columns: 1fr; }
 }
+
+/* ==================== Farkle 网页版 ==================== */
+
+.btn-sm { padding: 7px 14px; font-size: 13px; width: auto; margin-top: auto; }
+
+.panel-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 18px; }
+.panel-title { font-size: 19px; font-weight: 700; }
+.panel-sub { color: var(--text-dim); font-size: 13px; margin-top: 2px; }
+
+.create-card { margin-bottom: 22px; }
+.create-row { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-end; }
+.field.inline { margin-bottom: 0; }
+.field.inline input { width: 110px; }
+.field.inline span { margin-bottom: 6px; }
+.chk { display: flex; align-items: center; gap: 6px; font-size: 14px; color: var(--text-dim); padding-bottom: 11px; }
+.chk input { width: auto; }
+.create-row .btn { margin-bottom: 0; }
+
+.room-list { display: flex; flex-direction: column; gap: 10px; }
+.room-empty { color: var(--text-dim); font-size: 14px; margin: 0; }
+.room-row {
+  display: flex; align-items: center; gap: 14px;
+  background: linear-gradient(180deg, var(--panel), var(--panel-2));
+  border: 1px solid var(--line); border-radius: 12px; padding: 12px 16px;
+}
+.room-host { font-weight: 700; }
+.room-meta { color: var(--text-dim); font-size: 13px; flex: 1; }
+.room-stone { color: var(--blue); }
+
+/* 对局头部 */
+.fk-head { margin-bottom: 14px; }
+.fk-head-top { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.fk-title { font-size: 18px; font-weight: 700; }
+.fk-code { color: var(--text-dim); font-size: 13px; }
+.fk-code b { color: var(--gold); letter-spacing: 2px; font-size: 16px; }
+.fk-players { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 16px; }
+.fk-player { background: #120f0d; border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+.fk-player.active { border-color: var(--gold); }
+.fk-player .pname { font-size: 15px; font-weight: 700; }
+.fk-player .pmeta { color: var(--text-dim); font-size: 12px; margin-top: 2px; }
+.fk-player .ptotal { font-size: 24px; font-weight: 700; color: var(--gold); margin-top: 6px; }
+.fk-player.you .ptotal { color: var(--blue); }
+
+.fk-card { margin-bottom: 14px; }
+.fk-info { color: var(--text-dim); font-size: 14px; margin: 10px 0; }
+.fk-info b { color: var(--text); }
+.fk-seat { font-size: 13px; color: var(--text-dim); background: #120f0d; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+.fk-seat div { margin: 3px 0; }
+
+.fk-table-top { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 12px; }
+.fk-turn { font-size: 15px; font-weight: 700; }
+.fk-turn.waiting { color: var(--text-dim); font-weight: 400; }
+.fk-score { color: var(--gold); font-size: 20px; font-weight: 700; }
+
+.dice-row { display: flex; flex-wrap: wrap; gap: 10px; min-height: 52px; margin-bottom: 12px; }
+.dice-row.locked { min-height: 34px; }
+.locked-label { color: var(--text-dim); font-size: 13px; margin: 0 0 6px; }
+
+.die {
+  position: relative; width: 46px; height: 46px; border-radius: 10px; border: 2px solid #bbb;
+  background: #fff; display: grid; grid-template-columns: repeat(3, 1fr);
+  grid-template-rows: repeat(3, 1fr); padding: 5px; border: 2px solid;
+}
+.die.small { width: 34px; height: 34px; border-radius: 8px; padding: 4px; }
+.die .cell { display: flex; align-items: center; justify-content: center; }
+.die .pip { width: 7px; height: 7px; border-radius: 50%; background: #2d2a26; }
+.die.small .pip { width: 5px; height: 5px; }
+.die .wild { font-size: 20px; font-weight: 700; color: #a01e1e; line-height: 1; }
+.die .blank { font-size: 22px; font-weight: 700; color: #b9b2a6; }
+.die.selectable { cursor: pointer; transition: transform .1s ease; }
+.die.selectable:hover { transform: translateY(-3px); }
+.die.sel { outline: 3px solid var(--gold); outline-offset: 1px; }
+
+.actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.actions .btn { width: auto; }
+.actions input { width: 120px; }
+.actions .hint { color: var(--text-dim); font-size: 13px; }
+
+.log { max-height: 220px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.log div { color: var(--text-dim); }
+.log div:last-child { color: var(--text); }
+
+.fk-result { border-color: var(--gold); }
+.fk-result .panel-title { color: var(--gold); }
+.fk-result .line { font-size: 14px; margin-top: 6px; }
+
+@media (max-width: 640px) {
+  .fk-players { grid-template-columns: 1fr; }
+  .field.inline input { width: 100%; }
+}

@@ -864,6 +864,9 @@ class CatExpeditionPlugin:
                 if len(highlights) > 25:
                     lines.append(f"  …等共 {len(highlights)} 条亮点")
 
+        # 抽卡结果立即落盘：远征可能因「今天已经远征过了」提前返回而不落盘
+        self._update_player(ctx.user_id, player)
+
         # —— 3. 远征 ——
         lines.append("—— 远征 ——")
         lines.extend(self._expedition_core(ctx, player))

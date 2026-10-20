@@ -22,6 +22,15 @@ _FINISHED_KEEP_SECONDS = 120   # 已结束的房间保留一会儿，供客户�
 _ROOMS = {}
 _ROOMS_LOCK = threading.RLock()
 
+# 每周挑战记录钩子：由 server.py 注入，把本局各玩家分数记为「本周首次分数」
+_weekly_recorder = None
+
+
+def set_weekly_recorder(recorder) -> None:
+    """注册每周挑战记录回调：recorder(entries)，entries 为 [{qq,name,score}]"""
+    global _weekly_recorder
+    _weekly_recorder = recorder
+
 
 class Room:
     """一局快艇骰子的完整状态。所有公开方法返回错误文案（None 表示成功）。"""
@@ -202,6 +211,14 @@ class Room:
     def _finalize(self, reason: str) -> None:
         self.phase = "finished"
         totals = [(p, _total(p["score"])) for p in self.players]
+        # 记录本周首次分数（与机器人端一致：同周已有分数则不重复计）
+        if _weekly_recorder is not None:
+            try:
+                _weekly_recorder([
+                    {"qq": p["qq"], "name": p["name"], "score": t} for p, t in totals
+                ])
+            except Exception:
+                pass
         best = max(t for _, t in totals)
         top = [p for p, t in totals if t == best]
         if len(top) == 1:

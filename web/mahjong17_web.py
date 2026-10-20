@@ -50,11 +50,18 @@ def _debt_of(qq: int) -> int:
     return -balance if balance < 0 else 0
 
 
+# 展示顺序：万/筒/索各 1~9，红五（0/10/20）排在对应花色的 5 之前，字牌 1z~7z
+_TILE_ORDER = []
+for _base in (0, 10, 20):
+    _TILE_ORDER += [_base + 1, _base + 2, _base + 3, _base + 4, _base,
+                    _base + 5, _base + 6, _base + 7, _base + 8, _base + 9]
+_TILE_ORDER += list(range(31, 38))
+
+
 def _counts_to_tiles(counts) -> list:
-    """把 38 长度的计数数组摊平成牌编号列表（下标 0 为 -1 时表示尚未选牌，跳过红五位）"""
+    """把 38 长度的计数数组摊平成牌编号列表（与 QQ 端绘图顺序一致，红五排在 5 位）"""
     out = []
-    start = 1 if counts[0] == -1 else 0
-    for i in range(start, len(counts)):
+    for i in _TILE_ORDER:
         c = counts[i]
         if c and c > 0:
             out.extend([i] * c)

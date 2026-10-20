@@ -22,12 +22,14 @@ function showLogin(notice) {
   pwdPanel.classList.add('hidden');
   loginPanel.classList.remove('hidden');
   homePanel.classList.add('hidden');
+  document.getElementById('main-nav').classList.add('hidden');
   if (notice) setMsg(notice, false);
 }
 
 function showPwd(forced) {
   loginPanel.classList.add('hidden');
   homePanel.classList.add('hidden');
+  document.getElementById('main-nav').classList.add('hidden');
   pwdPanel.classList.remove('hidden');
   document.getElementById('btn-pwd-back').classList.toggle('hidden', !!forced);
   document.getElementById('pwd-desc').textContent = forced
@@ -48,6 +50,10 @@ function showHome(player) {
   document.getElementById('stat-cats').textContent = player.cats;
   document.getElementById('stat-summon').textContent = player.summon_count;
   document.getElementById('stat-signin').textContent = player.signin_total;
+  // 「管理」导航页只有管理员可见；普通玩家即使上次停在管理页也要退回远征页
+  document.getElementById('nav-admin').classList.toggle('hidden', !player.is_admin);
+  if (!player.is_admin && currentTab === 'admin') currentTab = 'expedition';
+  afterShowHome();
 }
 
 async function refresh() {
@@ -1450,3 +1456,481 @@ document.getElementById('btn-mj-back').addEventListener('click', () => {
   refresh();
 });
 document.getElementById('btn-mj-create').addEventListener('click', createMjRoom);
+
+// ==================== 顶部导航（喵喵远征队 / 小游戏 / 个人 / 开发中 / 管理） ====================
+
+const mainNav = document.getElementById('main-nav');
+const TAB_NAMES = ['expedition', 'games', 'profile', 'dev', 'admin'];
+let currentTab = 'expedition';
+
+function showTabNav() {
+  mainNav.classList.remove('hidden');
+}
+
+function switchTab(name) {
+  currentTab = name;
+  mainNav.querySelectorAll('.nav-tab').forEach((b) => {
+    b.classList.toggle('is-active', b.dataset.tab === name);
+  });
+  TAB_NAMES.forEach((k) => {
+    document.getElementById('tab-' + k).classList.toggle('hidden', k !== name);
+  });
+  if (name === 'expedition') switchSub(currentSub);
+  if (name === 'games') loadWeekly();
+  if (name === 'profile') loadProfile();
+}
+
+mainNav.addEventListener('click', (event) => {
+  const btn = event.target.closest('.nav-tab');
+  if (btn) switchTab(btn.dataset.tab);
+});
+
+// ==================== 喵喵远征队 · 子页（远征 / 远征队 / 图鉴 / 绘图） ====================
+
+const subtabsEl = document.querySelector('.subtabs');
+const SUB_NAMES = ['expedition', 'team', 'pedia', 'art'];
+let currentSub = 'expedition';
+
+function switchSub(name) {
+  currentSub = name;
+  subtabsEl.querySelectorAll('.subtab').forEach((b) => {
+    b.classList.toggle('is-active', b.dataset.sub === name);
+  });
+  SUB_NAMES.forEach((k) => {
+    document.getElementById('sub-' + k).classList.toggle('hidden', k !== name);
+  });
+  if (name === 'expedition') loadExpedition();
+  if (name === 'team') loadTeam();
+  if (name === 'pedia') loadPedia();
+  if (name === 'art') loadArt();
+}
+
+subtabsEl.addEventListener('click', (event) => {
+  const btn = event.target.closest('.subtab');
+  if (btn) switchSub(btn.dataset.sub);
+});
+
+function afterShowHome() {
+  showTabNav();
+  switchTab(currentTab);
+}
+
+function jobUrl(name) {
+  return name ? '/catexp/jobs/' + encodeURIComponent(name + '.png') : '';
+}
+
+function originUrl(name) {
+  return name ? '/catexp/origins/' + encodeURIComponent(name + '.png') : '';
+}
+
+function attrImg(cls, url, alt) {
+  if (!url) return '';
+  return `<img class="${cls}" src="${url}" alt="${esc(alt)}" loading="lazy">`;
+}
+
+// ---------- 远征 ----------
+
+const expTitle = document.getElementById('exp-title');
+const expSub = document.getElementById('exp-sub');
+const expStory = document.getElementById('exp-story');
+const expBoss = document.getElementById('exp-boss');
+const expHpText = document.getElementById('exp-hp-text');
+const expHpFill = document.getElementById('exp-hp-fill');
+const expMeta = document.getElementById('exp-meta');
+const expRewards = document.getElementById('exp-rewards');
+const expRank = document.getElementById('exp-rank');
+const expMsgEl = document.getElementById('exp-msg');
+const btnExpRun = document.getElementById('btn-exp-run');
+
+function expSetMsg(text) {
+  expMsgEl.textContent = text || '';
+}
+
+function rewardText(r) {
+  return `🐟${r.fish} 💎${r.eye}`;
+}
+
+async function loadExpedition() {
+  expSetMsg('');
+  const { status, data } = await api('/api/expedition/state');
+  if (status === 401) { homePanel.classList.add('hidden'); showLogin(); return; }
+  if (status !== 200 || !data.ok) { expSetMsg(data.msg || '读取远征状态失败喵'); return; }
+  renderExpedition(data.state);
+}
+
+function renderExpedition(s) {
+  expTitle.textContent = `${s.act_name} · 第 ${s.stage} 关`;
+  expSub.textContent = `地形：${s.terrain}`;
+  expBoss.textContent = `Boss：${s.boss_name}`;
+
+  const story = s.boss_text || s.story_text;
+  expStory.classList.toggle('hidden', !story);
+  expStory.textContent = story || '';
+
+  if (s.hidden) {
+    expHpText.textContent = '血量：???';
+    expHpFill.style.width = '100%';
+    expHpFill.classList.add('unknown');
+  } else {
+    expHpText.textContent = `血量：${s.boss_hp} / ${s.boss_max}（${s.percent}%）`;
+    expHpFill.style.width = `${Math.max(0, Math.min(100, s.percent))}%`;
+    expHpFill.classList.remove('unknown');
+  }
+
+  expMeta.textContent = s.ran_today ? '你今天已经远征过了，明天再来喵' : '你还没远征，点右上角「远征」出手';
+
+  const rw = s.rewards;
+  expRewards.innerHTML = `
+    <div class="exp-rw-row"><span class="exp-rw-tag">通关奖励（全员）</span>${rewardText(rw.clear)}</div>
+    ${rw.top.map((t) => `<div class="exp-rw-row"><span class="exp-rw-tag">第${t.rank}名</span>${rewardText(t)}</div>`).join('')}
+    <div class="exp-rw-row"><span class="exp-rw-tag">最后一击</span>${rewardText(rw.last_hit)}</div>`;
+
+  if (s.hidden) {
+    expRank.innerHTML = '<p class="room-empty">Boss 血量已低于 25%，伤害排行暂不公开喵</p>';
+  } else if (!s.ranking.length) {
+    expRank.innerHTML = '<p class="room-empty">还没有人出手喵</p>';
+  } else {
+    expRank.innerHTML = s.ranking.map((r, i) => `
+      <div class="rank-row">
+        <span class="rank-no">${i + 1}</span>
+        <span class="rank-name">${esc(r.name)}</span>
+        <span class="rank-val">${r.damage}</span>
+      </div>`).join('');
+  }
+
+  btnExpRun.disabled = !!s.ran_today;
+  btnExpRun.textContent = s.ran_today ? '今日已远征' : '远征';
+}
+
+btnExpRun.addEventListener('click', async () => {
+  btnExpRun.disabled = true;
+  expSetMsg('远征中…');
+  const { status, data } = await api('/api/expedition/run', { method: 'POST' });
+  if (status === 401) { homePanel.classList.add('hidden'); showLogin(); return; }
+  if (status !== 200 || !data.ok) {
+    expSetMsg(data.msg || '远征失败喵');
+    btnExpRun.disabled = false;
+    return;
+  }
+  expSetMsg('');
+  document.getElementById('exp-result-card').classList.remove('hidden');
+  document.getElementById('exp-result').textContent = (data.lines || []).join('\n');
+  if (data.state) renderExpedition(data.state);
+  refresh();   // 鱼干/猫眼石可能变化，顺带刷新顶部属性
+});
+
+// ---------- 远征队 ----------
+
+const teamStats = document.getElementById('team-stats');
+const teamCats = document.getElementById('team-cats');
+
+async function loadTeam() {
+  const { status, data } = await api('/api/cat/collection');
+  if (status === 401) { homePanel.classList.add('hidden'); showLogin(); return; }
+  if (status !== 200 || !data.ok) return;
+  const t = data.team;
+  const info = t.info;
+  const rows = [
+    ['喵喵', info.cats], ['满星', info.max_star], ['基础战力', info.base_power],
+    ['鱼干', info.fish], ['猫眼石', info.eye_stones], ['遗物', info.relics],
+    ['研究上限', info.research_limit], ['累计签到', info.signin_total],
+    ['连续签到', info.signin_streak], ['累计抽喵', info.summon_count],
+    ['远征次数', info.expedition_total], ['远征总伤害', info.expedition_damage],
+  ];
+  teamStats.innerHTML = rows.map(([label, val]) => `
+    <div class="stat"><div class="stat-num">${val}</div><div class="stat-label">${label}</div></div>`).join('');
+
+  if (!t.cats.length) {
+    teamCats.innerHTML = '<p class="room-empty">还没有喵喵，去群里发「抽喵喵」抽几只吧</p>';
+    return;
+  }
+  teamCats.innerHTML = t.cats.map((c) => {
+    const job = attrImg('cat-icon', jobUrl(c.job), c.job);
+    return `<div class="cat-cell owned r-${c.rarity}" data-id="${esc(c.id)}">
+      ${job}
+      <div class="cat-name">${esc(c.name)}</div>
+      <div class="cat-tags"><span class="cat-star">★${c.star}</span>
+        <span class="cat-job">${esc(c.job || '—')}</span></div>
+      <div class="cat-sub">${esc(c.country_name)} · 战力 ${c.power}</div>
+    </div>`;
+  }).join('');
+  bindCatCells(teamCats);
+}
+
+// ---------- 图鉴 ----------
+
+let catIndexCache = null;
+let pediaMode = 'country';
+
+async function fetchCatIndex() {
+  if (catIndexCache) return catIndexCache;
+  const { status, data } = await api('/api/cat/index');
+  if (status === 401) { homePanel.classList.add('hidden'); showLogin(); return null; }
+  if (status !== 200 || !data.ok) return null;
+  catIndexCache = data.index;
+  return catIndexCache;
+}
+
+const pediaBody = document.getElementById('pedia-body');
+const pediaSub = document.getElementById('pedia-sub');
+const pediaModes = document.getElementById('pedia-modes');
+
+async function loadPedia() {
+  const idx = await fetchCatIndex();
+  if (!idx) return;
+  pediaSub.textContent = `已收集 ${idx.owned_count} / ${idx.total_count}`;
+  renderPedia();
+}
+
+pediaModes.addEventListener('click', (event) => {
+  const btn = event.target.closest('.seg-btn');
+  if (!btn || btn.dataset.mode === pediaMode) return;
+  pediaMode = btn.dataset.mode;
+  pediaModes.querySelectorAll('.seg-btn').forEach((b) => {
+    b.classList.toggle('is-active', b.dataset.mode === pediaMode);
+  });
+  renderPedia();
+});
+
+function catCellHtml(cat) {
+  const owned = cat.star > 0;
+  if (!owned) {
+    return `<div class="cat-cell unknown"><div class="cat-unknown">?</div>
+      <div class="cat-name dim">？？？</div></div>`;
+  }
+  const job = attrImg('cat-icon', jobUrl(cat.job), cat.job);
+  return `<div class="cat-cell owned r-${cat.rarity}" data-id="${esc(cat.id)}">
+    ${job}
+    <div class="cat-name">${esc(cat.name)}</div>
+    <div class="cat-tags"><span class="cat-star">★${cat.star}</span>
+      <span class="cat-job">${esc(cat.job || '—')}</span></div>
+    <div class="cat-sub">${esc(cat.trait)}</div>
+  </div>`;
+}
+
+function bindCatCells(root) {
+  root.querySelectorAll('.cat-cell.owned').forEach((el) => {
+    el.addEventListener('click', () => openCatDetail(el.dataset.id));
+  });
+}
+
+function renderPedia() {
+  const idx = catIndexCache;
+  if (!idx) return;
+  const byId = {};
+  idx.cats.forEach((c) => { byId[c.id] = c; });
+  let html = '';
+
+  if (pediaMode === 'country') {
+    Object.keys(idx.countries).sort().forEach((code) => {
+      const cats = idx.cats.filter((c) => c.country === code);
+      if (!cats.length) return;
+      const got = cats.filter((c) => c.star > 0).length;
+      const name = idx.countries[code];
+      html += `<div class="pedia-group">
+        <div class="pedia-head">
+          ${attrImg('pedia-flag', originUrl(name), name)}
+          <span class="pedia-title">${esc(name)}</span>
+          <span class="pedia-progress">${got}/${cats.length}</span>
+        </div>
+        <div class="cat-grid">${cats.map(catCellHtml).join('')}</div>
+      </div>`;
+    });
+  } else {
+    idx.pools.forEach((p) => {
+      const cats = p.ids.map((id) => byId[id]).filter(Boolean);
+      const got = cats.filter((c) => c.star > 0).length;
+      html += `<div class="pedia-group">
+        <div class="pedia-head">
+          <span class="pedia-title">${esc(p.name)}</span>
+          <span class="pedia-progress">${got}/${cats.length}</span>
+        </div>
+        <div class="cat-grid">${cats.map(catCellHtml).join('')}</div>
+      </div>`;
+    });
+  }
+  pediaBody.innerHTML = html;
+  bindCatCells(pediaBody);
+}
+
+// ---------- 绘图 ----------
+
+const artCountry = document.getElementById('art-country');
+const artMsg = document.getElementById('art-msg');
+const artBookWrap = document.getElementById('art-book-wrap');
+const artBook = document.getElementById('art-book');
+
+async function loadArt() {
+  document.getElementById('art-map').src = '/catexp/data/' + encodeURIComponent('地图.png');
+  document.getElementById('art-acts').innerHTML = ['act1_story', 'act1_boss', 'act1_clear'].map((n) => {
+    const label = { act1_story: '第一幕 · 剧情', act1_boss: '第一幕 · Boss', act1_clear: '第一幕 · 通关' }[n];
+    return `<figure class="art-fig">
+      <img class="art-img" src="/catexp/expedition/${n}.png" alt="${esc(label)}" loading="lazy">
+      <figcaption>${esc(label)}</figcaption>
+    </figure>`;
+  }).join('');
+
+  const idx = await fetchCatIndex();
+  if (!idx || artCountry.options.length) return;
+  Object.keys(idx.countries).sort().forEach((code) => {
+    const opt = document.createElement('option');
+    opt.value = code;
+    opt.textContent = `${code} ${idx.countries[code]}`;
+    artCountry.appendChild(opt);
+  });
+}
+
+document.getElementById('btn-art-book').addEventListener('click', () => {
+  const code = artCountry.value;
+  if (!code) { artMsg.textContent = '先选一个国家喵'; return; }
+  artMsg.textContent = '生成中…';
+  artBookWrap.classList.remove('hidden');
+  artBook.onload = () => { artMsg.textContent = ''; };
+  artBook.onerror = () => { artMsg.textContent = '图鉴生成失败喵'; };
+  artBook.src = `/api/cat/book?code=${encodeURIComponent(code)}&t=${Date.now()}`;
+});
+
+// ---------- 喵喵详情弹层 ----------
+
+const catModal = document.getElementById('cat-modal');
+const catModalBody = document.getElementById('cat-modal-body');
+
+function closeCatModal() {
+  catModal.classList.add('hidden');
+  catModalBody.innerHTML = '';
+}
+
+document.getElementById('cat-modal-close').addEventListener('click', closeCatModal);
+document.getElementById('cat-modal-mask').addEventListener('click', closeCatModal);
+
+async function openCatDetail(id) {
+  const { status, data } = await api('/api/cat/detail?id=' + encodeURIComponent(id));
+  if (status === 401) { homePanel.classList.add('hidden'); showLogin(); return; }
+  if (status !== 200 || !data.ok) return;
+  const c = data.cat;
+  const poolName = poolNameOf(c.pool);
+  const job = attrImg('detail-icon', jobUrl(c.job), c.job);
+  catModalBody.innerHTML = `
+    <div class="detail-top">
+      ${job}
+      <div class="detail-head">
+        <div class="detail-name r-${c.rarity}">${esc(c.name)}
+          <span class="detail-star">${c.owned ? '★' + c.star : '未解锁'}</span></div>
+        <div class="detail-line">${esc(c.id)} · ${esc(c.country_name)}${poolName ? ' · ' + esc(poolName) : ''}</div>
+      </div>
+      ${attrImg('detail-flag', originUrl(c.country_name), c.country_name)}
+    </div>
+    <div class="detail-rows">
+      <div><span>职业</span>${esc(c.job || '—')}</div>
+      <div><span>稀有度</span>${esc(rarityName(c.rarity))}</div>
+      <div><span>适性</span>${esc(c.trait)}</div>
+      <div><span>成长路线</span>${esc((c.job_path || []).join(' → ') || '—')}</div>
+    </div>
+    <p class="detail-intro">${esc(c.intro || '')}</p>
+    ${c.owned ? `<div class="detail-card-wrap"><div class="detail-card-label">队员卡片（绘图）</div>
+      <img id="detail-card-img" class="art-img" alt="${esc(c.name)}" loading="lazy"></div>` : ''}`;
+  catModal.classList.remove('hidden');
+
+  const img = document.getElementById('detail-card-img');
+  if (img) img.src = `/api/cat/card?id=${encodeURIComponent(c.id)}`;
+}
+
+function poolNameOf(key) {
+  if (!catIndexCache || !key) return '';
+  const p = catIndexCache.pools.find((x) => x.key === key);
+  return p ? p.name : '';
+}
+
+function rarityName(r) {
+  return { normal: '普通', rare: '稀有', epic: '史诗', legend: '传说' }[r] || r;
+}
+
+// ---------- 每周挑战 · 快艇骰子 ----------
+
+const weeklyRanks = document.getElementById('weekly-ranks');
+const weeklySub = document.getElementById('weekly-sub');
+
+async function loadWeekly() {
+  const { status, data } = await api('/api/yahtzee/weekly');
+  if (status === 401) { homePanel.classList.add('hidden'); showLogin(); return; }
+  if (status !== 200 || !data.ok) return;
+  weeklySub.textContent = `本周（${data.week}）只记你「本周第一次」的分数，换周后按排名发鱼干`;
+  if (!data.ranks.length) {
+    weeklyRanks.innerHTML = '<p class="room-empty">本周还没有人完成对局喵，去开一局吧</p>';
+    return;
+  }
+  weeklyRanks.innerHTML = data.ranks.map((r, i) => `
+    <div class="rank-row">
+      <span class="rank-no">${i + 1}</span>
+      <span class="rank-name">${esc(r.name)}</span>
+      <span class="rank-val">${r.score} 分</span>
+      <span class="rank-reward">奖励 ${r.reward} 鱼干</span>
+    </div>`).join('');
+}
+
+document.getElementById('btn-weekly-refresh').addEventListener('click', loadWeekly);
+
+// ---------- 个人页面 ----------
+
+const profileInfo = document.getElementById('profile-info');
+const nickInput = document.getElementById('nick-input');
+const nickMsg = document.getElementById('nick-msg');
+
+async function loadProfile() {
+  const { status, data } = await api('/api/me');
+  if (status === 401) { homePanel.classList.add('hidden'); showLogin(); return; }
+  if (status !== 200 || !data.ok) return;
+  const p = data.player;
+  const rows = [
+    ['QQ', p.qq], ['昵称', p.nick || '（未设置）'], ['身份', p.is_admin ? '管理员' : '普通玩家'],
+    ['鱼干', p.fish], ['猫眼石', p.eye_stones], ['喵喵', p.cats],
+    ['抽喵次数', p.summon_count], ['累计签到', p.signin_total],
+  ];
+  profileInfo.innerHTML = rows.map(([label, val]) => `
+    <div class="stat"><div class="stat-num">${esc(val)}</div><div class="stat-label">${label}</div></div>`).join('');
+  nickInput.value = p.nick || '';
+}
+
+document.getElementById('nick-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const nick = nickInput.value.trim();
+  nickMsg.textContent = '';
+  nickMsg.classList.remove('ok');
+  const { status, data } = await api('/api/profile/rename', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ nick }),
+  });
+  if (status === 401) { homePanel.classList.add('hidden'); showLogin(); return; }
+  if (status !== 200 || !data.ok) {
+    nickMsg.textContent = data.msg || '改名失败喵';
+    return;
+  }
+  nickMsg.textContent = data.msg || '改名成功喵';
+  nickMsg.classList.add('ok');
+  await refresh();   // 顶部玩家昵称与个人信息一起刷新
+});
+
+// ---------- 管理员页面（仅管理员可见） ----------
+
+document.getElementById('admin-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const qq = document.getElementById('admin-qq').value.trim();
+  const nick = document.getElementById('admin-nick').value.trim();
+  const msg = document.getElementById('admin-msg');
+  msg.textContent = '';
+  msg.classList.remove('ok');
+  const { status, data } = await api('/api/admin/create_user', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ qq, nick }),
+  });
+  if (status === 401) { homePanel.classList.add('hidden'); showLogin(); return; }
+  if (status !== 200 || !data.ok) {
+    msg.textContent = data.msg || '创建失败喵';
+    return;
+  }
+  msg.textContent = data.msg || '创建成功喵';
+  msg.classList.add('ok');
+  event.target.reset();
+});

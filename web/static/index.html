@@ -3,15 +3,24 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>喵喵远征队 · 网页端</title>
-  <link rel="stylesheet" href="/static/style.css?v=2">
+  <title>串子小车 · 网页端</title>
+  <link rel="stylesheet" href="/static/style.css?v=4">
 </head>
 <body>
   <div class="bg-glow"></div>
 
   <header class="topbar">
-    <div class="brand">喵喵远征队</div>
-    <div class="brand-sub">网页端</div>
+    <div class="brand-group">
+      <div class="brand">串子小车</div>
+      <div class="brand-sub">网页端</div>
+    </div>
+    <nav id="main-nav" class="main-nav hidden">
+      <button class="nav-tab is-active" data-tab="expedition" type="button">喵喵远征队</button>
+      <button class="nav-tab" data-tab="games" type="button">小游戏</button>
+      <button class="nav-tab" data-tab="profile" type="button">个人</button>
+      <button class="nav-tab" data-tab="dev" type="button">开发中</button>
+      <button id="nav-admin" class="nav-tab hidden" data-tab="admin" type="button">管理</button>
+    </nav>
   </header>
 
   <main class="wrap">
@@ -44,7 +53,7 @@
       </div>
     </section>
 
-    <!-- 主页 -->
+    <!-- 主页（登录后：顶部导航 + 三个页面） -->
     <section id="home-panel" class="hidden">
       <div class="card player-card">
         <div class="player-head">
@@ -67,36 +76,206 @@
         </div>
       </div>
 
-      <h2 class="section-title">对战游戏</h2>
-      <div class="game-grid">
-        <div class="card game-card">
-          <div class="game-name">快艇骰子</div>
-          <div class="game-desc">3 次投掷、12 格计分，比总分（1~4 人）</div>
-          <button id="btn-yahtzee" class="btn btn-primary btn-sm" type="button">进入大厅</button>
+      <!-- ========== 页面一：喵喵远征队 ========== -->
+      <section id="tab-expedition" class="tab-pane">
+        <div class="subtabs">
+          <button class="subtab is-active" data-sub="expedition" type="button">远征</button>
+          <button class="subtab" data-sub="team" type="button">远征队</button>
+          <button class="subtab" data-sub="pedia" type="button">图鉴</button>
+          <button class="subtab" data-sub="art" type="button">绘图</button>
         </div>
-        <div class="card game-card">
-          <div class="game-name">Farkle</div>
-          <div class="game-desc">锁定骰子、先手拍卖、可选猫眼石</div>
-          <button id="btn-farkle" class="btn btn-primary btn-sm" type="button">进入大厅</button>
-        </div>
-        <div class="card game-card">
-          <div class="game-name">17步麻将</div>
-          <div class="game-desc">17 巡两人对局，荣和 / 流局（可选猫眼石）</div>
-          <button id="btn-mahjong" class="btn btn-primary btn-sm" type="button">进入大厅</button>
-        </div>
-      </div>
 
-      <h2 class="section-title">在群里玩</h2>
-      <div class="card cmd-card">
-        <p>这些指令仍然在 QQ 群里使用，网页端会逐步把它们搬上来：</p>
-        <ul class="cmd-list">
-          <li><code>喵签到</code> 每日签到领鱼干</li>
-          <li><code>抽喵喵</code> 抽卡获得喵喵与猫眼石</li>
-          <li><code>远征</code> 每日远征 Boss</li>
-          <li><code>喵扫荡</code> 一键做完以上三件事</li>
-          <li><code>锦标赛</code> 用对战游戏办比赛</li>
-        </ul>
-      </div>
+        <!-- 远征 -->
+        <div id="sub-expedition" class="sub-pane">
+          <div class="card">
+            <div class="panel-head">
+              <div>
+                <div class="panel-title" id="exp-title">远征</div>
+                <div class="panel-sub" id="exp-sub"></div>
+              </div>
+              <button id="btn-exp-run" class="btn btn-primary btn-sm" type="button">远征</button>
+            </div>
+            <div id="exp-story" class="exp-story hidden"></div>
+            <div class="exp-hp">
+              <div class="exp-hp-label">
+                <span id="exp-boss">Boss</span>
+                <span id="exp-hp-text"></span>
+              </div>
+              <div class="exp-hp-bar"><div id="exp-hp-fill"></div></div>
+            </div>
+            <div id="exp-meta" class="exp-meta"></div>
+            <div id="exp-rewards" class="exp-rewards"></div>
+            <p id="exp-msg" class="msg"></p>
+          </div>
+
+          <div class="card">
+            <div class="panel-title">伤害排行</div>
+            <div id="exp-rank" class="rank-list"><p class="room-empty">还没有人出手喵</p></div>
+          </div>
+
+          <div id="exp-result-card" class="card hidden">
+            <div class="panel-title">远征结果</div>
+            <pre id="exp-result" class="exp-result"></pre>
+          </div>
+        </div>
+
+        <!-- 远征队 -->
+        <div id="sub-team" class="sub-pane hidden">
+          <div class="card team-card">
+            <div class="panel-head">
+              <div class="panel-title">远征队 · 基础属性</div>
+            </div>
+            <div id="team-stats" class="stats"></div>
+          </div>
+          <h2 class="section-title">我的喵喵</h2>
+          <div id="team-cats" class="cat-grid"></div>
+        </div>
+
+        <!-- 图鉴 -->
+        <div id="sub-pedia" class="sub-pane hidden">
+          <div class="card">
+            <div class="panel-head">
+              <div>
+                <div class="panel-title">喵喵图鉴</div>
+                <div class="panel-sub" id="pedia-sub"></div>
+              </div>
+              <div class="seg" id="pedia-modes">
+                <button class="seg-btn is-active" data-mode="country" type="button">按国家</button>
+                <button class="seg-btn" data-mode="pool" type="button">按卡池</button>
+              </div>
+            </div>
+            <div id="pedia-body"></div>
+          </div>
+        </div>
+
+        <!-- 绘图 -->
+        <div id="sub-art" class="sub-pane hidden">
+          <div class="card">
+            <div class="panel-title">世界地图</div>
+            <img id="art-map" class="art-img" alt="世界地图">
+          </div>
+          <div class="card">
+            <div class="panel-title">章节插画</div>
+            <div id="art-acts" class="art-grid"></div>
+          </div>
+          <div class="card">
+            <div class="panel-title">国家图鉴拼图</div>
+            <div class="create-row">
+              <label class="field inline">
+                <span>选择国家</span>
+                <select id="art-country"></select>
+              </label>
+              <button id="btn-art-book" class="btn btn-primary btn-sm" type="button">生成图鉴</button>
+              <span id="art-msg" class="hint"></span>
+            </div>
+            <div id="art-book-wrap" class="hidden" style="margin-top: 14px;">
+              <img id="art-book" class="art-img" alt="国家图鉴">
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========== 页面二：小游戏 ========== -->
+      <section id="tab-games" class="tab-pane hidden">
+        <h2 class="section-title">对战游戏</h2>
+        <div class="game-grid">
+          <div class="card game-card">
+            <div class="game-name">快艇骰子</div>
+            <div class="game-desc">3 次投掷、12 格计分，比总分（1~4 人）</div>
+            <button id="btn-yahtzee" class="btn btn-primary btn-sm" type="button">进入大厅</button>
+          </div>
+          <div class="card game-card">
+            <div class="game-name">Farkle</div>
+            <div class="game-desc">锁定骰子、先手拍卖、可选猫眼石</div>
+            <button id="btn-farkle" class="btn btn-primary btn-sm" type="button">进入大厅</button>
+          </div>
+          <div class="card game-card">
+            <div class="game-name">17步麻将</div>
+            <div class="game-desc">17 巡两人对局，荣和 / 流局（可选猫眼石）</div>
+            <button id="btn-mahjong" class="btn btn-primary btn-sm" type="button">进入大厅</button>
+          </div>
+        </div>
+
+        <h2 class="section-title">每周挑战 · 快艇骰子</h2>
+        <div class="card weekly-card">
+          <div class="panel-head">
+            <div>
+              <div class="panel-title">本周排行榜</div>
+              <div class="panel-sub" id="weekly-sub">每周只记你「本周第一次」的分数，换周按排名发鱼干</div>
+            </div>
+            <button id="btn-weekly-refresh" class="btn btn-ghost btn-sm" type="button">刷新</button>
+          </div>
+          <div id="weekly-ranks" class="rank-list"><p class="room-empty">本周还没有人完成对局喵</p></div>
+        </div>
+      </section>
+
+      <!-- ========== 页面三：个人 ========== -->
+      <section id="tab-profile" class="tab-pane hidden">
+        <div class="card">
+          <div class="panel-head">
+            <div>
+              <div class="panel-title">账号信息</div>
+              <div class="panel-sub">本页只管理你自己的账号</div>
+            </div>
+          </div>
+          <div id="profile-info" class="stats"></div>
+        </div>
+
+        <div class="card">
+          <div class="panel-title">修改昵称</div>
+          <div class="panel-sub">昵称会显示在排行榜、远征队等处，最多 16 个字</div>
+          <form id="nick-form" autocomplete="off">
+            <label class="field">
+              <span>新昵称</span>
+              <input id="nick-input" type="text" maxlength="16" placeholder="1~16 个字">
+            </label>
+            <button class="btn btn-primary" type="submit">保存昵称</button>
+          </form>
+          <p id="nick-msg" class="msg"></p>
+        </div>
+      </section>
+
+      <!-- ========== 管理（仅管理员可见） ========== -->
+      <section id="tab-admin" class="tab-pane hidden">
+        <div class="card">
+          <div class="panel-head">
+            <div>
+              <div class="panel-title">管理员 · 开新档</div>
+              <div class="panel-sub">为还没建档的 QQ 开一份空白存档；默认密码就是该 QQ 号，对方首次登录会被要求改密</div>
+            </div>
+          </div>
+          <form id="admin-form" autocomplete="off">
+            <div class="create-row">
+              <label class="field inline">
+                <span>QQ 号</span>
+                <input id="admin-qq" type="text" inputmode="numeric" placeholder="例如 123456789">
+              </label>
+              <label class="field inline">
+                <span>昵称（可选）</span>
+                <input id="admin-nick" type="text" maxlength="16" placeholder="留空则暂不设置">
+              </label>
+              <button class="btn btn-primary" type="submit">创建存档</button>
+            </div>
+          </form>
+          <p id="admin-msg" class="msg"></p>
+          <div class="tips">
+            <p class="tips-title">说明</p>
+            <ol>
+              <li>普通玩家无法自行注册，必须先由管理员在这里开档</li>
+              <li>开档后对方直接用自己的 QQ 号登录，密码先填 QQ 号本身</li>
+              <li>QQ 群里发「喵签到」也可以自动建档，两种方式并存</li>
+            </ol>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========== 页面四：开发中 ========== -->
+      <section id="tab-dev" class="tab-pane hidden">
+        <div class="card dev-card">
+          <div class="dev-title">开发中……</div>
+          <p class="dev-desc">这块地方还在施工喵，敬请期待。</p>
+        </div>
+      </section>
     </section>
 
     <!-- 修改密码 -->
@@ -236,8 +415,20 @@
     </section>
   </main>
 
-  <footer class="foot">喵喵远征队 · 网页端</footer>
+  <!-- 喵喵详情弹层 -->
+  <div id="cat-modal" class="modal hidden">
+    <div id="cat-modal-mask" class="modal-mask"></div>
+    <div class="modal-card">
+      <div class="modal-head">
+        <div id="cat-modal-title" class="panel-title">喵喵详情</div>
+        <button id="cat-modal-close" class="btn btn-ghost btn-sm" type="button">关闭</button>
+      </div>
+      <div id="cat-modal-body"></div>
+    </div>
+  </div>
 
-  <script src="/static/app.js?v=2"></script>
+  <footer class="foot">串子小车 · 网页端</footer>
+
+  <script src="/static/app.js?v=4"></script>
 </body>
 </html>

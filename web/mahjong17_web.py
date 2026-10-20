@@ -377,6 +377,15 @@ class Room:
                 out["my34"] = _counts_to_tiles(g["tiles"][mine])
             out["hand"] = _counts_to_tiles(g["hand_tiles"][mine])
             out["left"] = _counts_to_tiles(g["left_tiles"][mine])
+        else:
+            # 旁观者：可见双方手牌与待排（selecting 阶段还没有手牌，给出各自发到的 34 张）
+            out["spectate"] = [
+                {"name": names[i],
+                 "hand": _counts_to_tiles(g["hand_tiles"][i]),
+                 "left": _counts_to_tiles(g["left_tiles"][i]),
+                 "pool": _counts_to_tiles(g["tiles"][i]) if self.phase == "selecting" else []}
+                for i in range(PLAYER_NUM)
+            ]
         if self.finished:
             out["result"] = dict(self.result or {})
             out["reveal"] = [

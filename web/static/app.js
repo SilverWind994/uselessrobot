@@ -1226,6 +1226,17 @@ function buildMjRoomDom() {
       </div>
     </div>
 
+    <div id="mj-spectate" class="card fk-card hidden">
+      <div class="panel-title">观战视角</div>
+      <div class="mj-hint">观战中：可以看到双方手牌与待排（舍牌候补）</div>
+      <div class="mj-hint">宝牌指示牌：<span id="mj-dora-spec"></span></div>
+      <div class="mj-section">
+        <div class="mj-label">牌桌 · 双方舍牌</div>
+        <div id="mj-discards-spec" class="mj-discards"></div>
+      </div>
+      <div id="mj-spectate-body"></div>
+    </div>
+
     <div id="mj-result" class="card fk-result hidden"></div>
 
     <div class="card fk-card">
@@ -1259,12 +1270,13 @@ function renderMjRoom(state) {
   const isSelect = state.phase === 'selecting';
   const isPlay = state.phase === 'playing';
   const isOver = state.phase === 'finished';
+  const spectator = !state.is_player;
   fkToggle('mj-waiting', isWaiting);
-  fkToggle('mj-select', isSelect);
-  fkToggle('mj-play', isPlay);
+  fkToggle('mj-select', isSelect && !spectator);
+  fkToggle('mj-play', isPlay && !spectator);
+  fkToggle('mj-spectate', spectator && (isSelect || isPlay));
   fkToggle('mj-result', isOver);
 
-  const spectator = !state.is_player;
   document.getElementById('mj-spectate-badge').classList.toggle('hidden', !spectator);
   document.getElementById('mj-furiten').classList.toggle('hidden', !(state.is_player && state.furiten));
   if (isWaiting) {
@@ -1284,10 +1296,40 @@ function renderMjRoom(state) {
     wrap.appendChild(div);
   });
 
-  if (isSelect) renderMjSelect(state);
-  if (isPlay) renderMjPlay(state);
+  if (isSelect && !spectator) renderMjSelect(state);
+  if (isPlay && !spectator) renderMjPlay(state);
+  if (spectator && (isSelect || isPlay)) renderMjSpectate(state);
   if (isOver) renderMjResult(state);
   renderMjLog(state);
+}
+
+function renderMjSpectate(state) {
+  document.getElementById('mj-dora-spec').innerHTML = (state.dora || []).map(tileImg).join('');
+
+  const disc = document.getElementById('mj-discards-spec');
+  disc.innerHTML = '';
+  (state.discards || []).forEach((row, i) => {
+    const label = (state.names[i] || `P${i + 1}`);
+    disc.insertAdjacentHTML('beforeend', mjDiscardRow(label, row, i === state.player_turn));
+  });
+
+  const showPool = state.phase === 'selecting';
+  const html = [];
+  (state.spectate || []).forEach((r) => {
+    html.push(`<div class="mj-reveal"><div class="mj-label">${esc(r.name || '等待中')}</div>`);
+    if (showPool) {
+      html.push(`<div class="mj-label">发牌（${(r.pool || []).length} 张）</div>`
+        + `<div class="tile-pool">${(r.pool || []).map((t) => tileImg(t)).join('')}</div>`);
+    }
+    html.push(`<div class="mj-label">手牌（${(r.hand || []).length} 张）</div>`
+      + `<div class="tile-pool">${(r.hand || []).map((t) => tileImg(t)).join('')}</div>`);
+    if (!showPool) {
+      html.push(`<div class="mj-label">待排（${(r.left || []).length} 张）</div>`
+        + `<div class="tile-pool">${(r.left || []).map((t) => tileImg(t)).join('')}</div>`);
+    }
+    html.push('</div>');
+  });
+  document.getElementById('mj-spectate-body').innerHTML = html.join('');
 }
 
 function renderMjSelect(state) {

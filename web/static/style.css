@@ -238,3 +238,57 @@ code { background: #120f0d; border: 1px solid var(--line); border-radius: 6px; p
   .fk-players { grid-template-columns: 1fr; }
   .field.inline input { width: 100%; }
 }
+
+/* ==================== 快艇骰子 网页版 ==================== */
+
+.yz-table-wrap { overflow-x: auto; margin-top: 14px; }
+
+.yz-table { border-collapse: collapse; width: 100%; font-size: 13px; }
+.yz-table th, .yz-table td { border: 1px solid var(--line); padding: 6px 8px; text-align: center; white-space: nowrap; }
+.yz-table thead th { background: #120f0d; color: var(--text-dim); font-weight: 600; }
+.yz-table thead th.active { color: var(--gold); }
+.yz-table thead th.you { color: var(--blue); }
+
+.yz-rowlabel { text-align: left !important; color: var(--text-dim); background: #120f0d; font-weight: 600; }
+
+.yz-cell { min-width: 54px; }
+.yz-cell.empty { color: #5f564a; }
+.yz-cell.clickable { cursor: pointer; color: var(--gold); }
+.yz-cell.clickable:hover { background: #2a2113; }
+
+.yz-table tr.yz-bonus td { color: var(--blue); }
+.yz-table tr.yz-total td { color: var(--gold); font-weight: 700; font-size: 15px; }
+
+/* ==================== 17步麻将 网页版 ==================== */
+
+.mj-hint { color: var(--text-dim); font-size: 13px; margin: 6px 0 10px; }
+.mj-hint .tile { vertical-align: middle; }
+.mj-section { margin-top: 14px; }
+.mj-label { color: var(--text-dim); font-size: 13px; margin-bottom: 6px; font-weight: 600; }
+
+.mj-discards { display: flex; flex-direction: column; gap: 8px; }
+.mj-discard-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.mj-disc-label { color: var(--text-dim); font-size: 13px; min-width: 76px; }
+.mj-discard-pool { display: flex; flex-wrap: wrap; gap: 3px; min-height: 26px; }
+.mj-discard-row.active .mj-disc-label { color: var(--gold); }
+
+.fk-furiten { color: var(--danger); font-size: 13px; font-weight: 700; }
+
+.tile-pool { display: flex; flex-wrap: wrap; gap: 4px; }
+.tile-pool.disabled { opacity: .55; pointer-events: none; }
+
+.tile-chip { line-height: 0; }
+.tile-chip.picked { outline: 3px solid var(--gold); outline-offset: 1px; border-radius: 5px; }
+.tile-chip:not(.sm) { cursor: pointer; }
+
+.tile { width: 34px; height: 46px; object-fit: contain; background: #f5efe3; border-radius: 5px; border: 1px solid var(--line); }
+.tile-chip.sm .tile { width: 24px; height: 32px; }
+.mj-hint .tile { width: 26px; height: 35px; }
+
+.mj-reveal { margin-top: 12px; }
+.mj-reveal + .mj-reveal { margin-top: 16px; }
+
+@media (max-width: 640px) {
+  .tile { width: 28px; height: 38px; }
+  .mj-disc-label { min-width: 100%; }
+}

@@ -503,10 +503,10 @@ function renderAuction(state) {
   const holder = au.holder != null ? state.players[au.holder] : null;
   const info = document.getElementById('fk-auction-info');
   if (au.bid == null) {
-    info.innerHTML = `由 <b>${esc(cur.name)}</b> 先出价`;
+    info.innerHTML = `<b>${esc(cur.name)}</b> 先出价：出价越高的越有资格拿先手`;
   } else {
-    info.innerHTML = `当前出价 <b>${au.bid}</b>（由 <b>${esc(holder.name)}</b> 持有，`
-      + `先手以 <b>${fmtOpen(au.bid)}</b> 分开局）`;
+    info.innerHTML = `当前最高出价 <b>${au.bid}</b>（<b>${esc(holder.name)}</b> 若成交即先手，`
+      + `以 <b>${fmtOpen(au.bid)}</b> 分开局）；接受方为后手、0 分开局`;
   }
 
   const mine = state.my_index >= 0 && state.my_index === curIdx;
@@ -514,7 +514,9 @@ function renderAuction(state) {
   document.getElementById('fk-bid').disabled = !mine;
   document.getElementById('fk-accept').disabled = !mine || au.bid == null;
   document.getElementById('fk-auction-hint').textContent = mine
-    ? (au.bid == null ? '出价 50 的倍数，可为负数' : '加价要高于当前出价，或直接接受')
+    ? (au.bid == null
+        ? '正数 = 拿先手但以该负分开局；负数 = 拿先手反而以正分开局'
+        : '出价需高于当前最高出价；或点「接受」让出先手')
     : '等待对方出价……';
 }
 
@@ -599,3 +601,808 @@ document.getElementById('fk-stones-on').addEventListener('change', (e) => {
   document.getElementById('fk-stones').disabled = !e.target.checked;
 });
 document.getElementById('btn-fk-create').addEventListener('click', createRoom);
+
+// ==================== 快艇骰子 网页版 ====================
+
+const yzPanel = document.getElementById('yahtzee-panel');
+const yzLobby = document.getElementById('yz-lobby');
+const yzRoom = document.getElementById('yz-room');
+const yzRooms = document.getElementById('yz-rooms');
+const yzLobbyMsg = document.getElementById('yz-lobby-msg');
+const yzToast = document.getElementById('yz-toast');
+
+const YZ_MAX_ROLL = 3;
+
+let yzCode = null;
+let yzState = null;
+let yzSig = null;
+let yzDiceSig = null;
+let yzSelected = new Set();
+let yzLobbyTimer = null;
+let yzRoomTimer = null;
+let yzToastTimer = null;
+
+function yzMsg(text, ok) {
+  yzToast.textContent = text || '';
+  yzToast.classList.toggle('ok', !!ok);
+  clearTimeout(yzToastTimer);
+  if (text) yzToastTimer = setTimeout(() => { yzToast.textContent = ''; }, 4000);
+}
+
+async function enterYahtzee() {
+  loginPanel.classList.add('hidden');
+  homePanel.classList.add('hidden');
+  pwdPanel.classList.add('hidden');
+  yzPanel.classList.remove('hidden');
+  yzLobby.classList.remove('hidden');
+  yzRoom.classList.add('hidden');
+  yzCode = null;
+  yzLobbyMsg.textContent = '';
+  const { status, data } = await api('/api/yahtzee/mine');
+  if (status === 401) { yzPanel.classList.add('hidden'); showLogin(); return; }
+  if (status === 200 && data.ok && data.code) { enterYzRoom(data.code); return; }
+  await refreshYzRooms();
+  clearInterval(yzRoomTimer);
+  yzRoomTimer = null;
+  yzLobbyTimer = setInterval(refreshYzRooms, 2500);
+}
+
+function backToYzLobby() {
+  clearInterval(yzRoomTimer);
+  yzRoomTimer = null;
+  yzCode = null;
+  yzRoom.classList.add('hidden');
+  yzLobby.classList.remove('hidden');
+  refreshYzRooms();
+  clearInterval(yzLobbyTimer);
+  yzLobbyTimer = setInterval(refreshYzRooms, 2500);
+}
+
+async function refreshYzRooms() {
+  const { status, data } = await api('/api/yahtzee/rooms');
+  if (status === 401) { clearInterval(yzLobbyTimer); yzPanel.classList.add('hidden'); showLogin(); return; }
+  if (status !== 200 || !data.ok) return;
+  yzRooms.innerHTML = '';
+  if (!data.rooms.length) {
+    const p = document.createElement('p');
+    p.className = 'room-empty';
+    p.textContent = '还没有房间，创建一个等对手来吧';
+    yzRooms.appendChild(p);
+    return;
+  }
+  data.rooms.forEach((r) => {
+    const row = document.createElement('div');
+    row.className = 'room-row';
+    const ongoing = r.phase !== 'waiting';
+    const meta = document.createElement('div');
+    meta.className = 'room-meta';
+    meta.textContent = (ongoing ? '对局中 · ' : '') + `${r.count}/${r.max} 人` + ` · 房间号 ${r.code}`;
+    const host = document.createElement('div');
+    host.className = 'room-host';
+    host.textContent = ongoing ? (r.players || []).join(' vs ') : r.host;
+    const btn = document.createElement('button');
+    btn.className = 'btn btn-primary btn-sm';
+    btn.textContent = ongoing ? '观战' : '加入';
+    btn.addEventListener('click', () => (ongoing ? enterYzRoom(r.code) : joinYzRoom(r.code)));
+    row.appendChild(host);
+    row.appendChild(meta);
+    row.appendChild(btn);
+    yzRooms.appendChild(row);
+  });
+}
+
+async function createYzRoom() {
+  yzLobbyMsg.textContent = '';
+  const { status, data } = await api('/api/yahtzee/create', { method: 'POST' });
+  if (status === 200 && data.ok) enterYzRoom(data.code);
+  else yzLobbyMsg.textContent = data.msg || '创建失败喵';
+}
+
+async function joinYzRoom(code) {
+  yzLobbyMsg.textContent = '';
+  const { status, data } = await api('/api/yahtzee/join', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code: code }),
+  });
+  if (status === 200 && data.ok) enterYzRoom(data.code);
+  else yzLobbyMsg.textContent = data.msg || '加入失败喵';
+}
+
+async function cancelYzRoom() {
+  if (!yzCode) return;
+  const { status, data } = await api('/api/yahtzee/cancel', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code: yzCode }),
+  });
+  if (status === 200 && data.ok) backToYzLobby();
+  else yzMsg(data.msg || '取消失败喵');
+}
+
+async function yzAct(action, extra) {
+  if (!yzCode) return;
+  const body = Object.assign({ code: yzCode, action: action }, extra || {});
+  const { status, data } = await api('/api/yahtzee/action', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (status === 200 && data.ok) {
+    if (!data.room) { backToYzLobby(); yzMsg('对局已取消喵'); return; }
+    yzSig = yzSignature(data.room);
+    renderYzRoom(data.room);
+  } else {
+    yzMsg(data.msg || '操作失败喵');
+  }
+}
+
+function yzSignature(r) {
+  return JSON.stringify([
+    r.phase, r.turn, r.roll, r.dice.map((d) => d.value),
+    r.players.map((p) => [p.total, p.score]),
+    r.winner, r.log.length,
+  ]);
+}
+
+async function enterYzRoom(code) {
+  clearInterval(yzLobbyTimer);
+  yzLobbyTimer = null;
+  yzCode = code;
+  yzState = null;
+  yzSig = null;
+  yzDiceSig = null;
+  yzSelected = new Set();
+  yzLobby.classList.add('hidden');
+  yzRoom.classList.remove('hidden');
+  buildYzRoomDom();
+  await pollYzRoom();
+  clearInterval(yzRoomTimer);
+  yzRoomTimer = setInterval(pollYzRoom, 1200);
+}
+
+async function pollYzRoom() {
+  if (!yzCode) return;
+  const { status, data } = await api('/api/yahtzee/state?code=' + encodeURIComponent(yzCode));
+  if (status === 401) { clearInterval(yzRoomTimer); yzPanel.classList.add('hidden'); showLogin(); return; }
+  if (status === 404) { yzMsg('房间已结束喵'); backToYzLobby(); return; }
+  if (status !== 200 || !data.ok) return;
+  const s = yzSignature(data.room);
+  if (s !== yzSig) {
+    yzSig = s;
+    renderYzRoom(data.room);
+  }
+}
+
+function buildYzRoomDom() {
+  yzRoom.innerHTML = `
+    <div class="card fk-head">
+      <div class="fk-head-top">
+        <div class="fk-title">快艇骰子 · <span id="yz-progress"></span></div>
+        <div class="fk-head-right">
+          <div class="fk-code">房间号 <b id="yz-code-show"></b></div>
+          <div id="yz-spectate-badge" class="fk-spectate hidden">观战中</div>
+        </div>
+      </div>
+      <div id="yz-players" class="fk-players"></div>
+    </div>
+
+    <div id="yz-waiting" class="card fk-card hidden">
+      <div class="fk-info">等待玩家加入……现在是 <b id="yz-count"></b> 人，把房间号 <b id="yz-wait-code"></b> 发给朋友即可（最多 4 人）</div>
+      <div class="actions">
+        <button id="yz-start" class="btn btn-primary btn-sm">开始对局</button>
+        <button id="yz-cancel" class="btn btn-ghost btn-sm">解散房间</button>
+      </div>
+    </div>
+
+    <div id="yz-play" class="card fk-card hidden">
+      <div class="fk-table-top">
+        <div id="yz-turn-label" class="fk-turn"></div>
+        <div id="yz-roll-label" class="fk-turn"></div>
+      </div>
+      <div id="yz-dice" class="dice-row"></div>
+      <div class="actions">
+        <button id="yz-reroll" class="btn btn-primary btn-sm">重投选中</button>
+        <span class="hint">点选要重投的骰子（最多 3 投），或直接在计分板点空格计分</span>
+      </div>
+      <div id="yz-table" class="yz-table-wrap"></div>
+    </div>
+
+    <div id="yz-result" class="card fk-result hidden"></div>
+
+    <div class="card fk-card">
+      <div class="panel-title">对局记录</div>
+      <div id="yz-log" class="log"></div>
+    </div>
+
+    <div class="actions">
+      <button id="yz-giveup" class="btn btn-ghost btn-sm">放弃本局</button>
+      <button id="yz-back-lobby" class="btn btn-ghost btn-sm">返回大厅</button>
+    </div>`;
+
+  document.getElementById('yz-start').addEventListener('click', () => yzAct('start'));
+  document.getElementById('yz-reroll').addEventListener('click', () => {
+    if (!yzSelected.size) { yzMsg('先点选要重投的骰子喵'); return; }
+    yzAct('reroll', { indices: Array.from(yzSelected) });
+  });
+  document.getElementById('yz-giveup').addEventListener('click', () => {
+    if (window.confirm('确定放弃本局吗？剩余格子将按 0 分锁定喵')) yzAct('giveup');
+  });
+  document.getElementById('yz-cancel').addEventListener('click', cancelYzRoom);
+  document.getElementById('yz-back-lobby').addEventListener('click', backToYzLobby);
+}
+
+function renderYzRoom(state) {
+  yzState = state;
+  document.getElementById('yz-progress').textContent = `进度 ${state.progress}/12`;
+  document.getElementById('yz-code-show').textContent = state.code;
+  const waitCode = document.getElementById('yz-wait-code');
+  if (waitCode) waitCode.textContent = state.code;
+
+  const diceSig = state.dice.map((d) => d.value).join(',');
+  if (diceSig !== yzDiceSig) { yzDiceSig = diceSig; yzSelected = new Set(); }
+
+  const isWaiting = state.phase === 'waiting';
+  const isPlay = state.phase === 'playing';
+  const isOver = state.phase === 'finished';
+  fkToggle('yz-waiting', isWaiting);
+  fkToggle('yz-play', isPlay);
+  fkToggle('yz-result', isOver);
+
+  const spectator = !state.is_player;
+  document.getElementById('yz-spectate-badge').classList.toggle('hidden', !spectator);
+  document.getElementById('yz-giveup').classList.toggle('hidden', isWaiting || isOver || spectator);
+  if (isWaiting) {
+    document.getElementById('yz-count').textContent = state.players.length;
+    document.getElementById('yz-start').classList.toggle('hidden', spectator || state.my_index !== 0);
+    document.getElementById('yz-cancel').classList.toggle('hidden', spectator || state.my_index !== 0);
+  }
+
+  renderYzPlayers(state);
+  if (isPlay) { renderYzDice(state); renderYzTable(state); }
+  if (isOver) renderYzResult(state);
+  renderYzLog(state);
+}
+
+function renderYzPlayers(state) {
+  const wrap = document.getElementById('yz-players');
+  wrap.innerHTML = '';
+  state.players.forEach((p, i) => {
+    const div = document.createElement('div');
+    div.className = 'fk-player'
+      + (i === state.turn && state.phase === 'playing' ? ' active' : '')
+      + (i === state.my_index ? ' you' : '');
+    div.innerHTML = `<div class="pname">${esc(p.name)}${i === state.my_index ? '（你）' : ''}`
+      + `${p.given_up ? '（已放弃）' : ''}</div>`
+      + `<div class="ptotal">${p.total} 分</div>`;
+    wrap.appendChild(div);
+  });
+}
+
+function renderYzDice(state) {
+  const canSelect = state.is_turn && state.roll < YZ_MAX_ROLL;
+  const wrap = document.getElementById('yz-dice');
+  wrap.innerHTML = '';
+  state.dice.forEach((d, i) => {
+    const el = dieEl(d, { selectable: canSelect, selected: yzSelected.has(i) });
+    if (canSelect) {
+      el.addEventListener('click', () => {
+        if (yzSelected.has(i)) yzSelected.delete(i);
+        else yzSelected.add(i);
+        renderYzRoom(yzState);
+      });
+    }
+    wrap.appendChild(el);
+  });
+  const p = state.players[state.turn] || {};
+  document.getElementById('yz-turn-label').textContent = state.is_turn
+    ? '轮到你行动'
+    : `${p.name} 正在行动……`;
+  document.getElementById('yz-turn-label').classList.toggle('waiting', !state.is_turn);
+  document.getElementById('yz-roll-label').textContent = `第 ${state.roll}/${YZ_MAX_ROLL} 投`;
+  document.getElementById('yz-reroll').disabled = !(state.is_turn && state.roll < YZ_MAX_ROLL);
+}
+
+function renderYzTable(state) {
+  const wrap = document.getElementById('yz-table');
+  const cats = state.categories || [];
+  let html = '<table class="yz-table"><thead><tr><th class="yz-rowlabel"></th>';
+  state.players.forEach((p, i) => {
+    html += `<th class="${i === state.turn ? 'active' : ''}${i === state.my_index ? ' you' : ''}">`
+      + `${esc(p.name)}${i === state.my_index ? '（你）' : ''}</th>`;
+  });
+  html += '</tr></thead><tbody>';
+  cats.forEach((name, r) => {
+    html += `<tr><td class="yz-rowlabel">${esc(name)}</td>`;
+    state.players.forEach((p, i) => {
+      const v = p.score[r];
+      const can = state.is_turn && i === state.my_index && v === null;
+      html += `<td class="yz-cell${can ? ' clickable' : ''}${v === null ? ' empty' : ''}" data-r="${r}">`
+        + (v === null ? (can ? '计分' : '·') : v) + '</td>';
+    });
+    html += '</tr>';
+  });
+  html += '<tr class="yz-bonus"><td class="yz-rowlabel">奖励分</td>';
+  state.players.forEach((p) => { html += `<td>${p.bonus ? p.bonus : '·'}</td>`; });
+  html += '</tr>';
+  html += '<tr class="yz-total"><td class="yz-rowlabel">总分</td>';
+  state.players.forEach((p) => { html += `<td>${p.total}</td>`; });
+  html += '</tr></tbody></table>';
+  wrap.innerHTML = html;
+  wrap.querySelectorAll('.yz-cell.clickable').forEach((td) => {
+    td.addEventListener('click', () => yzAct('score', { index: Number(td.dataset.r) }));
+  });
+}
+
+function renderYzResult(state) {
+  const lines = state.result_lines || [];
+  document.getElementById('yz-result').innerHTML =
+    '<div class="panel-title">对局结束</div>'
+    + lines.map((l) => `<div class="line">${esc(l)}</div>`).join('');
+}
+
+function renderYzLog(state) {
+  const box = document.getElementById('yz-log');
+  box.innerHTML = '';
+  state.log.forEach((l) => {
+    const d = document.createElement('div');
+    d.textContent = l;
+    box.appendChild(d);
+  });
+  box.scrollTop = box.scrollHeight;
+}
+
+document.getElementById('btn-yahtzee').addEventListener('click', enterYahtzee);
+document.getElementById('btn-yz-back').addEventListener('click', () => {
+  clearInterval(yzLobbyTimer);
+  clearInterval(yzRoomTimer);
+  yzPanel.classList.add('hidden');
+  homePanel.classList.remove('hidden');
+  refresh();
+});
+document.getElementById('btn-yz-create').addEventListener('click', createYzRoom);
+
+// ==================== 17步麻将 网页版 ====================
+
+const mjPanel = document.getElementById('mahjong-panel');
+const mjLobby = document.getElementById('mj-lobby');
+const mjRoom = document.getElementById('mj-room');
+const mjRooms = document.getElementById('mj-rooms');
+const mjLobbyMsg = document.getElementById('mj-lobby-msg');
+const mjToast = document.getElementById('mj-toast');
+
+const MJ_LAST_TURN = 17;
+
+let mjCode = null;
+let mjState = null;
+let mjSig = null;
+let mjMy34Sig = null;
+let mjSel = new Set();
+let mjLobbyTimer = null;
+let mjRoomTimer = null;
+let mjToastTimer = null;
+
+function mjMsg(text, ok) {
+  mjToast.textContent = text || '';
+  mjToast.classList.toggle('ok', !!ok);
+  clearTimeout(mjToastTimer);
+  if (text) mjToastTimer = setTimeout(() => { mjToast.textContent = ''; }, 4000);
+}
+
+function mjTileLabel(i) {
+  const suit = 'mpsz'[Math.floor(i / 10)];
+  return (i % 10) + suit;
+}
+
+function tileImg(i) {
+  return `<img class="tile" src="/mahjong/mj${i}.png" alt="${mjTileLabel(i)}" title="${mjTileLabel(i)}">`;
+}
+
+function tilesToText(tiles) {
+  const groups = { m: [], p: [], s: [], z: [] };
+  tiles.forEach((t) => { groups['mpsz'[Math.floor(t / 10)]].push(t % 10); });
+  let out = '';
+  ['m', 'p', 's', 'z'].forEach((s) => {
+    if (groups[s].length) out += groups[s].sort((a, b) => a - b).join('') + s;
+  });
+  return out;
+}
+
+function mjChips(container, tiles, opts) {
+  opts = opts || {};
+  container.innerHTML = '';
+  (tiles || []).forEach((t, i) => {
+    const span = document.createElement('span');
+    span.className = 'tile-chip' + (opts.selected && opts.selected.has(i) ? ' picked' : '');
+    span.innerHTML = tileImg(t);
+    if (opts.onClick) span.addEventListener('click', () => opts.onClick(i, t));
+    container.appendChild(span);
+  });
+}
+
+function mjDiscardRow(label, row, active) {
+  let html = `<div class="mj-discard-row${active ? ' active' : ''}">`
+    + `<span class="mj-disc-label">${esc(label)}</span><span class="mj-discard-pool">`;
+  row.forEach((t) => { html += `<span class="tile-chip sm">${tileImg(t)}</span>`; });
+  return html + '</span></div>';
+}
+
+async function enterMahjong() {
+  loginPanel.classList.add('hidden');
+  homePanel.classList.add('hidden');
+  pwdPanel.classList.add('hidden');
+  mjPanel.classList.remove('hidden');
+  mjLobby.classList.remove('hidden');
+  mjRoom.classList.add('hidden');
+  mjCode = null;
+  mjLobbyMsg.textContent = '';
+  const { status, data } = await api('/api/mahjong17/mine');
+  if (status === 401) { mjPanel.classList.add('hidden'); showLogin(); return; }
+  if (status === 200 && data.ok && data.code) { enterMjRoom(data.code); return; }
+  await refreshMjRooms();
+  clearInterval(mjRoomTimer);
+  mjRoomTimer = null;
+  mjLobbyTimer = setInterval(refreshMjRooms, 2500);
+}
+
+function backToMjLobby() {
+  clearInterval(mjRoomTimer);
+  mjRoomTimer = null;
+  mjCode = null;
+  mjRoom.classList.add('hidden');
+  mjLobby.classList.remove('hidden');
+  refreshMjRooms();
+  clearInterval(mjLobbyTimer);
+  mjLobbyTimer = setInterval(refreshMjRooms, 2500);
+}
+
+async function refreshMjRooms() {
+  const { status, data } = await api('/api/mahjong17/rooms');
+  if (status === 401) { clearInterval(mjLobbyTimer); mjPanel.classList.add('hidden'); showLogin(); return; }
+  if (status !== 200 || !data.ok) return;
+  mjRooms.innerHTML = '';
+  if (!data.rooms.length) {
+    const p = document.createElement('p');
+    p.className = 'room-empty';
+    p.textContent = '还没有房间，创建一个等对手来吧';
+    mjRooms.appendChild(p);
+    return;
+  }
+  data.rooms.forEach((r) => {
+    const row = document.createElement('div');
+    row.className = 'room-row';
+    const ongoing = r.phase !== 'waiting';
+    const meta = document.createElement('div');
+    meta.className = 'room-meta';
+    meta.textContent = (ongoing ? '对局中 · ' : '')
+      + (r.stones ? '猫眼石局' : '普通局') + ` · 房间号 ${r.code}`;
+    const host = document.createElement('div');
+    host.className = 'room-host';
+    host.textContent = ongoing ? (r.players || []).join(' vs ') : r.host;
+    const btn = document.createElement('button');
+    btn.className = 'btn btn-primary btn-sm';
+    btn.textContent = ongoing ? '观战' : '加入';
+    btn.addEventListener('click', () => (ongoing ? enterMjRoom(r.code) : joinMjRoom(r.code)));
+    row.appendChild(host);
+    row.appendChild(meta);
+    row.appendChild(btn);
+    mjRooms.appendChild(row);
+  });
+}
+
+async function createMjRoom() {
+  mjLobbyMsg.textContent = '';
+  const stones = document.getElementById('mj-stones-on').checked;
+  const { status, data } = await api('/api/mahjong17/create', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ stones: stones }),
+  });
+  if (status === 200 && data.ok) enterMjRoom(data.code);
+  else mjLobbyMsg.textContent = data.msg || '创建失败喵';
+}
+
+async function joinMjRoom(code) {
+  mjLobbyMsg.textContent = '';
+  const { status, data } = await api('/api/mahjong17/join', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code: code }),
+  });
+  if (status === 200 && data.ok) enterMjRoom(data.code);
+  else mjLobbyMsg.textContent = data.msg || '加入失败喵';
+}
+
+async function cancelMjRoom() {
+  if (!mjCode) return;
+  const { status, data } = await api('/api/mahjong17/cancel', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code: mjCode }),
+  });
+  if (status === 200 && data.ok) backToMjLobby();
+  else mjMsg(data.msg || '取消失败喵');
+}
+
+async function mjAct(action, extra) {
+  if (!mjCode) return;
+  const body = Object.assign({ code: mjCode, action: action }, extra || {});
+  const { status, data } = await api('/api/mahjong17/action', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (status === 200 && data.ok) {
+    mjSig = mjSignature(data.room);
+    renderMjRoom(data.room);
+  } else {
+    mjMsg(data.msg || '操作失败喵');
+  }
+}
+
+function mjSignature(r) {
+  return JSON.stringify([
+    r.phase, r.turn, r.player_turn, r.dora, r.discards,
+    r.hand, r.left, r.my34, r.furiten, r.result, r.log.length,
+  ]);
+}
+
+async function enterMjRoom(code) {
+  clearInterval(mjLobbyTimer);
+  mjLobbyTimer = null;
+  mjCode = code;
+  mjState = null;
+  mjSig = null;
+  mjMy34Sig = null;
+  mjSel = new Set();
+  mjLobby.classList.add('hidden');
+  mjRoom.classList.remove('hidden');
+  buildMjRoomDom();
+  await pollMjRoom();
+  clearInterval(mjRoomTimer);
+  mjRoomTimer = setInterval(pollMjRoom, 1200);
+}
+
+async function pollMjRoom() {
+  if (!mjCode) return;
+  const { status, data } = await api('/api/mahjong17/state?code=' + encodeURIComponent(mjCode));
+  if (status === 401) { clearInterval(mjRoomTimer); mjPanel.classList.add('hidden'); showLogin(); return; }
+  if (status === 404) { mjMsg('房间已结束喵'); backToMjLobby(); return; }
+  if (status !== 200 || !data.ok) return;
+  const s = mjSignature(data.room);
+  if (s !== mjSig) {
+    mjSig = s;
+    renderMjRoom(data.room);
+  }
+}
+
+function buildMjRoomDom() {
+  mjRoom.innerHTML = `
+    <div class="card fk-head">
+      <div class="fk-head-top">
+        <div class="fk-title">17步麻将<span id="mj-stones-show"></span></div>
+        <div class="fk-head-right">
+          <div class="fk-code">房间号 <b id="mj-code-show"></b></div>
+          <div id="mj-spectate-badge" class="fk-spectate hidden">观战中</div>
+          <div id="mj-furiten" class="fk-furiten hidden">振听中：本局不能再荣和</div>
+        </div>
+      </div>
+      <div id="mj-players" class="fk-players"></div>
+    </div>
+
+    <div id="mj-waiting" class="card fk-card hidden">
+      <div class="fk-info">等待另一位玩家加入……把房间号 <b id="mj-wait-code"></b> 发给对手即可</div>
+      <div class="actions"><button id="mj-cancel" class="btn btn-ghost btn-sm">解散房间</button></div>
+    </div>
+
+    <div id="mj-select" class="card fk-card hidden">
+      <div class="panel-title">选择 13 张手牌</div>
+      <div class="mj-hint">宝牌指示牌：<span id="mj-dora-select"></span></div>
+      <div id="mj-my34" class="tile-pool"></div>
+      <div class="actions">
+        <button id="mj-submit" class="btn btn-primary btn-sm">确认手牌</button>
+        <span id="mj-count" class="hint"></span>
+      </div>
+    </div>
+
+    <div id="mj-play" class="card fk-card hidden">
+      <div class="mj-hint">宝牌指示牌：<span id="mj-dora-play"></span></div>
+      <div class="mj-section">
+        <div class="mj-label">牌桌 · 双方舍牌</div>
+        <div id="mj-discards" class="mj-discards"></div>
+      </div>
+      <div class="mj-section">
+        <div class="mj-label">我的手牌（13 张）</div>
+        <div id="mj-myhand" class="tile-pool"></div>
+      </div>
+      <div class="mj-section">
+        <div class="mj-label">舍牌候补（点选打出）</div>
+        <div id="mj-myleft" class="tile-pool"></div>
+      </div>
+      <div class="actions">
+        <button id="mj-ron" class="btn btn-primary btn-sm">荣和</button>
+        <button id="mj-draw" class="btn btn-ghost btn-sm hidden">流局</button>
+        <span id="mj-turn-hint" class="hint"></span>
+      </div>
+    </div>
+
+    <div id="mj-result" class="card fk-result hidden"></div>
+
+    <div class="card fk-card">
+      <div class="panel-title">对局记录</div>
+      <div id="mj-log" class="log"></div>
+    </div>
+
+    <div class="actions">
+      <button id="mj-back-lobby" class="btn btn-ghost btn-sm">返回大厅</button>
+    </div>`;
+
+  document.getElementById('mj-submit').addEventListener('click', () => {
+    const tiles = (mjState.my34 || []).filter((_, i) => mjSel.has(i));
+    if (tiles.length !== 13) { mjMsg('需要正好选 13 张喵'); return; }
+    mjAct('select', { text: tilesToText(tiles) });
+  });
+  document.getElementById('mj-ron').addEventListener('click', () => mjAct('play', { text: '荣' }));
+  document.getElementById('mj-draw').addEventListener('click', () => mjAct('play', { text: '流局' }));
+  document.getElementById('mj-cancel').addEventListener('click', cancelMjRoom);
+  document.getElementById('mj-back-lobby').addEventListener('click', backToMjLobby);
+}
+
+function renderMjRoom(state) {
+  mjState = state;
+  document.getElementById('mj-code-show').textContent = state.code;
+  document.getElementById('mj-stones-show').textContent = state.stones ? ' · 猫眼石局' : '';
+  const waitCode = document.getElementById('mj-wait-code');
+  if (waitCode) waitCode.textContent = state.code;
+
+  const isWaiting = state.phase === 'waiting';
+  const isSelect = state.phase === 'selecting';
+  const isPlay = state.phase === 'playing';
+  const isOver = state.phase === 'finished';
+  fkToggle('mj-waiting', isWaiting);
+  fkToggle('mj-select', isSelect);
+  fkToggle('mj-play', isPlay);
+  fkToggle('mj-result', isOver);
+
+  const spectator = !state.is_player;
+  document.getElementById('mj-spectate-badge').classList.toggle('hidden', !spectator);
+  document.getElementById('mj-furiten').classList.toggle('hidden', !(state.is_player && state.furiten));
+  if (isWaiting) {
+    document.getElementById('mj-cancel').classList.toggle('hidden', spectator || state.my_index !== 0);
+  }
+
+  const names = state.names || [];
+  const wrap = document.getElementById('mj-players');
+  wrap.innerHTML = '';
+  names.forEach((n, i) => {
+    const div = document.createElement('div');
+    div.className = 'fk-player'
+      + (i === state.player_turn && isPlay ? ' active' : '')
+      + (i === state.my_index ? ' you' : '');
+    div.innerHTML = `<div class="pname">${esc(n || '等待中')}${i === state.my_index ? '（你）' : ''}</div>`
+      + `<div class="pmeta">${i === state.player_turn && isPlay ? '行动中' : ''}</div>`;
+    wrap.appendChild(div);
+  });
+
+  if (isSelect) renderMjSelect(state);
+  if (isPlay) renderMjPlay(state);
+  if (isOver) renderMjResult(state);
+  renderMjLog(state);
+}
+
+function renderMjSelect(state) {
+  const dora = (state.dora || []).map(tileImg).join('');
+  document.getElementById('mj-dora-select').innerHTML = dora;
+  const done = (state.hand || []).length === 13;
+  const my34 = state.my34 || [];
+  const pool = document.getElementById('mj-my34');
+  mjChips(pool, my34, {
+    selected: mjSel,
+    onClick: done ? null : (i) => {
+      if (mjSel.has(i)) mjSel.delete(i);
+      else if (mjSel.size < 13) mjSel.add(i);
+      else { mjMsg('最多选 13 张喵'); return; }
+      renderMjRoom(mjState);
+    },
+  });
+  pool.classList.toggle('disabled', done);
+  const btn = document.getElementById('mj-submit');
+  const cnt = document.getElementById('mj-count');
+  if (done) {
+    cnt.textContent = '已确认手牌，等待对手选牌……';
+    btn.classList.add('hidden');
+  } else {
+    cnt.textContent = `已选 ${mjSel.size}/13`;
+    btn.classList.remove('hidden');
+    btn.disabled = mjSel.size !== 13;
+  }
+}
+
+function renderMjPlay(state) {
+  document.getElementById('mj-dora-play').innerHTML = (state.dora || []).map(tileImg).join('');
+
+  const disc = document.getElementById('mj-discards');
+  disc.innerHTML = '';
+  (state.discards || []).forEach((row, i) => {
+    const label = (state.names[i] || `P${i + 1}`) + (i === state.my_index ? '（你）' : '');
+    disc.insertAdjacentHTML('beforeend', mjDiscardRow(label, row, i === state.player_turn));
+  });
+
+  mjChips(document.getElementById('mj-myhand'), state.hand || []);
+
+  const myTurn = state.is_turn;
+  const atLast = state.turn >= MJ_LAST_TURN;
+  mjChips(document.getElementById('mj-myleft'), state.left || [], {
+    onClick: (i, t) => {
+      if (!myTurn) { mjMsg('当前不是你的回合喵'); return; }
+      if (atLast) { mjMsg('最后一巡只能荣和或流局喵'); return; }
+      mjAct('play', { text: mjTileLabel(t) });
+    },
+  });
+
+  const hint = document.getElementById('mj-turn-hint');
+  hint.textContent = myTurn
+    ? (atLast ? '最后一巡：只能「荣和」或「流局」' : '轮到你：点「舍牌候补」里的牌打出，或点「荣和」')
+    : '等待对手行动……';
+  document.getElementById('mj-ron').disabled = !myTurn;
+  document.getElementById('mj-draw').classList.toggle('hidden', !(myTurn && atLast));
+}
+
+function renderMjResult(state) {
+  const res = state.result || {};
+  const lines = [];
+  if (res.winner === null || res.winner === undefined) {
+    lines.push('本局无胜负');
+  } else {
+    lines.push(`🏆 ${esc((state.names || [])[res.winner] || '')} 获胜`);
+  }
+  lines.push(`结果：${esc(res.reason || '')}`);
+  if (res.fan === 0 && res.pid !== null && res.pid !== undefined && res.cut !== null) {
+    lines.push('（宣布荣和但无役，按诈胡处理）');
+  }
+  if (res.score) {
+    if (res.fan >= 100) lines.push(`得分 ${res.score} 点`);
+    else if (res.fan > 0) lines.push(`${res.fu}符 ${res.fan}番 · ${res.score} 点`);
+  }
+  (res.fans || []).forEach((f) => {
+    const name = Array.isArray(f) ? f[0] : f;
+    const val = Array.isArray(f) ? f[1] : '';
+    lines.push(`· ${esc(name)}${val ? ' ' + esc(val) : ''}`);
+  });
+  (res.lines || []).forEach((l) => lines.push(l));
+
+  const html = ['<div class="panel-title">对局结束</div>']
+    .concat(lines.map((l) => `<div class="line">${esc(l)}</div>`));
+  if (state.reveal) {
+    state.reveal.forEach((r) => {
+      html.push('<div class="mj-reveal">'
+        + `<div class="mj-label">${esc(r.name)} 手牌</div>`
+        + `<div class="tile-pool">${r.hand.map((t) => tileImg(t)).join('')}</div>`
+        + `<div class="mj-label">舍牌</div>`
+        + `<div class="tile-pool">${r.discards.map((t) => tileImg(t)).join('')}</div>`
+        + '</div>');
+    });
+  }
+  document.getElementById('mj-result').innerHTML = html.join('');
+}
+
+function renderMjLog(state) {
+  const box = document.getElementById('mj-log');
+  box.innerHTML = '';
+  (state.log || []).forEach((l) => {
+    const d = document.createElement('div');
+    d.textContent = l;
+    box.appendChild(d);
+  });
+  box.scrollTop = box.scrollHeight;
+}
+
+document.getElementById('btn-mahjong').addEventListener('click', enterMahjong);
+document.getElementById('btn-mj-back').addEventListener('click', () => {
+  clearInterval(mjLobbyTimer);
+  clearInterval(mjRoomTimer);
+  mjPanel.classList.add('hidden');
+  homePanel.classList.remove('hidden');
+  refresh();
+});
+document.getElementById('btn-mj-create').addEventListener('click', createMjRoom);

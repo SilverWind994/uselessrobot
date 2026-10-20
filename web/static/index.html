@@ -23,7 +23,7 @@
       <form id="login-form" autocomplete="off">
         <label class="field">
           <span>QQ 号</span>
-          <input id="input-qq" type="text" inputmode="numeric" placeholder="例如 2544910201" required>
+          <input id="input-qq" type="text" inputmode="numeric" placeholder="例如 123456789" required>
         </label>
         <label class="field">
           <span>网页密码</span>
@@ -71,8 +71,8 @@
       <div class="game-grid">
         <div class="card game-card">
           <div class="game-name">快艇骰子</div>
-          <div class="game-desc">3 次投掷、12 格计分，比总分</div>
-          <div class="game-tag">网页版开发中</div>
+          <div class="game-desc">3 次投掷、12 格计分，比总分（1~4 人）</div>
+          <button id="btn-yahtzee" class="btn btn-primary btn-sm" type="button">进入大厅</button>
         </div>
         <div class="card game-card">
           <div class="game-name">Farkle</div>
@@ -81,8 +81,8 @@
         </div>
         <div class="card game-card">
           <div class="game-name">17步麻将</div>
-          <div class="game-desc">17 巡两人对局，荣和 / 流局</div>
-          <div class="game-tag">网页版开发中</div>
+          <div class="game-desc">17 巡两人对局，荣和 / 流局（可选猫眼石）</div>
+          <button id="btn-mahjong" class="btn btn-primary btn-sm" type="button">进入大厅</button>
         </div>
       </div>
 
@@ -165,6 +165,74 @@
 
       <!-- 对局中 -->
       <div id="fk-room" class="hidden"></div>
+    </section>
+
+    <!-- 快艇骰子 网页版 -->
+    <section id="yahtzee-panel" class="hidden">
+      <div class="card panel-head">
+        <div>
+          <div class="panel-title">快艇骰子对战</div>
+          <div class="panel-sub">1~4 人 · 每回合 3 次投掷 · 12 格计分</div>
+        </div>
+        <button id="btn-yz-back" class="btn btn-ghost" type="button">返回主页</button>
+      </div>
+
+      <p id="yz-toast" class="msg"></p>
+
+      <!-- 大厅 -->
+      <div id="yz-lobby">
+        <div class="card create-card">
+          <div class="panel-title">创建房间</div>
+          <div class="create-row">
+            <div class="hint">房主创建后，其他玩家从下面列表加入（最多 4 人），房主点「开始」开局</div>
+            <button id="btn-yz-create" class="btn btn-primary" type="button">创建房间</button>
+          </div>
+          <p id="yz-lobby-msg" class="msg"></p>
+        </div>
+
+        <h2 class="section-title">进行中的房间</h2>
+        <div id="yz-rooms" class="room-list">
+          <p class="room-empty">还没有房间，创建一个等对手来吧</p>
+        </div>
+      </div>
+
+      <!-- 对局中 -->
+      <div id="yz-room" class="hidden"></div>
+    </section>
+
+    <!-- 17步麻将 网页版 -->
+    <section id="mahjong-panel" class="hidden">
+      <div class="card panel-head">
+        <div>
+          <div class="panel-title">17步麻将</div>
+          <div class="panel-sub">两人对局 · 选 13 张手牌 · 17 巡荣和 / 流局</div>
+        </div>
+        <button id="btn-mj-back" class="btn btn-ghost" type="button">返回主页</button>
+      </div>
+
+      <p id="mj-toast" class="msg"></p>
+
+      <!-- 大厅 -->
+      <div id="mj-lobby">
+        <div class="card create-card">
+          <div class="panel-title">创建房间</div>
+          <div class="create-row">
+            <label class="chk">
+              <input id="mj-stones-on" type="checkbox"> 猫眼石局（每 4000 分 = 1 猫眼石）
+            </label>
+            <button id="btn-mj-create" class="btn btn-primary" type="button">创建房间</button>
+          </div>
+          <p id="mj-lobby-msg" class="msg"></p>
+        </div>
+
+        <h2 class="section-title">进行中的房间</h2>
+        <div id="mj-rooms" class="room-list">
+          <p class="room-empty">还没有房间，创建一个等对手来吧</p>
+        </div>
+      </div>
+
+      <!-- 对局中 -->
+      <div id="mj-room" class="hidden"></div>
     </section>
   </main>
 

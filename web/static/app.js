@@ -1516,16 +1516,30 @@ function afterShowHome() {
 }
 
 function portraitUrl(name) {
-  return name ? '/catexp/cats/' + encodeURIComponent(name) : '';
+  return name ? '/catexp/cats/thumb/' + encodeURIComponent(name) + '.webp' : '';
+}
+function portraitFallback(name) {
+  return name ? '/catexp/cats/' + encodeURIComponent(name) + '.png' : '';
 }
 
 function originUrl(name) {
-  return name ? '/catexp/origins/' + encodeURIComponent(name + '.png') : '';
+  return name ? '/catexp/origins/thumb/' + encodeURIComponent(name) + '.webp' : '';
+}
+function originFallback(name) {
+  return name ? '/catexp/origins/' + encodeURIComponent(name) + '.png' : '';
 }
 
-function attrImg(cls, url, alt) {
+function artUrl(name, dir) {
+  return name ? '/catexp/' + dir + '/large/' + encodeURIComponent(name) + '.webp' : '';
+}
+function artFallback(name, dir) {
+  return name ? '/catexp/' + dir + '/' + encodeURIComponent(name) + '.png' : '';
+}
+
+function attrImg(cls, url, alt, fallback) {
   if (!url) return '';
-  return `<img class="${cls}" src="${url}" alt="${esc(alt)}" loading="lazy">`;
+  const fb = fallback ? ` onerror="this.onerror=null;this.src='${esc(fallback)}'"` : '';
+  return `<img class="${cls}" src="${url}" alt="${esc(alt)}" loading="lazy"${fb}>`;
 }
 
 // ---------- 远征 ----------
@@ -1710,7 +1724,7 @@ function renderSummonResult(drawn) {
       if (r.job_up) desc += `，转职为 ${esc(r.job)}`;
     }
     return `<div class="summon-row r-${r.rarity}">
-      ${attrImg('summon-icon', portraitUrl(r.portrait), r.name)}
+      ${attrImg('summon-icon', portraitUrl(r.portrait), r.name, portraitFallback(r.portrait))}
       <div class="summon-info">
         <div class="summon-name">${esc(r.name)}
           <span class="summon-rarity">${esc(rarityName(r.rarity))}</span></div>
@@ -1747,7 +1761,7 @@ async function loadTeam() {
     return;
   }
   teamCats.innerHTML = t.cats.map((c) => {
-    const photo = attrImg('cat-icon', portraitUrl(c.portrait), c.name);
+    const photo = attrImg('cat-icon', portraitUrl(c.portrait), c.name, portraitFallback(c.portrait));
     return `<div class="cat-cell owned r-${c.rarity}" data-id="${esc(c.id)}">
       ${photo}
       <div class="cat-name">${esc(c.name)}</div>
@@ -1800,7 +1814,7 @@ function catCellHtml(cat) {
     return `<div class="cat-cell unknown"><div class="cat-unknown">?</div>
       <div class="cat-name dim">？？？</div></div>`;
   }
-  const photo = attrImg('cat-icon', portraitUrl(cat.portrait), cat.name);
+  const photo = attrImg('cat-icon', portraitUrl(cat.portrait), cat.name, portraitFallback(cat.portrait));
   return `<div class="cat-cell owned r-${cat.rarity}" data-id="${esc(cat.id)}">
     ${photo}
     <div class="cat-name">${esc(cat.name)}</div>
@@ -1831,7 +1845,7 @@ function renderPedia() {
       const name = idx.countries[code];
       html += `<div class="pedia-group">
         <div class="pedia-head">
-          ${attrImg('pedia-flag', originUrl(name), name)}
+          ${attrImg('pedia-flag', originUrl(name), name, originFallback(name))}
           <span class="pedia-title">${esc(name)}</span>
           <span class="pedia-progress">${got}/${cats.length}</span>
         </div>
@@ -1863,11 +1877,14 @@ const artBookWrap = document.getElementById('art-book-wrap');
 const artBook = document.getElementById('art-book');
 
 async function loadArt() {
-  document.getElementById('art-map').src = '/catexp/data/' + encodeURIComponent('地图.png');
+  const artMap = document.getElementById('art-map');
+  artMap.onerror = () => { artMap.onerror = null; artMap.src = artFallback('地图', 'data'); };
+  artMap.src = artUrl('地图', 'data');
   document.getElementById('art-acts').innerHTML = ['act1_story', 'act1_boss', 'act1_clear'].map((n) => {
     const label = { act1_story: '第一幕 · 剧情', act1_boss: '第一幕 · Boss', act1_clear: '第一幕 · 通关' }[n];
     return `<figure class="art-fig">
-      <img class="art-img" src="/catexp/expedition/${n}.png" alt="${esc(label)}" loading="lazy">
+      <img class="art-img" src="${artUrl(n, 'expedition')}" alt="${esc(label)}" loading="lazy"
+           onerror="this.onerror=null;this.src='${esc(artFallback(n, 'expedition'))}'">
       <figcaption>${esc(label)}</figcaption>
     </figure>`;
   }).join('');
@@ -1911,7 +1928,7 @@ async function openCatDetail(id) {
   if (status !== 200 || !data.ok) return;
   const c = data.cat;
   const poolName = poolNameOf(c.pool);
-  const photo = attrImg('detail-icon', portraitUrl(c.portrait), c.name);
+  const photo = attrImg('detail-icon', portraitUrl(c.portrait), c.name, portraitFallback(c.portrait));
   catModalBody.innerHTML = `
     <div class="detail-top">
       ${photo}
@@ -1920,7 +1937,7 @@ async function openCatDetail(id) {
           <span class="detail-star">${c.owned ? '★' + c.star : '未解锁'}</span></div>
         <div class="detail-line">${esc(c.id)} · ${esc(c.country_name)}${poolName ? ' · ' + esc(poolName) : ''}</div>
       </div>
-      ${attrImg('detail-flag', originUrl(c.country_name), c.country_name)}
+      ${attrImg('detail-flag', originUrl(c.country_name), c.country_name, originFallback(c.country_name))}
     </div>
     <div class="detail-rows">
       <div><span>职业</span>${esc(c.job || '—')}</div>

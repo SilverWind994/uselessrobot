@@ -37,9 +37,10 @@ newbot/assets/cat_expedition/data/cache/*
 # 猫猫远征队：玩家存档与全局远征状态（cat_pool.json / expedition_acts.json 是静态配置，保留）
 newbot/assets/cat_expedition/players.json
 newbot/assets/cat_expedition/expedition.json
-# 猫猫立绘（用户本地维护，自行上传，不纳入版本库）
+# 猫猫立绘（用户本地维护，自行上传，不纳入版本库；但缩略图体积小，入库便于部署）
 newbot/assets/cat_expedition/cats/*
 !newbot/assets/cat_expedition/cats/.gitkeep
+!newbot/assets/cat_expedition/cats/thumb/
 # 何切阿瓦隆：答题数据与题目图片（运行时内容，不纳入版本库）
 newbot/assets/avalon/*
 !newbot/assets/avalon/.gitkeep

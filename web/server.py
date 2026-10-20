@@ -8,8 +8,11 @@
 """
 
 import json
+import mimetypes
 import os
 import sys
+
+mimetypes.add_type("image/webp", ".webp")  # Windows 注册表可能缺 webp 映射
 
 from fastapi import Cookie, FastAPI
 from fastapi.responses import FileResponse, JSONResponse

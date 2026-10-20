@@ -42,6 +42,16 @@ app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
 app.mount("/mahjong", StaticFiles(directory=_MAHJONG_TILE_DIR), name="mahjong")
 
 
+@app.middleware("http")
+async def _no_cache_static(request, call_next):
+    """首页与静态资源始终向浏览器要求校验，避免改版后旧 app.js 被缓存住"""
+    resp = await call_next(request)
+    path = request.url.path
+    if path == "/" or path.startswith("/static"):
+        resp.headers["Cache-Control"] = "no-cache"
+    return resp
+
+
 def _load_players() -> dict:
     """读取全部玩家存档（不存在则视为空）"""
     if not os.path.exists(CatConfig.CAT_PLAYERS_PATH):

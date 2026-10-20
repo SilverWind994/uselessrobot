@@ -43,7 +43,8 @@ _COOKIE_MAX_AGE = 7 * 24 * 60 * 60
 app = FastAPI(title="串子小车")
 app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
 app.mount("/mahjong", StaticFiles(directory=_MAHJONG_TILE_DIR), name="mahjong")
-# 喵喵远征队素材：职业图标 / 国家旗帜 / 章节插画 / 世界地图（只挂素材目录，不暴露存档）
+# 喵喵远征队素材：喵喵立绘 / 职业图标 / 国家旗帜 / 章节插画 / 世界地图（只挂素材目录，不暴露存档）
+app.mount("/catexp/cats", StaticFiles(directory=cat_web.CATS_DIR), name="catexp-cats")
 app.mount("/catexp/jobs", StaticFiles(directory=cat_web.JOBS_DIR), name="catexp-jobs")
 app.mount("/catexp/origins", StaticFiles(directory=cat_web.ORIGINS_DIR), name="catexp-origins")
 app.mount("/catexp/expedition", StaticFiles(directory=cat_web.EXPEDITION_IMG_DIR), name="catexp-expedition")
@@ -469,6 +470,27 @@ def expedition_run(cat_token: str = Cookie(default="")) -> JSONResponse:
         return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
     lines = cat_web.expedition_run(qq, _nick_of(qq))
     return JSONResponse({"ok": True, "lines": lines, "state": cat_web.expedition_state(qq)})
+
+
+@app.post("/api/cat/signin")
+def cat_signin(cat_token: str = Cookie(default="")) -> JSONResponse:
+    """每日签到（复用插件签到逻辑）"""
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    return JSONResponse({"ok": True, **cat_web.signin(qq)})
+
+
+@app.post("/api/cat/summon")
+def cat_summon(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
+    """抽卡（复用插件抽卡逻辑）；pool 为空或「全」表示全部卡池"""
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    err, data = cat_web.summon(qq, payload.get("count", 1), str(payload.get("pool", "")))
+    if err:
+        return JSONResponse({"ok": False, "msg": err}, status_code=400)
+    return JSONResponse({"ok": True, **data})
 
 
 @app.get("/api/cat/book")

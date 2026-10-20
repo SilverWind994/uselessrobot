@@ -90,6 +90,30 @@
           <div class="card">
             <div class="panel-head">
               <div>
+                <div class="panel-title">喵喵签到 · 抽卡</div>
+                <div class="panel-sub" id="wallet-sub">鱼干 - | 猫眼石 -</div>
+              </div>
+              <button id="btn-signin" class="btn btn-primary btn-sm" type="button">签到</button>
+            </div>
+            <div class="create-row">
+              <label class="field inline">
+                <span>数量</span>
+                <input id="summon-count" type="number" value="1" min="1" max="100" step="1">
+              </label>
+              <label class="field inline">
+                <span>卡池</span>
+                <select id="summon-pool"></select>
+              </label>
+              <button id="btn-summon" class="btn btn-primary btn-sm" type="button">抽卡</button>
+              <span id="summon-hint" class="hint"></span>
+            </div>
+            <p id="summon-msg" class="msg"></p>
+            <div id="summon-result" class="summon-list"></div>
+          </div>
+
+          <div class="card">
+            <div class="panel-head">
+              <div>
                 <div class="panel-title" id="exp-title">远征</div>
                 <div class="panel-sub" id="exp-sub"></div>
               </div>

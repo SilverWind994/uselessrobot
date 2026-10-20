@@ -1515,8 +1515,8 @@ function afterShowHome() {
   switchTab(currentTab);
 }
 
-function jobUrl(name) {
-  return name ? '/catexp/jobs/' + encodeURIComponent(name + '.png') : '';
+function portraitUrl(name) {
+  return name ? '/catexp/cats/' + encodeURIComponent(name) : '';
 }
 
 function originUrl(name) {
@@ -1556,6 +1556,7 @@ async function loadExpedition() {
   if (status === 401) { homePanel.classList.add('hidden'); showLogin(); return; }
   if (status !== 200 || !data.ok) { expSetMsg(data.msg || '读取远征状态失败喵'); return; }
   renderExpedition(data.state);
+  loadSummonPools();
 }
 
 function renderExpedition(s) {
@@ -1600,6 +1601,7 @@ function renderExpedition(s) {
 
   btnExpRun.disabled = !!s.ran_today;
   btnExpRun.textContent = s.ran_today ? '今日已远征' : '远征';
+  renderWallet(s);
 }
 
 btnExpRun.addEventListener('click', async () => {
@@ -1618,6 +1620,106 @@ btnExpRun.addEventListener('click', async () => {
   if (data.state) renderExpedition(data.state);
   refresh();   // 鱼干/猫眼石可能变化，顺带刷新顶部属性
 });
+
+// ---------- 签到 / 抽卡 ----------
+
+const walletSub = document.getElementById('wallet-sub');
+const btnSignin = document.getElementById('btn-signin');
+const summonCount = document.getElementById('summon-count');
+const summonPool = document.getElementById('summon-pool');
+const btnSummon = document.getElementById('btn-summon');
+const summonHint = document.getElementById('summon-hint');
+const summonMsg = document.getElementById('summon-msg');
+const summonResult = document.getElementById('summon-result');
+
+let summonCost = 100;
+
+function setSummonMsg(text, ok) {
+  summonMsg.textContent = text || '';
+  summonMsg.className = ok ? 'msg ok' : 'msg';
+}
+
+function updateSummonHint() {
+  const n = Math.max(1, Number(summonCount.value) || 1);
+  summonHint.textContent = `单抽 ${summonCost} 鱼干，本次需 ${n * summonCost} 鱼干`;
+}
+
+function renderWallet(s) {
+  summonCost = s.summon_cost;
+  walletSub.textContent = `鱼干 ${s.fish} | 猫眼石 ${s.eye_stones} | 今日签到：${s.signin_done ? '已签' : '未签'}`;
+  btnSignin.disabled = !!s.signin_done;
+  btnSignin.textContent = s.signin_done ? '今日已签' : '签到';
+  updateSummonHint();
+}
+
+async function loadSummonPools() {
+  if (summonPool.dataset.filled === '1') return;
+  const idx = await fetchCatIndex();
+  if (!idx) return;
+  summonPool.innerHTML = '<option value="全">全部卡池</option>'
+    + idx.pools.filter((p) => p.key !== 'default')
+      .map((p) => `<option value="${esc(p.key)}">${esc(p.name)}（${p.count} 张）</option>`).join('');
+  summonPool.dataset.filled = '1';
+}
+
+summonCount.addEventListener('input', updateSummonHint);
+
+btnSignin.addEventListener('click', async () => {
+  btnSignin.disabled = true;
+  setSummonMsg('签到中…', false);
+  const { status, data } = await api('/api/cat/signin', { method: 'POST' });
+  if (status === 401) { homePanel.classList.add('hidden'); showLogin(); return; }
+  if (status !== 200 || !data.ok) {
+    setSummonMsg(data.msg || '签到失败喵', false);
+    btnSignin.disabled = false;
+    return;
+  }
+  setSummonMsg((data.lines || []).join('　'), true);
+  refresh();
+});
+
+btnSummon.addEventListener('click', async () => {
+  const n = Math.max(1, Number(summonCount.value) || 1);
+  btnSummon.disabled = true;
+  setSummonMsg('抽卡中…', false);
+  summonResult.innerHTML = '';
+  const { status, data } = await api('/api/cat/summon', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ count: n, pool: summonPool.value }),
+  });
+  btnSummon.disabled = false;
+  if (status === 401) { homePanel.classList.add('hidden'); showLogin(); return; }
+  if (status !== 200 || !data.ok) {
+    setSummonMsg(data.msg || '抽卡失败喵', false);
+    return;
+  }
+  const head = `共 ${data.drawn.length} 只，消耗 ${data.cost} 鱼干`;
+  setSummonMsg(data.lucky ? `✨ 欧气爆发！一抽变十连！${head}` : head, true);
+  renderSummonResult(data.drawn);
+  refresh();
+});
+
+function renderSummonResult(drawn) {
+  summonResult.innerHTML = drawn.map((r) => {
+    let desc;
+    if (r.refunded) desc = `已满星，返还 ${r.refund_amt} 鱼干`;
+    else if (r.is_new) desc = '<span class="summon-new">新喵喵 · 已进队</span>';
+    else {
+      desc = `升到 ★${r.star}`;
+      if (r.job_up) desc += `，转职为 ${esc(r.job)}`;
+    }
+    return `<div class="summon-row r-${r.rarity}">
+      ${attrImg('summon-icon', portraitUrl(r.portrait), r.name)}
+      <div class="summon-info">
+        <div class="summon-name">${esc(r.name)}
+          <span class="summon-rarity">${esc(rarityName(r.rarity))}</span></div>
+        <div class="summon-desc">${desc}</div>
+      </div>
+      <div class="summon-star">★${r.star}</div>
+    </div>`;
+  }).join('');
+}
 
 // ---------- 远征队 ----------
 
@@ -1645,9 +1747,9 @@ async function loadTeam() {
     return;
   }
   teamCats.innerHTML = t.cats.map((c) => {
-    const job = attrImg('cat-icon', jobUrl(c.job), c.job);
+    const photo = attrImg('cat-icon', portraitUrl(c.portrait), c.name);
     return `<div class="cat-cell owned r-${c.rarity}" data-id="${esc(c.id)}">
-      ${job}
+      ${photo}
       <div class="cat-name">${esc(c.name)}</div>
       <div class="cat-tags"><span class="cat-star">★${c.star}</span>
         <span class="cat-job">${esc(c.job || '—')}</span></div>
@@ -1698,9 +1800,9 @@ function catCellHtml(cat) {
     return `<div class="cat-cell unknown"><div class="cat-unknown">?</div>
       <div class="cat-name dim">？？？</div></div>`;
   }
-  const job = attrImg('cat-icon', jobUrl(cat.job), cat.job);
+  const photo = attrImg('cat-icon', portraitUrl(cat.portrait), cat.name);
   return `<div class="cat-cell owned r-${cat.rarity}" data-id="${esc(cat.id)}">
-    ${job}
+    ${photo}
     <div class="cat-name">${esc(cat.name)}</div>
     <div class="cat-tags"><span class="cat-star">★${cat.star}</span>
       <span class="cat-job">${esc(cat.job || '—')}</span></div>
@@ -1809,10 +1911,10 @@ async function openCatDetail(id) {
   if (status !== 200 || !data.ok) return;
   const c = data.cat;
   const poolName = poolNameOf(c.pool);
-  const job = attrImg('detail-icon', jobUrl(c.job), c.job);
+  const photo = attrImg('detail-icon', portraitUrl(c.portrait), c.name);
   catModalBody.innerHTML = `
     <div class="detail-top">
-      ${job}
+      ${photo}
       <div class="detail-head">
         <div class="detail-name r-${c.rarity}">${esc(c.name)}
           <span class="detail-star">${c.owned ? '★' + c.star : '未解锁'}</span></div>

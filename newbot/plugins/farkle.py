@@ -12,6 +12,7 @@
 开局者可在开局时指定分数目标与猫眼石数目（猫眼石 0 即普通局）。
 """
 
+import itertools
 import json
 import os
 import random
@@ -61,6 +62,8 @@ _SUB_ALIASES = {
     "留": "keep", "锁定": "keep", "keep": "keep",
     "入账": "bank", "收": "bank", "收分": "bank", "停": "bank", "bank": "bank",
     "状态": "status", "查看": "status", "status": "status",
+    "人机": "bot", "机器人": "bot", "bot": "bot",
+    "胜率": "rank", "排行": "rank", "战绩": "rank", "rank": "rank",
     "帮助": "help", "help": "help",
 }
 
@@ -69,6 +72,13 @@ _KEEP_FOLLOWUP = {
     "r": "roll", "roll": "roll", "掷": "roll", "继续": "roll",
     "b": "bank", "bank": "bank", "入账": "bank", "收": "bank", "收分": "bank", "停": "bank",
 }
+
+# 人机对战：机器人用负数哨兵 QQ 号，不与真实玩家冲突
+BOT_ID = -1                      # 机器人哨兵 QQ 号
+BOT_NAME = "喵喵机器人"           # 机器人展示名
+BOT_BANK_LINE = 400              # 机器人入账线：本轮累计达到该分数即入账
+_BOT_STATS_PATH = os.path.join(FARKLE_DIR, "bot_stats.json")   # 人机战绩（按 QQ 存 wins/losses）
+_BOT_DECIDE_CACHE = {}           # 机器人选骰缓存
 
 # ==================== 骰子与骰组 ====================
 # 新增骰子类型：在 _roll_die 加分支、_DIE_NAMES/_DICE_INFO/_DIE_COLORS 各补一条即可；
@@ -344,6 +354,53 @@ def _roll_has_score(dice) -> bool:
     return False
 
 
+# ==================== 机器人决策 ====================
+# 取骰口径与 newbot/_farkle_ev_sim.py 一致：贪心选得分最高的组合，
+# 同分则锁定骰子最少（留更多骰子继续掷，爆骰风险更低）；入账线为 BOT_BANK_LINE。
+
+def _bot_subset_score(pairs) -> int:
+    """一组骰子（(kind, value) 序列）的得分；万能面必须参与三张/顺子，否则无解返回 None。"""
+    dice = [{"kind": k, "value": v} for k, v in pairs]
+    wilds = sum(1 for d in dice if _is_wild(d))
+    reals = Counter(d["value"] for d in dice if not _is_wild(d))
+    if wilds == 0:
+        return _score_selection(reals)
+    best = None
+    for combo in itertools.combinations_with_replacement(range(1, 7), wilds):
+        merged = Counter(reals)
+        merged.update(Counter(combo))
+        score = _score_selection(merged)
+        if score is None:
+            continue
+        if all(merged[f] >= 3 or len(merged) >= 5 for f in combo):
+            if best is None or score > best:
+                best = score
+    return best
+
+
+def _bot_choose(roll):
+    """机器人贪心决策：返回 (本轮得分, 锁定骰子的下标列表)。
+
+    得分 0 表示这把骰子无法计分（爆骰）。roll 为 (kind, value) 序列。
+    """
+    key = tuple(sorted(roll))
+    hit = _BOT_DECIDE_CACHE.get(key)
+    if hit is not None:
+        return hit
+    n = len(roll)
+    best_score, best_idx = 0, None
+    for r in range(1, n + 1):
+        for combo in itertools.combinations(range(n), r):
+            s = _bot_subset_score([roll[i] for i in combo])
+            if not s or s <= 0:
+                continue
+            if s > best_score or (s == best_score and r < len(best_idx)):
+                best_score, best_idx = s, combo
+    out = (best_score, list(best_idx) if best_idx else [])
+    _BOT_DECIDE_CACHE[key] = out
+    return out
+
+
 # ==================== 插件 ====================
 
 class FarklePlugin:
@@ -406,7 +463,7 @@ class FarklePlugin:
         router.register(
             ["farkle", "骰子对决", ".farkle", "/farkle"],
             self.cmd_entry,
-            description="Farkle骰子·群里两人对战（子指令：开局/加入/出价/接受/掷/留/入账/投降）"
+            description="Farkle骰子·群里两人对战（子指令：开局/加入/出价/接受/掷/留/入账/人机/胜率/投降）"
         )
 
     def cmd_entry(self, ctx: CommandContext) -> None:
@@ -429,7 +486,7 @@ class FarklePlugin:
             self._sender.reply(ctx, "指令有误喵，发送「farkle 帮助」查看玩法")
             return
 
-        if action in ("create", "join") and self._tournament_active(ctx.group_id):
+        if action in ("create", "join", "bot") and self._tournament_active(ctx.group_id):
             self._sender.reply(
                 ctx, "本群锦标赛进行中喵，先打完锦标赛再开普通 Farkle 局")
             return
@@ -454,6 +511,10 @@ class FarklePlugin:
             self._cmd_keep(ctx, rest)
         elif action == "bank":
             self._cmd_bank(ctx)
+        elif action == "bot":
+            self._cmd_bot(ctx, rest)
+        elif action == "rank":
+            self._cmd_bot_rank(ctx)
         elif action == "status":
             self._show(ctx)
 
@@ -502,6 +563,75 @@ class FarklePlugin:
         self._sender.reply(
             ctx, f"已创建 Farkle 对局：目标 {target} 分，{match_text}。\n"
                  f"另一位玩家发送「farkle 加入」即可开局")
+
+    def _cmd_bot(self, ctx: CommandContext, rest: str) -> None:
+        """与机器人开局：单人创建，机器人自动对局（最优决策），不涉及猫眼石结算"""
+        gid = ctx.group_id
+        game = self._load_game(gid)
+        if game is not None:
+            self._sender.reply(ctx, "本群已经有一局 Farkle 了，等它结束后再开新局喵")
+            return
+        if self._player_in_other_game(ctx.user_id, gid):
+            self._sender.reply(ctx, "你已经在另一局 Farkle 中喵")
+            return
+
+        tokens = rest.split()
+        target = DEFAULT_TARGET
+        if tokens:
+            if not tokens[0].isdigit():
+                self._sender.reply(ctx, "分数目标要是数字喵，例如「farkle 人机 5000」")
+                return
+            target = int(tokens[0])
+        if not (MIN_TARGET <= target <= MAX_TARGET):
+            self._sender.reply(ctx, f"分数目标要在 {MIN_TARGET}~{MAX_TARGET} 之间喵")
+            return
+
+        game = self._new_game(target, 0)
+        game["players"].append(self._new_player(ctx.user_id, ctx.user_name))
+        game["players"].append(self._new_player(BOT_ID, BOT_NAME))
+        game["started"] = True
+        self._assign_dice(game)
+        self._reset_turn(game)
+        # 进入先手拍卖：机器人是后加入的一方（下标 1），由它先出价
+        game["phase"] = "auction"
+        game["auction"] = {"bid": None, "holder": None, "turn": 1}
+        self._save_game(gid, game)
+        self._sender.reply(
+            ctx, f"🎲 你向 {BOT_NAME} 发起 Farkle 挑战：目标 {target} 分。\n"
+                 f"{self._dice_announce(game)}\n"
+                 f"{BOT_NAME} 用最优决策自动对局，由它先出价。")
+        self._bot_auction(ctx, gid, game)
+
+    def _cmd_bot_rank(self, ctx: CommandContext) -> None:
+        """人机对战胜率排行"""
+        stats = _load_json(_BOT_STATS_PATH)
+        rows = []
+        for uid, r in stats.items():
+            wins = int(r.get("wins", 0))
+            losses = int(r.get("losses", 0))
+            games = wins + losses
+            if games <= 0:
+                continue
+            rows.append((wins / games, games, wins, r.get("name") or uid))
+        if not rows:
+            self._sender.reply(
+                ctx, f"还没有人对战过 {BOT_NAME} 喵，发送「farkle 人机」来挑战吧")
+            return
+        rows.sort(key=lambda x: (-x[0], -x[1], -x[2]))
+        lines = [f"🏆 Farkle 人机胜率排行（对战 {BOT_NAME}）"]
+        for i, (rate, games, wins, name) in enumerate(rows[:10], 1):
+            lines.append(
+                f"{i}. {name}：{wins} 胜 {games - wins} 负（胜率 {rate * 100:.1f}%）")
+        mine = stats.get(str(ctx.user_id))
+        if mine is not None:
+            wins = int(mine.get("wins", 0))
+            losses = int(mine.get("losses", 0))
+            games = wins + losses
+            rate = (wins / games * 100) if games else 0.0
+            lines.append(f"你的战绩：{wins} 胜 {losses} 负（胜率 {rate:.1f}%）")
+        else:
+            lines.append("你还没有对战记录，发送「farkle 人机」来挑战吧")
+        self._sender.reply(ctx, "\n".join(lines))
 
     def _cmd_join(self, ctx: CommandContext) -> None:
         gid = ctx.group_id
@@ -664,13 +794,61 @@ class FarklePlugin:
                 ctx, f"加价要高于当前出价 {au['bid']} 分喵（出价越高越有资格拿先手）")
             return
 
-        au["bid"] = val
-        au["holder"] = au["turn"]
-        au["turn"] = (au["turn"] + 1) % PLAYER_NUM
+        cur = self._apply_bid(game, val)
         self._save_game(gid, game)
         self._sender.reply(
             ctx, f"{cur['name']} 出价 {val} 分（先手以 {self._fmt_open_score(val)} 分开局）。\n"
                  + self._auction_prompt(game))
+        self._bot_auction(ctx, gid, game)   # 下一个出价方若是机器人，机器人应价
+
+    @staticmethod
+    def _apply_bid(game: dict, val: int) -> dict:
+        """记录一次出价并轮转出价方，返回出价者；出价方即中标候选"""
+        au = game["auction"]
+        cur = game["players"][au["turn"]]
+        au["bid"] = val
+        au["holder"] = au["turn"]
+        au["turn"] = (au["turn"] + 1) % PLAYER_NUM
+        return cur
+
+    def _resolve_accept(self, gid: int, game: dict):
+        """按当前出价结算先手归属与开局分，返回 (中标者 holder, 出价, 应对方 cur)"""
+        au = game["auction"]
+        cur = game["players"][au["turn"]]
+        holder = game["players"][au["holder"]]
+        bid = au["bid"]
+        holder["total"] = -bid       # 中标者按出价结算开局分（负出价=正分开局）
+        # 按最终先后手归属发放对应位置的骰组
+        seat = game.get("seat_dice") or [[DICE_NORMAL] * DICE_NUM] * 2
+        holder["dice"] = list(seat[0])
+        game["players"][1 - au["holder"]]["dice"] = list(seat[1])
+        game["auction"] = None
+        game["turn"] = au["holder"]
+        self._reset_turn(game)
+        self._save_game(gid, game)
+        return holder, bid, cur
+
+    def _bot_auction(self, ctx: CommandContext, gid: int, game: dict) -> None:
+        """机器人拍卖：轮到自己时，无人出价则以最小正数拿先手，有人出价则直接接受"""
+        au = game.get("auction")
+        if au is None:
+            return
+        if game["players"][au["turn"]]["id"] != BOT_ID:
+            return
+        if au["bid"] is None:
+            cur = self._apply_bid(game, BID_STEP)
+            self._save_game(gid, game)
+            self._sender.reply(
+                ctx, f"{cur['name']} 出价 {BID_STEP} 分"
+                     f"（先手以 {self._fmt_open_score(BID_STEP)} 分开局）。\n"
+                     + self._auction_prompt(game))
+            return
+        holder, bid, cur = self._resolve_accept(gid, game)
+        self._sender.reply(
+            ctx, f"{cur['name']} 接受。{holder['name']} 以 "
+                 f"{self._fmt_open_score(bid)} 分开局并获得先手，"
+                 f"{cur['name']} 以 0 分开局。")
+        self._do_roll(ctx, gid, game)
 
     def _cmd_accept(self, ctx: CommandContext) -> None:
         gid = ctx.group_id
@@ -687,17 +865,7 @@ class FarklePlugin:
         if ctx.user_id != cur["id"]:
             self._sender.reply(ctx, f"现在轮到 {cur['name']} 应对喵")
             return
-        holder = game["players"][au["holder"]]
-        bid = au["bid"]
-        holder["total"] = -bid       # 中标者按出价结算开局分（负出价=正分开局）
-        # 按最终先后手归属发放对应位置的骰组
-        seat = game.get("seat_dice") or [[DICE_NORMAL] * DICE_NUM] * 2
-        holder["dice"] = list(seat[0])
-        game["players"][1 - au["holder"]]["dice"] = list(seat[1])
-        game["auction"] = None
-        game["turn"] = au["holder"]
-        self._reset_turn(game)
-        self._save_game(gid, game)
+        holder, bid, cur = self._resolve_accept(gid, game)
         self._sender.reply(
             ctx, f"{cur['name']} 接受。{holder['name']} 以 "
                  f"{self._fmt_open_score(bid)} 分开局并获得先手，"
@@ -715,6 +883,10 @@ class FarklePlugin:
     def _do_roll(self, ctx: CommandContext, gid: int, game: dict) -> None:
         """掷手中剩余的骰子；爆骰则作废并换手（换手后自动进行新回合的首掷）"""
         player = game["players"][game["turn"]]
+        if player["id"] == BOT_ID:
+            # 轮到机器人：由机器人自动走完一整轮，不等待玩家指令
+            self._bot_play_turn(ctx, gid, game)
+            return
         hand = game["hand"]
         for die in hand:
             die["value"] = _roll_die(die["kind"])
@@ -899,6 +1071,66 @@ class FarklePlugin:
         self._save_game(gid, game)
         self._do_roll(ctx, gid, game)
 
+    def _bot_play_turn(self, ctx: CommandContext, gid: int, game: dict) -> None:
+        """机器人自动走完一整轮：掷→按最优决策锁定→累计达到入账线则入账，否则继续掷；
+        爆骰则本轮作废换手。轮末由 _end_turn / _finish 接管（换手后会触发玩家首掷）。"""
+        player = game["players"][game["turn"]]
+        self._save_game(gid, game)
+        while True:
+            game["phase"] = "roll"
+            hand = game["hand"]
+            for die in hand:
+                die["value"] = _roll_die(die["kind"])
+            faces = _faces_text(hand)
+            if not _roll_has_score(hand):
+                lost = game["turn_score"]
+                self._sender.reply(
+                    ctx, f"{player['name']} 掷出 {faces}，无法计分——爆骰！"
+                         + (f"本回合累计的 {lost} 分全部作废" if lost > 0
+                            else "本回合没有得分"))
+                self._end_turn(ctx, gid, game)
+                return
+
+            game["phase"] = "keep"
+            gained, idx = _bot_choose([(d["kind"], d["value"]) for d in hand])
+            if gained <= 0:      # 兜底：无任何可计分组合时按爆骰处理，避免死循环
+                lost = game["turn_score"]
+                self._sender.reply(
+                    ctx, f"{player['name']} 掷出 {faces}，无法计分——爆骰！"
+                         + (f"本回合累计的 {lost} 分全部作废" if lost > 0
+                            else "本回合没有得分"))
+                self._end_turn(ctx, gid, game)
+                return
+            picked = set(idx)
+            selected = [d for i, d in enumerate(hand) if i in picked]
+            game["hand"] = [d for i, d in enumerate(hand) if i not in picked]
+            game["locked"] += selected
+            game["turn_score"] += gained
+
+            hot = not game["hand"]
+            if hot:
+                # 热骰：全部骰子计分用完，拿回全部骰子继续（同一轮内延续）
+                game["locked"] = []
+                game["hand"] = [_new_die(k) for k in player.get("dice") or [DICE_NORMAL] * DICE_NUM]
+            game["phase"] = "decide"
+            self._sender.reply(
+                ctx, f"{player['name']} 掷出 {faces}，锁定 {_faces_text(selected)}，"
+                     f"本次 +{gained} 分，本回合累计 {game['turn_score']} 分"
+                     f"（剩余可掷 {len(game['hand'])} 颗）"
+                     + ("\n热骰！骰子全部计分用完，拿回全部骰子，可继续或入账" if hot else ""))
+
+            if game["turn_score"] >= BOT_BANK_LINE:
+                player["total"] += game["turn_score"]
+                self._sender.reply(
+                    ctx, f"{player['name']} 入账 +{game['turn_score']} 分，"
+                         f"总分 {player['total']} 分")
+                if player["total"] >= game["target"]:
+                    self._finish(ctx, game, player)
+                    return
+                self._end_turn(ctx, gid, game)
+                return
+            self._save_game(gid, game)
+
     def _finish(self, ctx: CommandContext, game: dict, winner: dict,
                 headline: str = None, reason: str = "达成目标分") -> None:
         """结算本局：公布总分，按猫眼石数目结算后清除对局"""
@@ -906,6 +1138,7 @@ class FarklePlugin:
         for p in game["players"]:
             lines.append(f"{p['name']}：{p['total']} 分")
         lines += self._settle(game, winner)
+        self._record_bot_result(game, winner)   # 人机对局记录玩家战绩
         self._remove_game(ctx.group_id)   # 先清状态，锦标赛回调才能紧接着开下一局
         self._report_result(ctx.group_id, {
             "game": "farkle",
@@ -943,6 +1176,22 @@ class FarklePlugin:
             return 0
         balance = self._cat.get_eye_stones(user_id)
         return -balance if balance < 0 else 0
+
+    @staticmethod
+    def _record_bot_result(game: dict, winner: dict) -> None:
+        """人机对局结束时记录玩家对机器人的胜负（非人机局不记录）"""
+        if not any(p["id"] == BOT_ID for p in game["players"]):
+            return
+        human = next((p for p in game["players"] if p["id"] != BOT_ID), None)
+        if human is None:
+            return
+        stats = _load_json(_BOT_STATS_PATH)
+        rec = stats.get(str(human["id"])) or {"name": human["name"], "wins": 0, "losses": 0}
+        rec["name"] = human["name"]
+        key = "wins" if human["id"] == winner["id"] else "losses"
+        rec[key] = int(rec.get(key, 0)) + 1
+        stats[str(human["id"])] = rec
+        _save_json(_BOT_STATS_PATH, stats)
 
     # ==================== 内部逻辑 ====================
 
@@ -1170,6 +1419,11 @@ class FarklePlugin:
             "· 四张及以上在「三张」基础上逐级翻倍：4 个 1=2000、5 个 1=4000、6 个 1=8000\n"
             "   （如 4 个 4=800、5 个 4=1600、4 个 5=1000、6 个 6=4800）\n"
             "· 顺子（1,2,3,4,5,6）= 1500；小顺子 1~5 = 500、2~6 = 750（如 23456）\n"
+            "【人机对战】\n"
+            "· 「farkle 人机 [目标分]」：单独向机器人挑战（缺省目标 4000），"
+            f"{BOT_NAME} 用最优决策自动对局\n"
+            "· 人机局不涉及猫眼石；机器人一样参与先手拍卖（由它先出价）\n"
+            "· 「farkle 胜率」：查看人机对战胜率排行（前 10 名 + 你自己的战绩）\n"
             "【结算与作废】\n"
             "· 先达到目标分者获胜；有猫眼石时由输家支付给赢家相应数量\n"
             "· 输家猫眼石不足则余额记成负数（欠债），还清前不能参与猫眼石局\n"

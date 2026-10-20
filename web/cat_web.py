@@ -30,6 +30,7 @@ class _QuietSender(MessageSender):
 _plugin = CatExpeditionPlugin(_QuietSender())
 
 # 头像素材目录（供网页直接引用 <img>）
+CATS_DIR = CatConfig.CAT_IMG_CATS_DIR
 JOBS_DIR = CatConfig.CAT_IMG_JOBS_DIR
 ORIGINS_DIR = CatConfig.CAT_IMG_ORIGINS_DIR
 EXPEDITION_IMG_DIR = CatConfig.CAT_EXPEDITION_IMG_DIR
@@ -47,6 +48,12 @@ def _job_for_star(job_path, star: int) -> str:
     if star >= 3 and len(job_path) >= 2:
         return job_path[1]
     return job_path[0] if job_path else ""
+
+
+def _portrait_name(cat: dict) -> str:
+    """立绘文件名（不含扩展名）：cats/猫名.png，缺则 cats/最终职业.png；都没有返回空"""
+    path = _plugin._cat_portrait_path(cat)
+    return os.path.splitext(os.path.basename(path))[0] if path else ""
 
 
 def _player(qq: int) -> dict:
@@ -94,8 +101,9 @@ def cat_index(qq: int) -> dict:
             "pool": pool_of.get(cat["id"], "default"),
             "trait": cat.get("trait_desc") or "—",
             "star": star,
-            # 未解锁不返回职业，避免提前剧透；已解锁按星级给出当前职业图标名
+            # 未解锁不返回职业/立绘，避免提前剧透；已解锁按星级给出当前职业与立绘图名
             "job": _job_for_star(job_path, star) if star else "",
+            "portrait": _portrait_name(cat) if star else "",
         })
 
     total = len(cats)
@@ -135,6 +143,7 @@ def cat_detail(qq: int, cat_id: str):
         "pool": pool_key,
         "job_path": job_path,
         "job": _job_for_star(job_path, star) if star else (job_path[0] if job_path else ""),
+        "portrait": _portrait_name(cat),
         "trait": cat.get("trait_desc") or "—",
         "affinity": cat.get("trait_affinity") or {},
         "intro": cat.get("intro", ""),
@@ -156,6 +165,7 @@ def cat_collection(qq: int) -> dict:
         star = owned.get("star", 1)
         max_star += 1 if star >= CatConfig.CAT_MAX_STAR else 0
         job_path = pool_cat.get("job_path", [])
+        portrait_cat = pool_cat or {"name": owned.get("name", ""), "job_path": []}
         rarity = owned.get("rarity", "normal")
         power = (CatConfig.CAT_BASE_POWER_BY_RARITY.get(rarity, 0)
                  * CatConfig.CAT_STAR_POWER_MULT.get(star, 1))
@@ -166,6 +176,7 @@ def cat_collection(qq: int) -> dict:
             "rarity": rarity,
             "star": star,
             "job": _job_for_star(job_path, star),
+            "portrait": _portrait_name(portrait_cat),
             "country": country,
             "country_name": _plugin._countries.get(country, country),
             "power": power,
@@ -243,6 +254,11 @@ def expedition_state(qq: int):
         "story_text": act_cfg.get("story_text", "") if exp.get("stage") == 1 else "",
         "boss_text": act_cfg.get("boss_text", "") if exp.get("stage") == 10 and not hidden else "",
         "ran_today": player.get("last_expedition") == _today(),
+        # 签到 / 抽卡面板要用到的余额与状态
+        "fish": player.get("fish", 0),
+        "eye_stones": player.get("eye_stones", 0),
+        "signin_done": player.get("last_signin") == _today(),
+        "summon_cost": CatConfig.CAT_SUMMON_COST,
     }
 
 
@@ -255,6 +271,74 @@ def expedition_run(qq: int, nick: str) -> list:
         "sender": {"nickname": nick},
     })
     return _plugin._expedition_core(ctx, player)
+
+
+# ==================== 签到 / 抽卡 ====================
+
+def signin(qq: int) -> dict:
+    """每日签到：复用插件 _signin_core，返回消息行与最新余额"""
+    player = _plugin._get_player(qq)
+    lines = _plugin._signin_core(player)
+    _plugin._update_player(qq, player)
+    return {
+        "lines": lines,
+        "fish": player.get("fish", 0),
+        "eye_stones": player.get("eye_stones", 0),
+        "signin_total": player.get("signin_total", 0),
+        "signin_streak": player.get("signin_streak", 0),
+        "signin_done": player.get("last_signin") == _today(),
+    }
+
+
+def summon(qq: int, count, pool: str):
+    """抽卡：复用插件 _summon_batch_core，返回 (错误信息, 结果)；pool 为空或「全」表示全部卡池"""
+    try:
+        count = int(count)
+    except (TypeError, ValueError):
+        return "数量要是数字喵", None
+    if count < 1:
+        return "数量至少为 1 喵~", None
+
+    pool = (pool or "").strip()
+    if pool in ("", "全", "全部", "all"):
+        pool_key = None
+    else:
+        pool_key = _plugin._resolve_pool(pool)
+        if pool_key is None:
+            return f"没找到卡池「{pool}」喵", None
+
+    player = _plugin._get_player(qq)
+    total_cost = count * CatConfig.CAT_SUMMON_COST
+    if player.get("fish", 0) < total_cost:
+        return f"鱼干不够啦！需要 {total_cost}，还差 {total_cost - player.get('fish', 0)} 鱼干 🐟", None
+
+    results, cost, lucky = _plugin._summon_batch_core(player, count, pool_key)
+    _plugin._update_player(qq, player)
+
+    drawn = []
+    for r in results:
+        pool_cat = _plugin._find_pool_cat(r["id"]) or {"name": r["name"], "job_path": []}
+        drawn.append({
+            "id": r["id"],
+            "name": r["name"],
+            "rarity": r["rarity"],
+            "star": r["star"],
+            "job": r.get("job", ""),
+            "portrait": _portrait_name(pool_cat),
+            "is_new": not r["is_dup"],
+            "refunded": r["refunded"],
+            "refund_amt": r["refund_amt"],
+            "star_up": r["star_up"],
+            "job_up": r["job_up"],
+        })
+    return None, {
+        "drawn": drawn,
+        "cost": cost,
+        "lucky": lucky,
+        "fish": player.get("fish", 0),
+        "eye_stones": player.get("eye_stones", 0),
+        "summon_count": player.get("summon_count", 0),
+    }
 
 
 # ==================== 绘图（PIL 合成图） ====================

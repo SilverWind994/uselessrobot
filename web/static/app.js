@@ -1376,10 +1376,12 @@ function renderMjResult(state) {
   if (state.reveal) {
     state.reveal.forEach((r) => {
       html.push('<div class="mj-reveal">'
-        + `<div class="mj-label">${esc(r.name)} 手牌</div>`
+        + `<div class="mj-label">${esc(r.name)} 手牌（${r.hand.length} 张）</div>`
         + `<div class="tile-pool">${r.hand.map((t) => tileImg(t)).join('')}</div>`
-        + `<div class="mj-label">舍牌</div>`
+        + `<div class="mj-label">舍牌（${r.discards.length} 张）</div>`
         + `<div class="tile-pool">${r.discards.map((t) => tileImg(t)).join('')}</div>`
+        + `<div class="mj-label">剩余未打出（${(r.left || []).length} 张）</div>`
+        + `<div class="tile-pool">${(r.left || []).map((t) => tileImg(t)).join('')}</div>`
         + '</div>');
     });
   }

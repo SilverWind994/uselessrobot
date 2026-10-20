@@ -366,7 +366,8 @@ class Room:
             "my_index": mine,
             "is_player": mine >= 0,
             "is_turn": mine >= 0 and mine == g["player_turn"] and self.phase == "playing",
-            "dora": list(g["dora"]),
+            # dora[0] 为表宝牌指示牌（对局中公开），dora[1] 为里宝牌指示牌（结算才公开）
+            "dora": list(g["dora"]) if self.finished else [g["dora"][0]],
             "discards": [_discards_of(g["take_tiles"][0]), _discards_of(g["take_tiles"][1])],
             "furiten": g["furiten"][mine] if mine >= 0 else False,
             "log": self.log[-30:],

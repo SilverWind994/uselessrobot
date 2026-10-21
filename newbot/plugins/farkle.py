@@ -24,6 +24,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from core.command_router import CommandContext, CommandRouter
 from core.message_sender import MessageSender, Target
+from plugins.farkle_policy import build_policy
 
 _BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # newbot/
 _ASSETS_DIR = os.path.join(_BASE_DIR, "assets")
@@ -76,9 +77,9 @@ _KEEP_FOLLOWUP = {
 # 人机对战：机器人用负数哨兵 QQ 号，不与真实玩家冲突
 BOT_ID = -1                      # 机器人哨兵 QQ 号
 BOT_NAME = "喵喵机器人"           # 机器人展示名
-BOT_BANK_LINE = 400              # 机器人入账线：本轮累计达到该分数即入账
 _BOT_STATS_PATH = os.path.join(FARKLE_DIR, "bot_stats.json")   # 人机战绩（按 QQ 存 wins/losses）
-_BOT_DECIDE_CACHE = {}           # 机器人选骰缓存
+
+BOT_BID_TEMPO_MARGIN = 0.5       # 「先手先到先赢」折算成半个回合的期望得分
 
 # ==================== 骰子与骰组 ====================
 # 新增骰子类型：在 _roll_die 加分支、_DIE_NAMES/_DICE_INFO/_DIE_COLORS 各补一条即可；
@@ -101,6 +102,20 @@ _DIE_GROZAV_FACES = (1, 3, 4, 5, 6)
 _DIE_TRICKY_FACES = (1, 2, 3, 4, 5, 6)
 _DIE_TRICKY_WEIGHTS = (24, 14, 10, 14, 24, 14)
 _DIE_BANCHOU_FACES = (4, 5, 6)
+
+# 各骰型的点数概率表（点数 1~6）：掷骰与最优策略求解共用同一份数据
+_DIE_DIST = {
+    DICE_NORMAL: (1 / 6,) * 6,
+    DICE_SENBEI: (1 / 6,) * 6,
+    DICE_ODD: (0.8 / 3, 0.2 / 3, 0.8 / 3, 0.2 / 3, 0.8 / 3, 0.2 / 3),
+    DICE_EVEN: (0.2 / 3, 0.8 / 3, 0.2 / 3, 0.8 / 3, 0.2 / 3, 0.8 / 3),
+    DICE_LOADED: (2 / 3,) + (1 / 15,) * 5,
+    DICE_GROZAV: (1 / 15, 2 / 3, 1 / 15, 1 / 15, 1 / 15, 1 / 15),
+    DICE_TRICKY: tuple(w / 100 for w in _DIE_TRICKY_WEIGHTS),
+    DICE_KAIJI: (1.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+    DICE_BANCHOU: (0.0, 0.0, 0.0, 1 / 3, 1 / 3, 1 / 3),
+    DICE_DEVIL: (1 / 6,) * 6,
+}
 
 _DIE_NAMES = {
     DICE_NORMAL: "普通", DICE_ODD: "奇数", DICE_EVEN: "偶数",
@@ -222,30 +237,15 @@ def _faces_text(dice) -> str:
 
 
 def _roll_die(kind: str) -> int:
-    """按骰子类型掷出 1~6 点"""
-    if kind == DICE_ODD:
-        if random.random() < 0.8:
-            return random.choice(_DIE_ODD_FACES)
-        return random.choice(_DIE_EVEN_FACES)
-    if kind == DICE_EVEN:
-        if random.random() < 0.8:
-            return random.choice(_DIE_EVEN_FACES)
-        return random.choice(_DIE_ODD_FACES)
-    if kind == DICE_LOADED:
-        if random.random() < 2 / 3:
-            return 1
-        return random.randint(2, 6)
-    if kind == DICE_GROZAV:
-        if random.random() < 2 / 3:
-            return 2
-        return random.choice(_DIE_GROZAV_FACES)
-    if kind == DICE_TRICKY:
-        return random.choices(_DIE_TRICKY_FACES, _DIE_TRICKY_WEIGHTS)[0]
-    if kind == DICE_KAIJI:
-        return 1
-    if kind == DICE_BANCHOU:
-        return random.choice(_DIE_BANCHOU_FACES)
-    return random.randint(1, 6)   # 普通骰 / 仙贝骰（未知类型也按普通处理）
+    """按骰子类型掷出 1~6 点（概率表见 _DIE_DIST）"""
+    dist = _DIE_DIST.get(kind, _DIE_DIST[DICE_NORMAL])
+    r = random.random()
+    acc = 0.0
+    for face, p in enumerate(dist, 1):
+        acc += p
+        if r < acc:
+            return face
+    return 6
 
 
 def _is_wild(die: dict) -> bool:
@@ -355,20 +355,30 @@ def _roll_has_score(dice) -> bool:
 
 
 # ==================== 机器人决策 ====================
-# 取骰口径与 newbot/_farkle_ev_sim.py 一致：贪心选得分最高的组合，
-# 同分则锁定骰子最少（留更多骰子继续掷，爆骰风险更低）；入账线为 BOT_BANK_LINE。
+# 机器人用精确动态规划求最优策略（见 plugins/farkle_policy.py）：每一把锁定哪个
+# 计分子集、什么时候入账，都以「本轮最终期望得分最大」为目标，不再用拍脑袋的入账线。
 
-def _bot_subset_score(pairs) -> int:
-    """一组骰子（(kind, value) 序列）的得分；万能面必须参与三张/顺子，否则无解返回 None。"""
-    dice = [{"kind": k, "value": v} for k, v in pairs]
-    wilds = sum(1 for d in dice if _is_wild(d))
-    reals = Counter(d["value"] for d in dice if not _is_wild(d))
+_BOT_POLICY_CACHE = {}
+
+
+def _kind_key(kind: str) -> str:
+    """仙贝骰与普通骰完全同分布，合并成同一种以复用策略表"""
+    return DICE_NORMAL if kind == DICE_SENBEI else kind
+
+
+def _subset_score_counts(counts, wilds):
+    """按「每面颗数 + 万能面数量」计算一组锁定骰子的得分；无解返回 None。
+
+    counts 为 6 元组（点数 1~6 各几颗，不含万能面）；万能面必须参与三张/顺子或
+    小顺子，不能单独当 1/5 散点，与玩家手动锁定时的校验规则保持一致。
+    """
     if wilds == 0:
-        return _score_selection(reals)
+        return _score_selection({i + 1: c for i, c in enumerate(counts) if c})
+    reals = Counter({i + 1: c for i, c in enumerate(counts) if c})
     best = None
     for combo in itertools.combinations_with_replacement(range(1, 7), wilds):
         merged = Counter(reals)
-        merged.update(Counter(combo))
+        merged.update(combo)
         score = _score_selection(merged)
         if score is None:
             continue
@@ -378,27 +388,66 @@ def _bot_subset_score(pairs) -> int:
     return best
 
 
-def _bot_choose(roll):
-    """机器人贪心决策：返回 (本轮得分, 锁定骰子的下标列表)。
+def _bot_subset_score(pairs) -> int:
+    """一组骰子（(kind, value) 序列）的得分；无解返回 None。"""
+    counts = [0] * 6
+    wilds = 0
+    for kind, value in pairs:
+        if kind == DICE_DEVIL and value == 1:
+            wilds += 1
+        else:
+            counts[value - 1] += 1
+    return _subset_score_counts(tuple(counts), wilds)
 
-    得分 0 表示这把骰子无法计分（爆骰）。roll 为 (kind, value) 序列。
+
+def _bot_policy(dice, target: int):
+    """取（并缓存）某副骰组在指定目标分下的最优策略表"""
+    kinds = tuple(sorted(_kind_key(k) for k in (dice or [DICE_NORMAL] * DICE_NUM)))
+    # 竞价最多让先手从 -目标分 起步，策略表要覆盖到「目标分 × 2」
+    t = min(MAX_TARGET, max(MIN_TARGET, int(target)))
+    s_max = -(-(t * 2) // BID_STEP) * BID_STEP
+    key = (kinds, s_max)
+    pol = _BOT_POLICY_CACHE.get(key)
+    if pol is None:
+        pol = build_policy(kinds, _DIE_DIST, _subset_score_counts, s_max,
+                           wild_kind=DICE_DEVIL)
+        _BOT_POLICY_CACHE[key] = pol
+    return pol
+
+
+def _bot_turn_ev(dice, target: int) -> float:
+    """骰组空手开一轮的期望得分（由最优策略算出）"""
+    return _bot_policy(dice, target).turn_ev
+
+
+def _bot_fair_bid(seat_dice, target: int = DEFAULT_TARGET) -> int:
+    """先手位（先手位骰组 + 先手权）的公允价，单位是开局分；0 表示不值得花钱拿。
+
+    竞价的本质是「带多少分开局」的赛跑：先手位每轮期望 E0 分，后手位每轮 E1 分。
+    先手位以 -b 开局时要跑 T+b 分、约 (T+b)/E0 轮，后手位约 T/E1 轮；两者轮数
+    相等时双方胜率相当，于是 b ≈ T·(E0/E1 − 1)。再加上「先手先到先赢」带来的
+    半个回合优势（≈ E0/2）。出价上限取目标分本身：再多就等于白送一整个目标分。
     """
-    key = tuple(roll)   # 必须按手牌顺序缓存：返回的是下标，换个排列就指到别的骰子了
-    hit = _BOT_DECIDE_CACHE.get(key)
-    if hit is not None:
-        return hit
-    n = len(roll)
-    best_score, best_idx = 0, None
-    for r in range(1, n + 1):
-        for combo in itertools.combinations(range(n), r):
-            s = _bot_subset_score([roll[i] for i in combo])
-            if not s or s <= 0:
-                continue
-            if s > best_score or (s == best_score and r < len(best_idx)):
-                best_score, best_idx = s, combo
-    out = (best_score, list(best_idx) if best_idx else [])
-    _BOT_DECIDE_CACHE[key] = out
-    return out
+    seat = seat_dice or [[DICE_NORMAL] * DICE_NUM, [DICE_NORMAL] * DICE_NUM]
+    ev0 = _bot_turn_ev(seat[0], target)
+    ev1 = _bot_turn_ev(seat[1], target)
+    val = target * (ev0 / ev1 - 1) + ev0 * BOT_BID_TEMPO_MARGIN
+    val = int(round(val / BID_STEP)) * BID_STEP
+    return max(0, min(val, target))
+
+
+def _bot_best_lock(hand, turn_score: int, target_remaining, player_dice, target: int):
+    """按最优策略选择本把锁定的骰子；返回 (得分, 下标列表)，爆骰返回 None"""
+    pol = _bot_policy(player_dice, target)
+    pairs = [(_kind_key(d["kind"]), d["value"]) for d in hand]
+    return pol.best_lock(pairs, turn_score, target_remaining)
+
+
+def _bot_should_bank(my_total: int, target: int, player_dice, hand,
+                     turn_score: int) -> bool:
+    """是否入账：达到本轮目标分，或最优策略认为继续掷不如现在收手"""
+    pol = _bot_policy(player_dice, target)
+    return pol.should_bank([d["kind"] for d in hand], turn_score, target - my_total)
 
 
 # ==================== 插件 ====================
@@ -829,18 +878,20 @@ class FarklePlugin:
         return holder, bid, cur
 
     def _bot_auction(self, ctx: CommandContext, gid: int, game: dict) -> None:
-        """机器人拍卖：轮到自己时，无人出价则以最小正数拿先手，有人出价则直接接受"""
+        """机器人拍卖：按先手位（骰组强度 + 先手权）的公允价出价；
+        对手已经出到公允价或更高时直接接受，让对手带着负分开局"""
         au = game.get("auction")
         if au is None:
             return
         if game["players"][au["turn"]]["id"] != BOT_ID:
             return
-        if au["bid"] is None:
-            cur = self._apply_bid(game, BID_STEP)
+        fair = _bot_fair_bid(game.get("seat_dice"), game["target"])
+        if au["bid"] is None or au["bid"] < fair:
+            cur = self._apply_bid(game, fair)
             self._save_game(gid, game)
             self._sender.reply(
-                ctx, f"{cur['name']} 出价 {BID_STEP} 分"
-                     f"（先手以 {self._fmt_open_score(BID_STEP)} 分开局）。\n"
+                ctx, f"{cur['name']} 出价 {fair} 分"
+                     f"（先手以 {self._fmt_open_score(fair)} 分开局）。\n"
                      + self._auction_prompt(game))
             return
         holder, bid, cur = self._resolve_accept(gid, game)
@@ -1092,8 +1143,10 @@ class FarklePlugin:
                 return
 
             game["phase"] = "keep"
-            gained, idx = _bot_choose([(d["kind"], d["value"]) for d in hand])
-            if gained <= 0:      # 兜底：无任何可计分组合时按爆骰处理，避免死循环
+            pick = _bot_best_lock(hand, game["turn_score"],
+                                  game["target"] - player["total"],
+                                  player.get("dice"), game["target"])
+            if pick is None:     # 兜底：无任何可计分组合时按爆骰处理，避免死循环
                 lost = game["turn_score"]
                 self._sender.reply(
                     ctx, f"{player['name']} 掷出 {faces}，无法计分——爆骰！"
@@ -1101,6 +1154,7 @@ class FarklePlugin:
                             else "本回合没有得分"))
                 self._end_turn(ctx, gid, game)
                 return
+            gained, idx = pick
             picked = set(idx)
             selected = [d for i, d in enumerate(hand) if i in picked]
             game["hand"] = [d for i, d in enumerate(hand) if i not in picked]
@@ -1119,7 +1173,8 @@ class FarklePlugin:
                      f"（剩余可掷 {len(game['hand'])} 颗）"
                      + ("\n热骰！骰子全部计分用完，拿回全部骰子，可继续或入账" if hot else ""))
 
-            if game["turn_score"] >= BOT_BANK_LINE:
+            if _bot_should_bank(player["total"], game["target"],
+                                player.get("dice"), game["hand"], game["turn_score"]):
                 player["total"] += game["turn_score"]
                 self._sender.reply(
                     ctx, f"{player['name']} 入账 +{game['turn_score']} 分，"

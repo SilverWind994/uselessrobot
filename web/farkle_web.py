@@ -16,7 +16,7 @@ from collections import Counter
 from plugins.farkle import (
     DICE_NORMAL, DICE_NUM, PLAYER_NUM, DEFAULT_TARGET, MIN_TARGET, MAX_TARGET,
     MAX_STONES, BID_STEP, BID_LIMIT, IDLE_SECONDS,
-    BOT_ID, BOT_NAME, BOT_BANK_LINE, _BOT_STATS_PATH, _bot_choose,
+    BOT_ID, BOT_NAME, _BOT_STATS_PATH, _bot_best_lock, _bot_should_bank, _bot_fair_bid,
     _roll_die, _is_wild, _new_die, _faces_text, _dice_set_desc,
     _random_dice_set, _score_selection, _roll_has_score, _DIE_NAMES, _DIE_COLORS,
     _load_json, _save_json,
@@ -220,27 +220,32 @@ class Room:
                 au = self.auction
                 if au is None or self.players[au["turn"]]["qq"] != BOT_ID:
                     return
-                if au["bid"] is None:
-                    self.bid(BOT_ID, BID_STEP)      # 无人出价：最小正数拿先手
+                fair = _bot_fair_bid(self.seat_dice, self.target)
+                if au["bid"] is not None and au["bid"] >= fair:
+                    self.accept(BOT_ID)             # 对手已出到公允价，让先手给对方
                 else:
-                    self.accept(BOT_ID)             # 有人出价：直接把先手让给对方
+                    self.bid(BOT_ID, fair)          # 按公允价抢先手位
                 continue
             if self.players[self.turn]["qq"] != BOT_ID:
                 return
             if self.phase == "keep":
-                gained, idx = _bot_choose([(d["kind"], d["value"]) for d in self.hand])
-                if gained <= 0:     # 兜底：无任何可计分组合时按爆骰处理
-                    p = self.players[self.turn]
+                p = self.players[self.turn]
+                pick = _bot_best_lock(self.hand, self.turn_score,
+                                      self.target - p["total"], p["dice"], self.target)
+                if pick is None:    # 兜底：无任何可计分组合时按爆骰处理
                     self._log(f"{p['name']} 掷出 {_faces_text(self.hand)}，无法计分——爆骰！"
                               "本回合没有得分")
                     self.turn = (self.turn + 1) % PLAYER_NUM
                     self._start_turn()
                     continue
+                gained, idx = pick
                 if self.lock(BOT_ID, idx):
                     return          # 理论不会发生；出错就交回玩家，避免卡死
                 continue
             if self.phase == "decide":
-                if self.turn_score >= BOT_BANK_LINE:
+                p = self.players[self.turn]
+                if _bot_should_bank(p["total"], self.target, p["dice"], self.hand,
+                                    self.turn_score):
                     self.bank(BOT_ID)
                 else:
                     self.roll(BOT_ID)

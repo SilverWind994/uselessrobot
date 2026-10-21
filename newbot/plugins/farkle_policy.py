@@ -17,6 +17,14 @@
 Farkle 的所有计分都是 50 的倍数，因此 s 以 50 分为一格精确离散，不存在近似。
 s 从高到低递推（因为锁定后的分数一定比 s 大），O(状态数 × 分数格 × 结果分组)。
 
+胜率模型
+--------
+Policy 求的是「单回合」的最优策略。实战里 Farkle 是双人赛跑，赢在谁先到目标分，
+所以本模块另外提供两层：
+  · RaceModel：由双方的「单回合得分分布」算出双人赛跑胜率表 V(双方剩余分)；
+  · WinTurn：给定双方剩余分后，本回合的锁骰/入账改按胜率最大化求解。
+这样机器人在离目标很近时会及时收手，在对手快赢时会主动冒险。
+
 本模块不依赖 farkle.py：骰子概率表与计分函数都由调用方传入，避免循环导入，
 也方便单独写脚本验证。
 """
@@ -73,6 +81,7 @@ class Policy:
         self.step = STEP
         self.s_max = max(STEP, int(s_max) // STEP * STEP)
         self._score_cache = {}
+        self._turn_stats_cache = {}
 
         # 同分布的骰型合并（例如仙贝骰与普通骰完全一致），压缩状态空间。
         # 带万能面的骰型不参与合并：概率分布虽然可能相同，但掷出万能面时的计分
@@ -246,6 +255,53 @@ class Policy:
                 D[si][i] = s if s >= expect else expect
         self.D = D
 
+    def turn_stats(self, r=None):
+        """按 EV 最优策略打完一轮时，两种结束方式的概率分布。
+
+        返回 (bank, bust)：
+          bank[x] = 本回合以「入账 x 分」结束的概率（x > 0）；
+          bust[s] = 在已累计 s 分时爆骰的概率（本轮得分归零）。
+
+        r 给定时，本回合累计分一旦达到 r 就立即入账：比赛中先达标即锁定胜局，
+        再掷只会白白承担爆骰风险；r 为 None 则按 EV 最优策略一直打到 s_max。
+        """
+        n = self.n
+        cut = n - 1 if r is None else min(n - 1, -(-int(r) // STEP))
+        hit = self._turn_stats_cache.get(cut)
+        if hit is not None:
+            return hit
+        layers = [dict() for _ in range(n)]      # 分数档 -> {状态编号: 概率}
+        layers[0][self.full_index] = 1.0
+        bank, bust = defaultdict(float), defaultdict(float)
+        for i in range(n):
+            layer = layers[i]
+            if not layer:
+                continue
+            s = i * self.step
+            for si, mass in layer.items():
+                if i >= cut or self.D[si][i] <= s + _EPS:
+                    bank[s] += mass               # 入账（达标或策略主动收手）
+                    continue
+                for p, opts in self.groups[si]:
+                    if not opts:
+                        bust[s] += mass * p       # 爆骰，本轮归零
+                        continue
+                    # 与 _solve 一致：选 D 值最大的锁定方式
+                    best = None
+                    for rem_i, sc in opts:
+                        j = i + sc // self.step
+                        v = s + sc if j >= n else self.D[rem_i][j]
+                        if best is None or v > best[0]:
+                            best = (v, rem_i, sc)
+                    gain = mass * p
+                    j = i + best[2] // self.step
+                    if j >= n:
+                        bank[s + best[2]] += gain
+                    else:
+                        layers[j][best[1]] = layers[j].get(best[1], 0.0) + gain
+        self._turn_stats_cache[cut] = (dict(bank), dict(bust))
+        return self._turn_stats_cache[cut]
+
     # ==================== 查询接口 ====================
 
     def value(self, kinds, s: int) -> float:
@@ -286,10 +342,11 @@ class Policy:
             return float(s)
         return self.value(rem_kinds, s)
 
-    def best_lock(self, dice, s: int, target_remaining=None):
+    def best_lock(self, dice, s: int, target_remaining=None, value_fn=None):
         """给定实际手牌（[(骰型, 点数)]），返回 (本次得分, 锁定下标列表)。
 
         无可计分子集（爆骰）返回 None。会枚举所有可锁定子集，按 DP 价值取最优。
+        value_fn(剩余骰型, 新累计分) 可替换估值方式（胜率模型传入自己的价值表）。
         """
         dice = list(dice)
         hand_kinds = [self.canon.get(k, k) for k, _ in dice]
@@ -315,7 +372,10 @@ class Policy:
                 for kind, cnt in hand_counts.items():
                     rem.extend([kind] * (cnt - sel_kinds[kind]))
                 rem_kinds = rem or list(self.full)
-                v = self._option_value(rem_kinds, s + sc, target_remaining)
+                if value_fn is not None:
+                    v = value_fn(rem_kinds, s + sc)
+                else:
+                    v = self._option_value(rem_kinds, s + sc, target_remaining)
                 best = st["best"]
                 # 价值相同则优先锁更少骰子（留更多骰子继续掷，后续更灵活）
                 cand = (v, sc, -len(rem), list(chosen))
@@ -350,6 +410,167 @@ class Policy:
         if best is None:
             return None
         return best[1], best[3]
+
+
+def _dist_of(stats, step: int = STEP) -> list:
+    """把 turn_stats 的 (bank, bust) 合并成「单回合最终得分」分布（爆骰记 0）。
+
+    bank[x] 是一轮以入账 x 分结束的概率；bust 是一轮以爆骰结束的概率，无论爆骰时
+    本轮已累计多少分，最终入账都是 0，所以全部并入 0 分这一档。
+    step 是赛跑表的分数格；大于 50 时把得分按最近的格归并（目标分很大时用来
+    控制表规模）。
+    """
+    bank, bust = stats
+    agg = defaultdict(float)
+    for x, p in bank.items():
+        if x > 0 and p > 1e-12:
+            agg[int(round(int(x) / step))] += float(p)
+    p0 = sum(float(p) for p in bust.values())
+    if p0 > 0:
+        agg[0] += p0
+    return sorted((u, p) for u, p in agg.items() if p > 1e-12)
+
+
+class RaceModel:
+    """双人赛跑的胜率表（先到目标分者获胜）。
+
+    V_me[r][rp]  = 轮到我行动、我剩余 r 分、对手剩余 rp 分时，我最终获胜的概率；
+    V_opp[r][rp] = 轮到对手行动时的同一概率。
+
+    双方每回合的得分分布由 Policy.turn_stats 给出（爆骰记 0，且累计分达到目标
+    即入账），之后双方都按这张参考分布推进；本回合的锁骰/入账由 WinTurn 依据 V
+    做胜率最大化。
+
+    同一剩余分下双方都爆骰会形成 V_me ↔ V_opp 的循环，这里用代数求解：
+        V_me = B + f0 * V_opp
+        V_opp = D + g0 * V_me
+    """
+
+    def __init__(self, my_stats, opp_stats, r_max, step: int = STEP):
+        step = max(STEP, int(step))
+        size = max(2, int(r_max) // step + 1)
+        self.step = step
+        self.size = size
+        f = _dist_of(my_stats, step)
+        g = _dist_of(opp_stats, step)
+        self.f0 = sum(p for x, p in f if x == 0)
+        self.g0 = sum(p for x, p in g if x == 0)
+        # 每个剩余分档（以分数格为单位）预先切出「0 < x < 剩余格」的部分，以及达标概率
+        self._f_mid = []
+        self._tail_f = []
+        self._g_mid = []
+        for i in range(size):
+            self._f_mid.append([(x, p) for x, p in f if 0 < x < i])
+            self._tail_f.append(sum(p for x, p in f if x >= i))
+            self._g_mid.append([(x, p) for x, p in g if 0 < x < i])
+
+        v_me = [[0.0] * size for _ in range(size)]
+        v_opp = [[0.0] * size for _ in range(size)]
+        for j in range(size):
+            v_me[0][j] = 1.0            # 我已经达标
+            v_opp[0][j] = 1.0
+        for i in range(1, size):
+            v_me[i][0] = 0.0            # 对手已经达标
+            v_opp[i][0] = 0.0
+        denom = 1.0 - self.f0 * self.g0
+        for i in range(1, size):
+            row_me = v_me[i]
+            f_mid = self._f_mid[i]
+            tail_f = self._tail_f[i]
+            for j in range(1, size):
+                b = tail_f
+                for x, p in f_mid:
+                    b += p * v_opp[i - x][j]
+                d = 0.0
+                for y, p in self._g_mid[j]:
+                    d += p * row_me[j - y]
+                v = (b + self.f0 * d) / denom
+                row_me[j] = v
+                v_opp[i][j] = d + self.g0 * v
+        self.v_me = v_me
+        self.v_opp = v_opp
+
+    def _idx(self, remaining_points: int) -> int:
+        """剩余分数 -> 赛跑表下标（向上取整到分数格）"""
+        return max(0, min(self.size - 1,
+                          -(-max(0, int(remaining_points)) // self.step)))
+
+    def win_prob_my_turn(self, my_points: int, opp_points: int) -> float:
+        """轮到我行动时的胜率（参数为双方还差的分数）"""
+        return self.v_me[self._idx(my_points)][self._idx(opp_points)]
+
+    def win_prob_opp_turn(self, my_points: int, opp_points: int) -> float:
+        """轮到对手行动时的胜率（参数为双方还差的分数）"""
+        return self.v_opp[self._idx(my_points)][self._idx(opp_points)]
+
+
+class WinTurn:
+    """本回合的胜率最优策略表。
+
+    给定双方剩余分，把「入账」的价值定义为 V_opp(入账后的剩余, 对手剩余)（即换手
+    后我的胜率），把「继续掷」的价值按所有掷出结果与可锁定子集精确求和，取较大者。
+    这样：
+      · 已达到剩余分 → 立即入账（赢）；
+      · 越接近目标，溢出分越不值钱，会及时收手；
+      · 对手越接近胜利，入账的保守收益越低，会主动提高风险去搏。
+    """
+
+    def __init__(self, policy: Policy, race: RaceModel, my_units: int, opp_units: int):
+        self.pol = policy
+        self.race = race
+        self.my_units = max(1, int(my_units))
+        self.opp_units = max(0, int(opp_units))
+        self.step = policy.step
+        self._build()
+
+    def _build(self) -> None:
+        pol = self.pol
+        n = self.my_units                     # 只用得到 s < 剩余分的部分
+        self.n = n
+        self.bust_value = self.race.win_prob_opp_turn(self.my_units * self.step,
+                                                      self.opp_units * self.step)
+        W = [[0.0] * n for _ in pol.states]
+        bank = [[False] * n for _ in pol.states]
+        for i in range(n - 1, -1, -1):
+            bank_v = self.race.win_prob_opp_turn((self.my_units - i) * self.step,
+                                                 self.opp_units * self.step)
+            for si in range(len(pol.states)):
+                cont = 0.0
+                for p, opts in pol.groups[si]:
+                    if not opts:
+                        cont += p * self.bust_value
+                        continue
+                    best = -1.0
+                    for rem_i, sc in opts:
+                        j = i + sc // self.step
+                        v = 1.0 if j >= n else W[rem_i][j]
+                        if v > best:
+                            best = v
+                    cont += p * best
+                if bank_v >= cont - _EPS:
+                    W[si][i] = bank_v
+                    bank[si][i] = True
+                else:
+                    W[si][i] = cont
+        self.W = W
+        self._bank = bank
+
+    def _lock_value(self, rem_kinds, s: int) -> float:
+        if s >= self.my_units * self.step:
+            return 1.0
+        si = self.pol.index[self.pol._state_key(rem_kinds)]
+        return self.W[si][s // self.step]
+
+    def should_bank(self, kinds, s: int) -> bool:
+        """剩余骰型 kinds、本回合已累计 s 分时是否应当入账"""
+        if s >= self.my_units * self.step:
+            return True
+        si = self.pol.index[self.pol._state_key(kinds)]
+        return self._bank[si][s // self.step]
+
+    def best_lock(self, dice, s: int):
+        """按胜率最大化选择本次锁定的骰子；无解返回 None"""
+        return self.pol.best_lock(dice, s, value_fn=self._lock_value)
 
 
 def build_policy(kinds, probs, score_counts, s_max, wild_kind=None, wild_value=1) -> Policy:

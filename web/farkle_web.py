@@ -16,11 +16,10 @@ from collections import Counter
 from plugins.farkle import (
     DICE_NORMAL, DICE_NUM, PLAYER_NUM, DEFAULT_TARGET, MIN_TARGET, MAX_TARGET,
     MAX_STONES, MAX_BOT_STONES, BID_STEP, BID_LIMIT, IDLE_SECONDS,
-    BOT_ID, BOT_NAME, _BOT_STATS_PATH, _bot_best_lock, _bot_should_bank, _bot_fair_bid,
-    _bot_stats_rows, _record_bot_stats,
+    BOT_ID, BOT_NAME, _bot_best_lock, _bot_should_bank, _bot_fair_bid,
+    _bot_stats_rows, _record_bot_stats, _load_bot_stats,
     _roll_die, _is_wild, _new_die, _faces_text, _dice_set_desc,
     _random_dice_set, _score_selection, _roll_has_score, _DIE_NAMES, _DIE_COLORS,
-    _load_json,
 )
 
 _FINISHED_KEEP_SECONDS = 120   # 已结束的房间保留一会儿，供客户端看到结算结果
@@ -231,8 +230,9 @@ class Room:
                 return
             if self.phase == "keep":
                 p = self.players[self.turn]
-                pick = _bot_best_lock(self.hand, self.turn_score,
-                                      self.target - p["total"], p["dice"], self.target)
+                opp = self.players[1 - self.turn]
+                pick = _bot_best_lock(self.hand, self.turn_score, p["total"], self.target,
+                                      p["dice"], opp["dice"], opp["total"])
                 if pick is None:    # 兜底：无任何可计分组合时按爆骰处理
                     self._log(f"{p['name']} 掷出 {_faces_text(self.hand)}，无法计分——爆骰！"
                               "本回合没有得分")
@@ -245,8 +245,9 @@ class Room:
                 continue
             if self.phase == "decide":
                 p = self.players[self.turn]
-                if _bot_should_bank(p["total"], self.target, p["dice"], self.hand,
-                                    self.turn_score):
+                opp = self.players[1 - self.turn]
+                if _bot_should_bank(p["total"], self.target, p["dice"], opp["dice"],
+                                    opp["total"], self.hand, self.turn_score):
                     self.bank(BOT_ID)
                 else:
                     self.roll(BOT_ID)
@@ -591,7 +592,7 @@ def create_bot_room(qq: int, name: str, target, stones):
 def bot_rank(qq: int) -> dict:
     """人机排行：胜率 + 猫眼石净收益（含机器人自己，与 QQ 端共用 bot_stats.json）"""
     rows = _bot_stats_rows()
-    mine = _load_json(_BOT_STATS_PATH).get(str(qq))
+    mine = _load_bot_stats().get(str(qq))
     my_row = None
     if mine is not None:
         wins = int(mine.get("wins", 0))

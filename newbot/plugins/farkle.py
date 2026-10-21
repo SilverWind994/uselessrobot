@@ -24,7 +24,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from core.command_router import CommandContext, CommandRouter
 from core.message_sender import MessageSender, Target
-from plugins.farkle_policy import build_policy
+from plugins.farkle_policy import build_policy, RaceModel, WinTurn
 
 _BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # newbot/
 _ASSETS_DIR = os.path.join(_BASE_DIR, "assets")
@@ -79,8 +79,6 @@ _KEEP_FOLLOWUP = {
 BOT_ID = -1                      # 机器人哨兵 QQ 号
 BOT_NAME = "喵喵机器人"           # 机器人展示名
 _BOT_STATS_PATH = os.path.join(FARKLE_DIR, "bot_stats.json")   # 人机战绩（按 QQ 存 wins/losses）
-
-BOT_BID_TEMPO_MARGIN = 0.5       # 「先手先到先赢」折算成半个回合的期望得分
 
 # ==================== 骰子与骰组 ====================
 # 新增骰子类型：在 _roll_die 加分支、_DIE_NAMES/_DICE_INFO/_DIE_COLORS 各补一条即可；
@@ -356,8 +354,9 @@ def _roll_has_score(dice) -> bool:
 
 
 # ==================== 机器人决策 ====================
-# 机器人用精确动态规划求最优策略（见 plugins/farkle_policy.py）：每一把锁定哪个
-# 计分子集、什么时候入账，都以「本轮最终期望得分最大」为目标，不再用拍脑袋的入账线。
+# 机器人用精确动态规划求最优策略（见 plugins/farkle_policy.py）：先按双方骰组算出
+# 「每回合得分分布」，再解双人赛跑的胜率表，锁定骰子与是否入账都以「本局最终获胜
+# 概率最大」为目标——越接近目标越保守、对手越接近胜利越搏命，而不是只看回合期望。
 
 _BOT_POLICY_CACHE = {}
 
@@ -404,55 +403,124 @@ def _bot_policy(dice, target: int):
     return pol
 
 
-def _bot_turn_ev(dice, target: int) -> float:
-    """骰组空手开一轮的期望得分（由最优策略算出）"""
-    return _bot_policy(dice, target).turn_ev
+def _rem_units(target: int, total: int) -> int:
+    """距离目标分还差多少（以 50 分为单位向上取整；已达标为 0）"""
+    rem = max(0, int(target) - int(total))
+    return -(-rem // BID_STEP)
+
+
+_BOT_RACE_CACHE = {}
+_BOT_WIN_TURN_CACHE = {}
+
+
+def _dice_key(dice) -> tuple:
+    kinds = dice or [DICE_NORMAL] * DICE_NUM
+    return tuple(sorted(_kind_key(k) for k in kinds))
+
+
+def _bot_race(my_dice, opp_dice, target: int) -> RaceModel:
+    """取（并缓存）双方骰组在指定目标分下的赛跑胜率表"""
+    t = min(MAX_TARGET, max(MIN_TARGET, int(target)))
+    key = (_dice_key(my_dice), _dice_key(opp_dice), t)
+    race = _BOT_RACE_CACHE.get(key)
+    if race is None:
+        if len(_BOT_RACE_CACHE) >= 16:      # 防止长期运行后无限增长
+            _BOT_RACE_CACHE.clear()
+        # 每回合打到「达标即入账」为止的单回合得分分布，作为后续回合的参考
+        # 目标分越大，赛跑表的分数格越粗，避免建表阻塞太久
+        step = BID_STEP if t <= 4000 else (100 if t <= 6500 else 200)
+        race = RaceModel(_bot_policy(my_dice, t).turn_stats(t),
+                         _bot_policy(opp_dice, t).turn_stats(t),
+                         _rem_units(t, -t) * BID_STEP, step)
+        _BOT_RACE_CACHE[key] = race
+    return race
+
+
+def _bot_win_turn(my_total: int, target: int, my_dice, opp_dice, opp_total: int) -> WinTurn:
+    """取（并缓存）当前回合的胜率最优策略表：同一回合内双方剩余分不变"""
+    t = min(MAX_TARGET, max(MIN_TARGET, int(target)))
+    my_u = _rem_units(t, my_total)
+    opp_u = _rem_units(t, opp_total)
+    key = (_dice_key(my_dice), _dice_key(opp_dice), t, my_u, opp_u)
+    win = _BOT_WIN_TURN_CACHE.get(key)
+    if win is None:
+        if len(_BOT_WIN_TURN_CACHE) >= 128:
+            _BOT_WIN_TURN_CACHE.clear()
+        win = WinTurn(_bot_policy(my_dice, t), _bot_race(my_dice, opp_dice, t), my_u, opp_u)
+        _BOT_WIN_TURN_CACHE[key] = win
+    return win
 
 
 def _bot_fair_bid(seat_dice, target: int = DEFAULT_TARGET) -> int:
     """先手位（先手位骰组 + 先手权）的公允价，单位是开局分。
 
-    竞价的本质是「带多少分开局」的赛跑：先手位每轮期望 E0 分，后手位每轮 E1 分。
-    先手位以 -b 开局时要跑 T+b 分、约 (T+b)/E0 轮，后手位约 T/E1 轮；两者轮数
-    相等时双方胜率相当，于是 b ≈ T·(E0/E1 − 1)。再加上「先手先到先赢」带来的
-    半个回合优势（≈ E0/2）。
-
-    出价为负表示「先手位太弱，拿先手要以正分开局作为补偿」；上下限都是目标分，
-    因为再多就等于白送一整个目标分。
+    出价 b 表示先手以 -b 分开局：先手位要多跑 b 分，用赛跑胜率表直接比较，
+    胜率刚好过半（0.5）的那个价就是公允价——先手「先到先赢」的优势已经算在
+    胜率里，不再额外加半个回合的补偿。出价下限 -目标分、上限目标分。
     """
     seat = seat_dice or [[DICE_NORMAL] * DICE_NUM, [DICE_NORMAL] * DICE_NUM]
-    ev0 = _bot_turn_ev(seat[0], target)
-    ev1 = _bot_turn_ev(seat[1], target)
-    val = target * (ev0 / ev1 - 1) + ev0 * BOT_BID_TEMPO_MARGIN
-    val = int(round(val / BID_STEP)) * BID_STEP
-    return max(-target, min(val, target))
+    t = min(MAX_TARGET, max(MIN_TARGET, int(target)))
+    race = _bot_race(seat[0], seat[1], t)
+    hi = t // BID_STEP * BID_STEP              # 出价必须是 50 的倍数
+    lo = -(t // BID_STEP) * BID_STEP
+    for bid in range(hi, lo - 1, -BID_STEP):
+        if race.win_prob_my_turn(max(0, t + bid), t) >= 0.5:
+            return bid
+    return lo
 
 
-def _bot_best_lock(hand, turn_score: int, target_remaining, player_dice, target: int):
-    """按最优策略选择本把锁定的骰子；返回 (得分, 下标列表)，爆骰返回 None"""
-    pol = _bot_policy(player_dice, target)
+def _bot_best_lock(hand, turn_score: int, my_total: int, target: int,
+                   my_dice, opp_dice, opp_total: int):
+    """按胜率最优策略选择本把锁定的骰子；返回 (得分, 下标列表)，爆骰返回 None"""
+    win = _bot_win_turn(my_total, target, my_dice, opp_dice, opp_total)
     pairs = [(_kind_key(d["kind"]), d["value"]) for d in hand]
-    return pol.best_lock(pairs, turn_score, target_remaining)
+    return win.best_lock(pairs, turn_score)
 
 
-def _bot_should_bank(my_total: int, target: int, player_dice, hand,
-                     turn_score: int) -> bool:
-    """是否入账：达到本轮目标分，或最优策略认为继续掷不如现在收手"""
-    pol = _bot_policy(player_dice, target)
+def _bot_should_bank(my_total: int, target: int, my_dice, opp_dice, opp_total: int,
+                     hand, turn_score: int) -> bool:
+    """是否入账：本轮累计分已达剩余分，或继续掷的胜率不如现在收手"""
+    win = _bot_win_turn(my_total, target, my_dice, opp_dice, opp_total)
     # 与 _bot_best_lock 一样先归一化骰型：仙贝骰不在策略表的状态里
-    return pol.should_bank([_kind_key(d["kind"]) for d in hand], turn_score,
-                           target - my_total)
+    return win.should_bank([_kind_key(d["kind"]) for d in hand], turn_score)
+
+
+_BOT_STATS_SCHEMA = 2
+
+
+def _load_bot_stats() -> dict:
+    """读取人机战绩。
+
+    旧版本把玩家输局也记成赢猫眼石（净值恒为正），历史净值无法逐局反推，
+    因此升级一次存档格式时把所有人的净值清零，胜负场次保留。
+    """
+    stats = _load_json(_BOT_STATS_PATH)
+    if int(stats.get("__schema__", 1) or 1) >= _BOT_STATS_SCHEMA:
+        return stats
+    for key, rec in stats.items():
+        if key.startswith("__") or not isinstance(rec, dict):
+            continue
+        rec["net"] = 0
+    stats["__schema__"] = _BOT_STATS_SCHEMA
+    try:
+        _save_json(_BOT_STATS_PATH, stats)
+    except Exception:
+        pass
+    return stats
 
 
 def _record_bot_stats(qq: int, name: str, human_won: bool, stones: int = 0) -> None:
-    """记录一局人机对战：玩家胜负 + 猫眼石净收益（机器人自己的战绩由汇总得出）"""
+    """记录一局人机对战：玩家胜负 + 猫眼石净收益（机器人自己的战绩由汇总得出）。
+
+    stones 是玩家本局实际的猫眼石变化，已带正负号（正=玩家赢、负=玩家输）。
+    """
     try:
-        stats = _load_json(_BOT_STATS_PATH)
+        stats = _load_bot_stats()
         rec = stats.get(str(qq)) or {"name": name, "wins": 0, "losses": 0, "net": 0}
         rec["name"] = name
         key = "wins" if human_won else "losses"
         rec[key] = int(rec.get(key, 0)) + 1
-        rec["net"] = int(rec.get("net", 0)) + (stones if human_won else -stones)
+        rec["net"] = int(rec.get("net", 0)) + int(stones)
         stats[str(qq)] = rec
         _save_json(_BOT_STATS_PATH, stats)
     except Exception:
@@ -461,10 +529,12 @@ def _record_bot_stats(qq: int, name: str, human_won: bool, stones: int = 0) -> N
 
 def _bot_stats_rows() -> list:
     """人机排行行：每位玩家 + 机器人自己（玩家战绩的镜像），按胜率降序"""
-    stats = _load_json(_BOT_STATS_PATH)
+    stats = _load_bot_stats()
     rows = []
     bot_wins = bot_losses = bot_net = 0
     for uid, rec in stats.items():
+        if uid.startswith("__") or not isinstance(rec, dict):
+            continue
         wins = int(rec.get("wins", 0))
         losses = int(rec.get("losses", 0))
         games = wins + losses
@@ -720,7 +790,7 @@ class FarklePlugin:
             lines.append(
                 f"{i}. {r['name']}{tag}：{r['wins']} 胜 {r['losses']} 负"
                 f"（胜率 {r['rate'] * 100:.1f}%）· 净 {r['net']:+d} 猫眼石")
-        mine = _load_json(_BOT_STATS_PATH).get(str(ctx.user_id))
+        mine = _load_bot_stats().get(str(ctx.user_id))
         if mine is not None:
             wins = int(mine.get("wins", 0))
             losses = int(mine.get("losses", 0))
@@ -1193,9 +1263,9 @@ class FarklePlugin:
                 return
 
             game["phase"] = "keep"
-            pick = _bot_best_lock(hand, game["turn_score"],
-                                  game["target"] - player["total"],
-                                  player.get("dice"), game["target"])
+            opp = game["players"][1 - game["turn"]]
+            pick = _bot_best_lock(hand, game["turn_score"], player["total"], game["target"],
+                                  player.get("dice"), opp.get("dice"), opp["total"])
             if pick is None:     # 兜底：无任何可计分组合时按爆骰处理，避免死循环
                 lost = game["turn_score"]
                 self._sender.reply(
@@ -1224,7 +1294,8 @@ class FarklePlugin:
                      + ("\n热骰！骰子全部计分用完，拿回全部骰子，可继续或入账" if hot else ""))
 
             if _bot_should_bank(player["total"], game["target"],
-                                player.get("dice"), game["hand"], game["turn_score"]):
+                                player.get("dice"), opp.get("dice"), opp["total"],
+                                game["hand"], game["turn_score"]):
                 player["total"] += game["turn_score"]
                 self._sender.reply(
                     ctx, f"{player['name']} 入账 +{game['turn_score']} 分，"

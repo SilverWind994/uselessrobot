@@ -226,11 +226,12 @@ def farkle_create(payload: dict, cat_token: str = Cookie(default="")) -> JSONRes
 
 @app.post("/api/farkle/bot")
 def farkle_bot(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
-    """人机对战：直接开一局玩家 vs 喵喵机器人（不结算猫眼石）"""
+    """人机对战：直接开一局玩家 vs 喵喵机器人（可下注猫眼石）"""
     qq = _auth_qq(cat_token)
     if qq is None:
         return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
-    code, err = farkle_web.create_bot_room(qq, _nick_of(qq), payload.get("target"))
+    code, err = farkle_web.create_bot_room(qq, _nick_of(qq), payload.get("target"),
+                                           payload.get("stones"))
     if err:
         return JSONResponse({"ok": False, "msg": err}, status_code=400)
     return JSONResponse({"ok": True, "code": code})

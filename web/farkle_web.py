@@ -15,11 +15,12 @@ from collections import Counter
 
 from plugins.farkle import (
     DICE_NORMAL, DICE_NUM, PLAYER_NUM, DEFAULT_TARGET, MIN_TARGET, MAX_TARGET,
-    MAX_STONES, BID_STEP, BID_LIMIT, IDLE_SECONDS,
+    MAX_STONES, MAX_BOT_STONES, BID_STEP, BID_LIMIT, IDLE_SECONDS,
     BOT_ID, BOT_NAME, _BOT_STATS_PATH, _bot_best_lock, _bot_should_bank, _bot_fair_bid,
+    _bot_stats_rows, _record_bot_stats,
     _roll_die, _is_wild, _new_die, _faces_text, _dice_set_desc,
     _random_dice_set, _score_selection, _roll_has_score, _DIE_NAMES, _DIE_COLORS,
-    _load_json, _save_json,
+    _load_json,
 )
 
 _FINISHED_KEEP_SECONDS = 120   # 已结束的房间保留一会儿，供客户端看到结算结果
@@ -76,7 +77,7 @@ class Room:
         self.code = code
         self.target = target
         self.stones = stones
-        self.bot = bot              # 人机局：第二位玩家是机器人，不结算猫眼石
+        self.bot = bot              # 人机局：第二位玩家是机器人，只结算玩家一侧猫眼石
         self.phase = "waiting"        # waiting / auction / keep / decide / finished
         self.players = [self._new_player(host_qq, host_name)]
         self.seat_dice = []
@@ -370,30 +371,44 @@ class Room:
         self._log(headline or f"{winner['name']} 获胜（{reason}）")
         for p in self.players:
             self._log(f"{p['name']}：{p['total']} 分")
-        self.settle_lines = self._settle(winner)
+        self.settle_lines, moved = self._settle(winner)
         for line in self.settle_lines:
             self._log(line)
         if self.bot:
-            _record_bot_result(self, winner)
+            _record_bot_result(self, winner, moved)
         self._touch()
 
-    def _settle(self, winner: dict) -> list:
+    def _settle(self, winner: dict):
+        """返回 (说明行, 玩家实际结算的猫眼石（正=赢）)"""
         if self.stones <= 0:
-            return []
-        loser = next(p for p in self.players if p["qq"] != winner["qq"])
+            return [], 0
         try:
             cat = _cat()
+            if self.bot:
+                # 机器人没有猫眼石账户，只结算玩家一侧，机器人盈亏记在战绩里
+                human = next(p for p in self.players if p["qq"] != BOT_ID)
+                delta = self.stones if human["qq"] == winner["qq"] else -self.stones
+                before = cat.get_eye_stones(human["qq"])
+                after = cat.add_eye_stones(human["qq"], delta)
+                payer, payee = ((BOT_NAME, human["name"]) if delta > 0
+                                else (human["name"], BOT_NAME))
+                lines = [f"{payer} 支付 {self.stones} 猫眼石给 {payee}"
+                         f"（{human['name']} {before}→{after}）"]
+                if after < 0:
+                    lines.append(f"{human['name']} 猫眼石不足，现有欠债 {-after} 个")
+                return lines, delta
+            loser = next(p for p in self.players if p["qq"] != winner["qq"])
             before_w = cat.get_eye_stones(winner["qq"])
             before_l = cat.get_eye_stones(loser["qq"])
             after_w = cat.add_eye_stones(winner["qq"], self.stones)
             after_l = cat.add_eye_stones(loser["qq"], -self.stones)
         except Exception as e:
-            return [f"（猫眼石结算失败：{e}）"]
+            return [f"（猫眼石结算失败：{e}）"], 0
         lines = [f"{loser['name']} 支付 {self.stones} 猫眼石给 {winner['name']}"
                  f"（{winner['name']} {before_w}→{after_w}，{loser['name']} {before_l}→{after_l}）"]
         if after_l < 0:
             lines.append(f"{loser['name']} 猫眼石不足，现有欠债 {-after_l} 个")
-        return lines
+        return lines, self.stones
 
     # ==================== 视图 ====================
 
@@ -451,21 +466,12 @@ def _score_selected(selected) -> int:
 
 # ==================== 房间管理 ====================
 
-def _record_bot_result(room: Room, winner: dict) -> None:
-    """人机局结束时记录玩家对机器人的胜负（与 QQ 端共用同一份战绩文件）"""
+def _record_bot_result(room: Room, winner: dict, stones: int = 0) -> None:
+    """人机局结束时记录玩家胜负与猫眼石净收益（与 QQ 端共用同一份战绩文件）"""
     human = next((p for p in room.players if p["qq"] != BOT_ID), None)
     if human is None:
         return
-    try:
-        stats = _load_json(_BOT_STATS_PATH)
-        rec = stats.get(str(human["qq"])) or {"name": human["name"], "wins": 0, "losses": 0}
-        rec["name"] = human["name"]
-        key = "wins" if human["qq"] == winner["qq"] else "losses"
-        rec[key] = int(rec.get(key, 0)) + 1
-        stats[str(human["qq"])] = rec
-        _save_json(_BOT_STATS_PATH, stats)
-    except Exception:
-        pass    # 战绩只是附加信息，写失败不影响对局结算
+    _record_bot_stats(human["qq"], human["name"], human["qq"] == winner["qq"], stones)
 
 
 def _new_code() -> str:
@@ -552,8 +558,8 @@ def create_room(qq: int, name: str, target, stones):
         return code, None
 
 
-def create_bot_room(qq: int, name: str, target):
-    """人机局：直接建房并把机器人拉进来，返回 (code, 错误文案)。不结算猫眼石。"""
+def create_bot_room(qq: int, name: str, target, stones):
+    """人机局：直接建房并把机器人拉进来，返回 (code, 错误文案)。可下注猫眼石。"""
     with _ROOMS_LOCK:
         _reap_locked()
         exist = _in_other_room_locked(qq)
@@ -565,35 +571,40 @@ def create_bot_room(qq: int, name: str, target):
             return None, "目标分要是数字喵"
         if not (MIN_TARGET <= target <= MAX_TARGET):
             return None, f"目标分要在 {MIN_TARGET}~{MAX_TARGET} 之间喵"
+        try:
+            stones = int(stones) if stones not in (None, "") else 0
+        except (TypeError, ValueError):
+            return None, "猫眼石数目要是数字喵"
+        if not (0 <= stones <= MAX_BOT_STONES):
+            return None, f"人机局的猫眼石要在 0~{MAX_BOT_STONES} 之间喵"
+        if stones > 0:
+            debt = _debt_of(qq)
+            if debt > 0:
+                return None, f"你有 {debt} 个猫眼石欠债，不能开猫眼石局喵"
         code = _new_code()
-        room = Room(code, qq, name, target, 0, bot=True)
+        room = Room(code, qq, name, target, stones, bot=True)
         _ROOMS[code] = room
         room.start_as_bot()
         return code, None
 
 
 def bot_rank(qq: int) -> dict:
-    """人机胜率排行（与 QQ 端共用 bot_stats.json）"""
-    stats = _load_json(_BOT_STATS_PATH)
-    rows = []
-    for uid, rec in stats.items():
-        wins = int(rec.get("wins", 0))
-        losses = int(rec.get("losses", 0))
-        games = wins + losses
-        if games <= 0:
-            continue
-        rows.append({"name": rec.get("name") or uid, "wins": wins, "losses": losses,
-                     "games": games, "rate": wins / games})
-    rows.sort(key=lambda r: (-r["rate"], -r["games"], -r["wins"]))
-    mine = stats.get(str(qq))
+    """人机排行：胜率 + 猫眼石净收益（含机器人自己，与 QQ 端共用 bot_stats.json）"""
+    rows = _bot_stats_rows()
+    mine = _load_json(_BOT_STATS_PATH).get(str(qq))
     my_row = None
     if mine is not None:
         wins = int(mine.get("wins", 0))
         losses = int(mine.get("losses", 0))
         games = wins + losses
         my_row = {"wins": wins, "losses": losses, "games": games,
-                  "rate": (wins / games) if games else 0.0}
-    return {"name": BOT_NAME, "rows": rows[:10], "mine": my_row}
+                  "rate": (wins / games) if games else 0.0,
+                  "net": int(mine.get("net", 0))}
+    shown = rows[:10]
+    bot_row = next((r for r in rows if r["bot"]), None)
+    if bot_row is not None and bot_row not in shown:
+        shown.append(bot_row)   # 机器人即使掉出前 10 也固定展示
+    return {"name": BOT_NAME, "rows": shown, "mine": my_row}
 
 
 def join_room(code: str, qq: int, name: str):

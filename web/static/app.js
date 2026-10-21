@@ -283,11 +283,12 @@ async function createRoom() {
 async function startBotGame() {
   const msg = document.getElementById('fk-bot-msg');
   const target = document.getElementById('fk-bot-target').value;
+  const stones = document.getElementById('fk-bot-stones').value;
   msg.textContent = '';
   const { status, data } = await api('/api/farkle/bot', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ target: target }),
+    body: JSON.stringify({ target: target, stones: stones }),
   });
   if (status === 200 && data.ok) enterRoom(data.code);
   else msg.textContent = data.msg || '开局失败喵';
@@ -303,10 +304,10 @@ async function loadBotRank() {
       <span class="rank-no">${i + 1}</span>
       <span class="rank-name">${esc(r.name)}</span>
       <span class="rank-val">${r.wins} 胜 ${r.losses} 负</span>
-      <span class="rank-reward">胜率 ${(r.rate * 100).toFixed(1)}%</span>
+      <span class="rank-reward">胜率 ${(r.rate * 100).toFixed(1)}% · 净 ${r.net > 0 ? '+' : ''}${r.net}</span>
     </div>`).join('');
   const mine = data.mine
-    ? `<p class="hint">你的战绩：${data.mine.wins} 胜 ${data.mine.losses} 负（胜率 ${(data.mine.rate * 100).toFixed(1)}%）</p>`
+    ? `<p class="hint">你的战绩：${data.mine.wins} 胜 ${data.mine.losses} 负（胜率 ${(data.mine.rate * 100).toFixed(1)}%）· 净 ${data.mine.net > 0 ? '+' : ''}${data.mine.net} 猫眼石</p>`
     : '<p class="hint">你还没有对战记录，挑战一次机器人吧</p>';
   box.innerHTML = (rows || '<p class="room-empty">还没有人对战过机器人喵</p>') + mine;
 }

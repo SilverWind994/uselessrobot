@@ -39,6 +39,7 @@ TOURNAMENT_TARGETS = (2000, 4000)   # 锦标赛随机分数目标（二选一）
 MIN_TARGET = 500             # 分数目标下限
 MAX_TARGET = 10000           # 分数目标上限
 MAX_STONES = 20              # 猫眼石数目上限
+MAX_BOT_STONES = 10          # 人机局可下注的猫眼石上限
 
 # 先手拍卖规则
 BID_STEP = 50                # 出价必须为该数的倍数
@@ -149,7 +150,7 @@ DICE_LOADOUTS = {
     "odd3":    [DICE_ODD] * 2 + [DICE_NORMAL] * 4,                 # 2奇数+4普通
     "grozav5": [DICE_GROZAV] * 5 + [DICE_NORMAL],                  # 5格罗扎夫+1普通
     "tricky3": [DICE_NORMAL] * 3 + [DICE_TRICKY] * 3,              # 3普通+3骗子
-    "kaiji1":  [DICE_KAIJI] + [DICE_NORMAL] + [DICE_BANCHOU] * 4,  # 1开司+1普通+4班长
+    "banchou4": [DICE_BANCHOU] * 4 + [DICE_NORMAL] * 2,            # 2普通+4班长
 }
 
 # 渲染配色（棋盘上按骰子类型着色）
@@ -409,19 +410,22 @@ def _bot_turn_ev(dice, target: int) -> float:
 
 
 def _bot_fair_bid(seat_dice, target: int = DEFAULT_TARGET) -> int:
-    """先手位（先手位骰组 + 先手权）的公允价，单位是开局分；0 表示不值得花钱拿。
+    """先手位（先手位骰组 + 先手权）的公允价，单位是开局分。
 
     竞价的本质是「带多少分开局」的赛跑：先手位每轮期望 E0 分，后手位每轮 E1 分。
     先手位以 -b 开局时要跑 T+b 分、约 (T+b)/E0 轮，后手位约 T/E1 轮；两者轮数
     相等时双方胜率相当，于是 b ≈ T·(E0/E1 − 1)。再加上「先手先到先赢」带来的
-    半个回合优势（≈ E0/2）。出价上限取目标分本身：再多就等于白送一整个目标分。
+    半个回合优势（≈ E0/2）。
+
+    出价为负表示「先手位太弱，拿先手要以正分开局作为补偿」；上下限都是目标分，
+    因为再多就等于白送一整个目标分。
     """
     seat = seat_dice or [[DICE_NORMAL] * DICE_NUM, [DICE_NORMAL] * DICE_NUM]
     ev0 = _bot_turn_ev(seat[0], target)
     ev1 = _bot_turn_ev(seat[1], target)
     val = target * (ev0 / ev1 - 1) + ev0 * BOT_BID_TEMPO_MARGIN
     val = int(round(val / BID_STEP)) * BID_STEP
-    return max(0, min(val, target))
+    return max(-target, min(val, target))
 
 
 def _bot_best_lock(hand, turn_score: int, target_remaining, player_dice, target: int):
@@ -438,6 +442,47 @@ def _bot_should_bank(my_total: int, target: int, player_dice, hand,
     # 与 _bot_best_lock 一样先归一化骰型：仙贝骰不在策略表的状态里
     return pol.should_bank([_kind_key(d["kind"]) for d in hand], turn_score,
                            target - my_total)
+
+
+def _record_bot_stats(qq: int, name: str, human_won: bool, stones: int = 0) -> None:
+    """记录一局人机对战：玩家胜负 + 猫眼石净收益（机器人自己的战绩由汇总得出）"""
+    try:
+        stats = _load_json(_BOT_STATS_PATH)
+        rec = stats.get(str(qq)) or {"name": name, "wins": 0, "losses": 0, "net": 0}
+        rec["name"] = name
+        key = "wins" if human_won else "losses"
+        rec[key] = int(rec.get(key, 0)) + 1
+        rec["net"] = int(rec.get("net", 0)) + (stones if human_won else -stones)
+        stats[str(qq)] = rec
+        _save_json(_BOT_STATS_PATH, stats)
+    except Exception:
+        pass    # 战绩只是附加信息，写失败不影响对局结算
+
+
+def _bot_stats_rows() -> list:
+    """人机排行行：每位玩家 + 机器人自己（玩家战绩的镜像），按胜率降序"""
+    stats = _load_json(_BOT_STATS_PATH)
+    rows = []
+    bot_wins = bot_losses = bot_net = 0
+    for uid, rec in stats.items():
+        wins = int(rec.get("wins", 0))
+        losses = int(rec.get("losses", 0))
+        games = wins + losses
+        if games <= 0:
+            continue
+        net = int(rec.get("net", 0))
+        bot_wins += losses
+        bot_losses += wins
+        bot_net -= net
+        rows.append({"name": rec.get("name") or uid, "wins": wins, "losses": losses,
+                     "games": games, "rate": wins / games, "net": net, "bot": False})
+    if bot_wins + bot_losses > 0:
+        games = bot_wins + bot_losses
+        rows.append({"name": BOT_NAME, "wins": bot_wins, "losses": bot_losses,
+                     "games": games, "rate": bot_wins / games, "net": bot_net,
+                     "bot": True})
+    rows.sort(key=lambda r: (-r["rate"], -r["games"], -r["wins"]))
+    return rows
 
 
 # ==================== 插件 ====================
@@ -604,7 +649,7 @@ class FarklePlugin:
                  f"另一位玩家发送「farkle 加入」即可开局")
 
     def _cmd_bot(self, ctx: CommandContext, rest: str) -> None:
-        """与机器人开局：单人创建，机器人自动对局（最优决策），不涉及猫眼石结算"""
+        """与机器人开局：单人创建，机器人自动对局（最优决策），可下注猫眼石"""
         gid = ctx.group_id
         game = self._load_game(gid)
         if game is not None:
@@ -616,16 +661,32 @@ class FarklePlugin:
 
         tokens = rest.split()
         target = DEFAULT_TARGET
+        stones = 0
         if tokens:
             if not tokens[0].isdigit():
                 self._sender.reply(ctx, "分数目标要是数字喵，例如「farkle 人机 5000」")
                 return
             target = int(tokens[0])
+        if len(tokens) > 1:
+            if not tokens[1].isdigit():
+                self._sender.reply(
+                    ctx, f"猫眼石数目要是数字喵，例如「farkle 人机 5000 5」")
+                return
+            stones = int(tokens[1])
         if not (MIN_TARGET <= target <= MAX_TARGET):
             self._sender.reply(ctx, f"分数目标要在 {MIN_TARGET}~{MAX_TARGET} 之间喵")
             return
+        if not (0 <= stones <= MAX_BOT_STONES):
+            self._sender.reply(
+                ctx, f"人机局的猫眼石要在 0~{MAX_BOT_STONES} 之间喵")
+            return
+        if stones > 0 and self._debt_of(ctx.user_id) > 0:
+            self._sender.reply(
+                ctx, f"你还有 {self._debt_of(ctx.user_id)} 个猫眼石欠债，"
+                     f"不能开猫眼石局喵")
+            return
 
-        game = self._new_game(target, 0)
+        game = self._new_game(target, stones)
         game["players"].append(self._new_player(ctx.user_id, ctx.user_name))
         game["players"].append(self._new_player(BOT_ID, BOT_NAME))
         game["started"] = True
@@ -635,39 +696,38 @@ class FarklePlugin:
         game["phase"] = "auction"
         game["auction"] = {"bid": None, "holder": None, "turn": 1}
         self._save_game(gid, game)
+        match_text = (f"猫眼石局（{stones} 猫眼石）" if stones > 0 else "普通局")
         self._sender.reply(
-            ctx, f"🎲 你向 {BOT_NAME} 发起 Farkle 挑战：目标 {target} 分。\n"
+            ctx, f"🎲 你向 {BOT_NAME} 发起 Farkle 挑战：目标 {target} 分，{match_text}。\n"
                  f"{self._dice_announce(game)}\n"
                  f"{BOT_NAME} 用最优决策自动对局，由它先出价。")
         self._bot_auction(ctx, gid, game)
 
     def _cmd_bot_rank(self, ctx: CommandContext) -> None:
-        """人机对战胜率排行"""
-        stats = _load_json(_BOT_STATS_PATH)
-        rows = []
-        for uid, r in stats.items():
-            wins = int(r.get("wins", 0))
-            losses = int(r.get("losses", 0))
-            games = wins + losses
-            if games <= 0:
-                continue
-            rows.append((wins / games, games, wins, r.get("name") or uid))
+        """人机排行：胜率 + 猫眼石净收益（机器人自己也上榜）"""
+        rows = _bot_stats_rows()
         if not rows:
             self._sender.reply(
                 ctx, f"还没有人对战过 {BOT_NAME} 喵，发送「farkle 人机」来挑战吧")
             return
-        rows.sort(key=lambda x: (-x[0], -x[1], -x[2]))
-        lines = [f"🏆 Farkle 人机胜率排行（对战 {BOT_NAME}）"]
-        for i, (rate, games, wins, name) in enumerate(rows[:10], 1):
+        lines = [f"🏆 Farkle 人机排行（对战 {BOT_NAME}）"]
+        shown = rows[:10]
+        bot_row = next((r for r in rows if r["bot"]), None)
+        if bot_row is not None and bot_row not in shown:
+            shown.append(bot_row)   # 机器人即使掉出前 10 也固定展示
+        for i, r in enumerate(shown, 1):
+            tag = "（机器人）" if r["bot"] else ""
             lines.append(
-                f"{i}. {name}：{wins} 胜 {games - wins} 负（胜率 {rate * 100:.1f}%）")
-        mine = stats.get(str(ctx.user_id))
+                f"{i}. {r['name']}{tag}：{r['wins']} 胜 {r['losses']} 负"
+                f"（胜率 {r['rate'] * 100:.1f}%）· 净 {r['net']:+d} 猫眼石")
+        mine = _load_json(_BOT_STATS_PATH).get(str(ctx.user_id))
         if mine is not None:
             wins = int(mine.get("wins", 0))
             losses = int(mine.get("losses", 0))
             games = wins + losses
             rate = (wins / games * 100) if games else 0.0
-            lines.append(f"你的战绩：{wins} 胜 {losses} 负（胜率 {rate:.1f}%）")
+            lines.append(f"你的战绩：{wins} 胜 {losses} 负（胜率 {rate:.1f}%）"
+                         f"· 净 {int(mine.get('net', 0)):+d} 猫眼石")
         else:
             lines.append("你还没有对战记录，发送「farkle 人机」来挑战吧")
         self._sender.reply(ctx, "\n".join(lines))
@@ -1182,8 +1242,9 @@ class FarklePlugin:
         lines = [headline or f"🏆 {winner['name']} 达到 {game['target']} 分，赢下本局 Farkle！"]
         for p in game["players"]:
             lines.append(f"{p['name']}：{p['total']} 分")
-        lines += self._settle(game, winner)
-        self._record_bot_result(game, winner)   # 人机对局记录玩家战绩
+        settle_lines, moved = self._settle(game, winner)
+        lines += settle_lines
+        self._record_bot_result(game, winner, moved)   # 人机对局记录战绩与猫眼石盈亏
         self._remove_game(ctx.group_id)   # 先清状态，锦标赛回调才能紧接着开下一局
         self._report_result(ctx.group_id, {
             "game": "farkle",
@@ -1193,15 +1254,30 @@ class FarklePlugin:
         })
         self._sender.reply(ctx, "\n".join(lines))
 
-    def _settle(self, game: dict, winner: dict) -> list:
-        """按猫眼石数目结算，返回说明行"""
+    def _settle(self, game: dict, winner: dict):
+        """按猫眼石数目结算，返回 (说明行, 玩家实际结算的猫眼石（正=赢）)"""
         stones = game["stones"]
         if stones <= 0:
-            return []
+            return [], 0
         if self._cat is None:
-            return ["（猫眼石结算失败：猫眼石系统不可用）"]
-        loser = next(p for p in game["players"] if p["id"] != winner["id"])
+            return ["（猫眼石结算失败：猫眼石系统不可用）"], 0
 
+        if any(p["id"] == BOT_ID for p in game["players"]):
+            # 人机局：机器人没有猫眼石账户，只结算玩家一侧，机器人盈亏记在战绩里
+            human = next(p for p in game["players"] if p["id"] != BOT_ID)
+            delta = stones if human["id"] == winner["id"] else -stones
+            before = self._cat.get_eye_stones(human["id"])
+            after = self._cat.add_eye_stones(human["id"], delta)
+            payer, payee = ((BOT_NAME, human["name"]) if delta > 0
+                            else (human["name"], BOT_NAME))
+            lines = [f"{payer} 支付 {stones} 猫眼石给 {payee}"
+                     f"（{human['name']} 余额 {before} → {after}）"]
+            if after < 0:
+                lines.append(f"{human['name']} 猫眼石不足，现有欠债 {-after} 个，"
+                             "还清前不能参与猫眼石局")
+            return lines, delta
+
+        loser = next(p for p in game["players"] if p["id"] != winner["id"])
         before_win = self._cat.get_eye_stones(winner["id"])
         before_lose = self._cat.get_eye_stones(loser["id"])
         after_win = self._cat.add_eye_stones(winner["id"], stones)
@@ -1213,7 +1289,7 @@ class FarklePlugin:
         if after_lose < 0:
             lines.append(
                 f"{loser['name']} 猫眼石不足，现有欠债 {-after_lose} 个，还清前不能参与猫眼石局")
-        return lines
+        return lines, stones
 
     def _debt_of(self, user_id: int) -> int:
         """玩家的猫眼石欠债数量（余额为负时为其绝对值）"""
@@ -1223,20 +1299,14 @@ class FarklePlugin:
         return -balance if balance < 0 else 0
 
     @staticmethod
-    def _record_bot_result(game: dict, winner: dict) -> None:
-        """人机对局结束时记录玩家对机器人的胜负（非人机局不记录）"""
+    def _record_bot_result(game: dict, winner: dict, stones: int = 0) -> None:
+        """人机对局结束时记录玩家胜负与猫眼石净收益（非人机局不记录）"""
         if not any(p["id"] == BOT_ID for p in game["players"]):
             return
         human = next((p for p in game["players"] if p["id"] != BOT_ID), None)
         if human is None:
             return
-        stats = _load_json(_BOT_STATS_PATH)
-        rec = stats.get(str(human["id"])) or {"name": human["name"], "wins": 0, "losses": 0}
-        rec["name"] = human["name"]
-        key = "wins" if human["id"] == winner["id"] else "losses"
-        rec[key] = int(rec.get(key, 0)) + 1
-        stats[str(human["id"])] = rec
-        _save_json(_BOT_STATS_PATH, stats)
+        _record_bot_stats(human["id"], human["name"], human["id"] == winner["id"], stones)
 
     # ==================== 内部逻辑 ====================
 
@@ -1431,15 +1501,15 @@ class FarklePlugin:
             "· 灌铅骰：2/3 概率出 1\n"
             "· 格罗扎夫骰：2/3 概率出 2\n"
             "· 骗子的骰：更容易出 1/5（各 24%），3 只有 10%\n"
-            "· 开司骰：只能出 1｜班长骰：只能出 4/5/6\n"
+            "· 班长骰：只能出 4/5/6\n"
             "· 仙贝骰：与普通骰完全相同（无特效），仅颜色为粉色；"
             "抽到普通骰组时会随机有 1~6 颗变成仙贝骰\n"
             "· 锁定时优先消耗普通骰子，其次特制骰的非万能面，最后才动用万能面\n"
             "· 现有骰组（各 1/8 概率）：\n"
             "  6普通 / 6偶数 / 1灌铅+5普通 / 1恶魔+5普通 / 2奇数+4普通 /\n"
-            "  5格罗扎夫+1普通 / 3普通+3骗子 / 1开司+1普通+4班长\n"
+            "  5格罗扎夫+1普通 / 3普通+3骗子 / 2普通+4班长\n"
             "· 棋盘图按骰子类型着色：白=普通 蓝=奇数 绿=偶数 红=恶魔 金=灌铅 "
-            "紫=格罗扎夫 粉=骗子 青=开司 灰=班长 玫粉=仙贝\n"
+            "紫=格罗扎夫 粉=骗子 灰=班长 玫粉=仙贝\n"
             "【先手拍卖】（正式掷骰前，骰组公告后进行）\n"
             f"· 由后加入的人先出价；出价必须是 {BID_STEP} 的倍数，可为 0 或负数，"
             f"范围 ±{BID_LIMIT}\n"
@@ -1465,10 +1535,12 @@ class FarklePlugin:
             "   （如 4 个 4=800、5 个 4=1600、4 个 5=1000、6 个 6=4800）\n"
             "· 顺子（1,2,3,4,5,6）= 1500；小顺子 1~5 = 500、2~6 = 750（如 23456）\n"
             "【人机对战】\n"
-            "· 「farkle 人机 [目标分]」：单独向机器人挑战（缺省目标 4000），"
+            f"· 「farkle 人机 [目标分] [猫眼石]」：单独向机器人挑战（缺省目标 4000），"
             f"{BOT_NAME} 用最优决策自动对局\n"
-            "· 人机局不涉及猫眼石；机器人一样参与先手拍卖（由它先出价）\n"
-            "· 「farkle 胜率」：查看人机对战胜率排行（前 10 名 + 你自己的战绩）\n"
+            f"· 人机局可下注 0~{MAX_BOT_STONES} 个猫眼石（缺省 0，即普通局），"
+            "盈亏计入人机排行榜\n"
+            "· 机器人一样参与先手拍卖（由它先出价）\n"
+            "· 「farkle 胜率」：人机排行（胜率 + 猫眼石净收益，机器人自己也上榜）\n"
             "【结算与作废】\n"
             "· 先达到目标分者获胜；有猫眼石时由输家支付给赢家相应数量\n"
             "· 输家猫眼石不足则余额记成负数（欠债），还清前不能参与猫眼石局\n"

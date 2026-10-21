@@ -110,6 +110,7 @@ class Room:
         self.finished = False
         self.result = None
         self.log = []
+        self.chat = []
         self.created_at = time.time()
         self.updated_at = time.time()
         # 对局状态菜单用 dict，便于直接复用 plugins.mahjong17 里的 _deal
@@ -357,6 +358,21 @@ class Room:
             lines.append(f"猫眼石不足，现有欠债 {-after} 个，还清前不能参与猫眼石局")
         return lines
 
+    # ==================== 房间发言 ====================
+
+    def say(self, qq: int, text, name: str = ""):
+        """房间内发言（对局双方与观众都能说话），返回错误文案（None 表示成功）"""
+        body = str(text or "").strip()
+        if not body:
+            return "说点什么喵"
+        mine = self._pid(qq)
+        speaker = self.g["player_name"][mine] if mine >= 0 else (name or f"观众{qq}")
+        self.chat.append({"name": speaker, "text": body[:80], "time": int(time.time())})
+        if len(self.chat) > 40:
+            self.chat = self.chat[-40:]
+        self._touch()
+        return None
+
     # ==================== 视图（按玩家裁剪）====================
 
     def view(self, qq: int) -> dict:
@@ -378,6 +394,7 @@ class Room:
             "discards": [_discards_of(g["take_tiles"][0]), _discards_of(g["take_tiles"][1])],
             "furiten": g["furiten"][mine] if mine >= 0 else False,
             "log": self.log[-30:],
+            "chat": self.chat[-30:],
         }
         if mine >= 0:
             if self.phase == "selecting":
@@ -515,6 +532,16 @@ def snapshot(code: str, qq: int):
         if room is None:
             return None
         return room.view(qq)
+
+
+def say(code: str, qq: int, text, name: str = ""):
+    """房间发言，返回 (错误文案, 房间视图)"""
+    with _ROOMS_LOCK:
+        room = _ROOMS.get(code)
+        if room is None:
+            return "房间不存在或已结束喵", None
+        err = room.say(qq, text, name)
+        return err, room.view(qq)
 
 
 def act(code: str, qq: int, action: str, payload: dict):

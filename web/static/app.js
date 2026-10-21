@@ -221,6 +221,7 @@ function backToLobby() {
   clearInterval(fkRoomTimer);
   fkRoomTimer = null;
   fkCode = null;
+  hideChat('fk');
   fkRoom.classList.add('hidden');
   fkLobby.classList.remove('hidden');
   refreshRooms();
@@ -379,6 +380,7 @@ async function enterRoom(code) {
   fkSelected = new Set();
   fkLobby.classList.add('hidden');
   fkRoom.classList.remove('hidden');
+  showChat('fk');
   buildRoomDom();
   await pollRoom();
   clearInterval(fkRoomTimer);
@@ -400,6 +402,7 @@ async function pollRoom() {
     fkSig = s;
     renderRoom(data.room);
   }
+  renderChat('fk', data.room.chat);
 }
 
 function buildRoomDom() {
@@ -635,10 +638,7 @@ function renderLog(state) {
 
 document.getElementById('btn-farkle').addEventListener('click', enterFarkle);
 document.getElementById('btn-fk-back').addEventListener('click', () => {
-  clearInterval(fkLobbyTimer);
-  clearInterval(fkRoomTimer);
-  fkPanel.classList.add('hidden');
-  homePanel.classList.remove('hidden');
+  closeGamePanels();
   refresh();
 });
 document.getElementById('fk-stones-on').addEventListener('change', (e) => {
@@ -695,6 +695,7 @@ function backToYzLobby() {
   clearInterval(yzRoomTimer);
   yzRoomTimer = null;
   yzCode = null;
+  hideChat('yz');
   yzRoom.classList.add('hidden');
   yzLobby.classList.remove('hidden');
   refreshYzRooms();
@@ -799,6 +800,7 @@ async function enterYzRoom(code) {
   yzSelected = new Set();
   yzLobby.classList.add('hidden');
   yzRoom.classList.remove('hidden');
+  showChat('yz');
   buildYzRoomDom();
   await pollYzRoom();
   clearInterval(yzRoomTimer);
@@ -816,6 +818,7 @@ async function pollYzRoom() {
     yzSig = s;
     renderYzRoom(data.room);
   }
+  renderChat('yz', data.room.chat);
 }
 
 function buildYzRoomDom() {
@@ -998,10 +1001,7 @@ function renderYzLog(state) {
 
 document.getElementById('btn-yahtzee').addEventListener('click', enterYahtzee);
 document.getElementById('btn-yz-back').addEventListener('click', () => {
-  clearInterval(yzLobbyTimer);
-  clearInterval(yzRoomTimer);
-  yzPanel.classList.add('hidden');
-  homePanel.classList.remove('hidden');
+  closeGamePanels();
   refresh();
 });
 document.getElementById('btn-yz-create').addEventListener('click', createYzRoom);
@@ -1093,6 +1093,7 @@ function backToMjLobby() {
   clearInterval(mjRoomTimer);
   mjRoomTimer = null;
   mjCode = null;
+  hideChat('mj');
   mjRoom.classList.add('hidden');
   mjLobby.classList.remove('hidden');
   refreshMjRooms();
@@ -1201,6 +1202,7 @@ async function enterMjRoom(code) {
   mjSel = new Set();
   mjLobby.classList.add('hidden');
   mjRoom.classList.remove('hidden');
+  showChat('mj');
   buildMjRoomDom();
   await pollMjRoom();
   clearInterval(mjRoomTimer);
@@ -1218,6 +1220,7 @@ async function pollMjRoom() {
     mjSig = s;
     renderMjRoom(data.room);
   }
+  renderChat('mj', data.room.chat);
 }
 
 function buildMjRoomDom() {
@@ -1487,13 +1490,90 @@ function renderMjLog(state) {
 
 document.getElementById('btn-mahjong').addEventListener('click', enterMahjong);
 document.getElementById('btn-mj-back').addEventListener('click', () => {
-  clearInterval(mjLobbyTimer);
-  clearInterval(mjRoomTimer);
-  mjPanel.classList.add('hidden');
-  homePanel.classList.remove('hidden');
+  closeGamePanels();
   refresh();
 });
 document.getElementById('btn-mj-create').addEventListener('click', createMjRoom);
+
+// ==================== 房间发言（对局双方 + 观众） ====================
+
+const chatSigs = { fk: '', yz: '', mj: '' };
+
+function showChat(prefix) {
+  chatSigs[prefix] = '';
+  const card = document.getElementById(prefix + '-chat');
+  if (card) card.classList.remove('hidden');
+}
+
+function hideChat(prefix) {
+  chatSigs[prefix] = '';
+  const card = document.getElementById(prefix + '-chat');
+  if (card) card.classList.add('hidden');
+}
+
+function chatTime(ts) {
+  const d = new Date((ts || 0) * 1000);
+  const pad = (n) => String(n).padStart(2, '0');
+  return pad(d.getHours()) + ':' + pad(d.getMinutes());
+}
+
+function renderChat(prefix, chat) {
+  const list = document.getElementById(prefix + '-chat-list');
+  if (!list) return;
+  const items = chat || [];
+  const sig = items.map((m) => m.time + ':' + m.name + ':' + m.text).join('|');
+  if (sig === chatSigs[prefix]) return;
+  chatSigs[prefix] = sig;
+  list.innerHTML = '';
+  if (!items.length) {
+    const p = document.createElement('p');
+    p.className = 'room-empty';
+    p.textContent = '还没有人发言喵';
+    list.appendChild(p);
+    return;
+  }
+  items.forEach((m) => {
+    const row = document.createElement('div');
+    row.className = 'chat-row';
+    const name = document.createElement('span');
+    name.className = 'chat-name';
+    name.textContent = m.name || '玩家';
+    const text = document.createElement('span');
+    text.className = 'chat-text';
+    text.textContent = m.text || '';
+    const time = document.createElement('span');
+    time.className = 'chat-time';
+    time.textContent = chatTime(m.time);
+    row.appendChild(name);
+    row.appendChild(text);
+    row.appendChild(time);
+    list.appendChild(row);
+  });
+  list.scrollTop = list.scrollHeight;
+}
+
+function wireChat(prefix, endpoint, getCode, toast) {
+  const form = document.getElementById(prefix + '-chat-form');
+  const input = document.getElementById(prefix + '-chat-input');
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const text = input.value.trim();
+    const code = getCode();
+    if (!text || !code) return;
+    const { status, data } = await api(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: code, text: text }),
+    });
+    if (status !== 200 || !data.ok) { toast(data.msg || '发言失败喵'); return; }
+    input.value = '';
+    renderChat(prefix, data.room && data.room.chat);
+  });
+}
+
+wireChat('fk', '/api/farkle/say', () => fkCode, fkMsg);
+wireChat('yz', '/api/yahtzee/say', () => yzCode, yzMsg);
+wireChat('mj', '/api/mahjong17/say', () => mjCode, mjMsg);
 
 // ==================== 顶部导航（喵喵远征队 / 小游戏 / 个人 / 开发中 / 管理） ====================
 
@@ -1505,7 +1585,26 @@ function showTabNav() {
   mainNav.classList.remove('hidden');
 }
 
+function closeGamePanels() {
+  [fkLobbyTimer, yzLobbyTimer, mjLobbyTimer, fkRoomTimer, yzRoomTimer, mjRoomTimer]
+    .forEach((t) => clearInterval(t));
+  fkLobbyTimer = null;
+  yzLobbyTimer = null;
+  mjLobbyTimer = null;
+  fkRoomTimer = null;
+  yzRoomTimer = null;
+  mjRoomTimer = null;
+  fkPanel.classList.add('hidden');
+  yzPanel.classList.add('hidden');
+  mjPanel.classList.add('hidden');
+  hideChat('fk');
+  hideChat('yz');
+  hideChat('mj');
+  homePanel.classList.remove('hidden');
+}
+
 function switchTab(name) {
+  closeGamePanels();
   currentTab = name;
   mainNav.querySelectorAll('.nav-tab').forEach((b) => {
     b.classList.toggle('is-active', b.dataset.tab === name);

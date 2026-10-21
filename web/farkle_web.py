@@ -88,6 +88,7 @@ class Room:
         self.winner = None
         self.settle_lines = []
         self.log = []
+        self.chat = []
         self.created_at = time.time()
         self.updated_at = time.time()
 
@@ -413,6 +414,21 @@ class Room:
             lines.append(f"{loser['name']} 猫眼石不足，现有欠债 {-after_l} 个")
         return lines, self.stones
 
+    # ==================== 房间发言 ====================
+
+    def say(self, qq: int, text, name: str = ""):
+        """房间内发言（对局双方与观众都能说话），返回错误文案（None 表示成功）"""
+        body = str(text or "").strip()
+        if not body:
+            return "说点什么喵"
+        idx = self._idx(qq)
+        speaker = self.players[idx]["name"] if idx >= 0 else (name or f"观众{qq}")
+        self.chat.append({"name": speaker, "text": body[:80], "time": int(time.time())})
+        if len(self.chat) > 40:
+            self.chat = self.chat[-40:]
+        self._touch()
+        return None
+
     # ==================== 视图 ====================
 
     def view(self, qq: int) -> dict:
@@ -440,6 +456,7 @@ class Room:
             "winner": self.winner,
             "settle_lines": self.settle_lines,
             "log": self.log[-30:],
+            "chat": self.chat[-30:],
         }
 
 
@@ -603,11 +620,7 @@ def bot_rank(qq: int) -> dict:
         my_row = {"wins": wins, "losses": losses, "games": games,
                   "rate": (wins / games) if games else 0.0,
                   "net": int(mine.get("net", 0))}
-    shown = rows[:10]
-    bot_row = next((r for r in rows if r["bot"]), None)
-    if bot_row is not None and bot_row not in shown:
-        shown.append(bot_row)   # 机器人即使掉出前 10 也固定展示
-    return {"name": BOT_NAME, "rows": shown, "mine": my_row}
+    return {"name": BOT_NAME, "rows": rows, "mine": my_row}
 
 
 def join_room(code: str, qq: int, name: str):
@@ -647,6 +660,16 @@ def snapshot(code: str, qq: int):
         if room is None:
             return None
         return room.view(qq)
+
+
+def say(code: str, qq: int, text, name: str = ""):
+    """房间发言，返回 (错误文案, 房间视图)"""
+    with _ROOMS_LOCK:
+        room = _ROOMS.get(code)
+        if room is None:
+            return "房间不存在或已结束喵", None
+        err = room.say(qq, text, name)
+        return err, room.view(qq)
 
 
 def act(code: str, qq: int, action: str, payload: dict):

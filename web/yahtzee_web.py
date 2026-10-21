@@ -45,6 +45,7 @@ class Room:
         self.winner = None
         self.result_lines = []
         self.log = []
+        self.chat = []
         self.created_at = time.time()
         self.updated_at = time.time()
 
@@ -236,6 +237,21 @@ class Room:
             self._log(line)
         self._touch()
 
+    # ==================== 房间发言 ====================
+
+    def say(self, qq: int, text, name: str = ""):
+        """房间内发言（对局双方与观众都能说话），返回错误文案（None 表示成功）"""
+        body = str(text or "").strip()
+        if not body:
+            return "说点什么喵"
+        idx = self._idx(qq)
+        speaker = self.players[idx]["name"] if idx >= 0 else (name or f"观众{qq}")
+        self.chat.append({"name": speaker, "text": body[:80], "time": int(time.time())})
+        if len(self.chat) > 40:
+            self.chat = self.chat[-40:]
+        self._touch()
+        return None
+
     # ==================== 视图 ====================
 
     def view(self, qq: int) -> dict:
@@ -267,6 +283,7 @@ class Room:
             "winner": self.winner,
             "result_lines": self.result_lines,
             "log": self.log[-30:],
+            "chat": self.chat[-30:],
         }
 
 
@@ -372,6 +389,16 @@ def snapshot(code: str, qq: int):
         if room is None:
             return None
         return room.view(qq)
+
+
+def say(code: str, qq: int, text, name: str = ""):
+    """房间发言，返回 (错误文案, 房间视图)"""
+    with _ROOMS_LOCK:
+        room = _ROOMS.get(code)
+        if room is None:
+            return "房间不存在或已结束喵", None
+        err = room.say(qq, text, name)
+        return err, room.view(qq)
 
 
 def act(code: str, qq: int, action: str, payload: dict):

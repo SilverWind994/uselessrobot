@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>串子小车 · 网页端</title>
-  <link rel="stylesheet" href="/static/style.css?v=4">
+  <link rel="stylesheet" href="/static/style.css?v=5">
 </head>
 <body>
   <div class="bg-glow"></div>
@@ -399,6 +399,21 @@
 
       <!-- 对局中 -->
       <div id="fk-room" class="hidden"></div>
+
+      <!-- 房间发言 -->
+      <div id="fk-chat" class="card chat-card hidden">
+        <div class="panel-head">
+          <div>
+            <div class="panel-title">房间发言</div>
+            <div class="panel-sub">对局双方与观众都能发言</div>
+          </div>
+        </div>
+        <div id="fk-chat-list" class="chat-list"></div>
+        <form id="fk-chat-form" class="chat-form" autocomplete="off">
+          <input id="fk-chat-input" class="chat-input" type="text" maxlength="80" placeholder="说点什么喵…">
+          <button class="btn btn-primary btn-sm" type="submit">发送</button>
+        </form>
+      </div>
     </section>
 
     <!-- 快艇骰子 网页版 -->
@@ -432,6 +447,21 @@
 
       <!-- 对局中 -->
       <div id="yz-room" class="hidden"></div>
+
+      <!-- 房间发言 -->
+      <div id="yz-chat" class="card chat-card hidden">
+        <div class="panel-head">
+          <div>
+            <div class="panel-title">房间发言</div>
+            <div class="panel-sub">对局双方与观众都能发言</div>
+          </div>
+        </div>
+        <div id="yz-chat-list" class="chat-list"></div>
+        <form id="yz-chat-form" class="chat-form" autocomplete="off">
+          <input id="yz-chat-input" class="chat-input" type="text" maxlength="80" placeholder="说点什么喵…">
+          <button class="btn btn-primary btn-sm" type="submit">发送</button>
+        </form>
+      </div>
     </section>
 
     <!-- 17步麻将 网页版 -->
@@ -467,6 +497,21 @@
 
       <!-- 对局中 -->
       <div id="mj-room" class="hidden"></div>
+
+      <!-- 房间发言 -->
+      <div id="mj-chat" class="card chat-card hidden">
+        <div class="panel-head">
+          <div>
+            <div class="panel-title">房间发言</div>
+            <div class="panel-sub">对局双方与观众都能发言</div>
+          </div>
+        </div>
+        <div id="mj-chat-list" class="chat-list"></div>
+        <form id="mj-chat-form" class="chat-form" autocomplete="off">
+          <input id="mj-chat-input" class="chat-input" type="text" maxlength="80" placeholder="说点什么喵…">
+          <button class="btn btn-primary btn-sm" type="submit">发送</button>
+        </form>
+      </div>
     </section>
   </main>
 
@@ -484,6 +529,6 @@
 
   <footer class="foot">串子小车 · 网页端</footer>
 
-  <script src="/static/app.js?v=4"></script>
+  <script src="/static/app.js?v=5"></script>
 </body>
 </html>

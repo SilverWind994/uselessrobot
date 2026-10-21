@@ -260,6 +260,24 @@ code { background: #120f0d; border: 1px solid var(--line); border-radius: 6px; p
 .log div { color: var(--text-dim); }
 .log div:last-child { color: var(--text); }
 
+/* ---------- 房间发言 ---------- */
+.chat-card { margin-top: 16px; }
+.chat-list {
+  max-height: 200px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 2px;
+  font-size: 14px;
+}
+.chat-row { display: flex; gap: 8px; align-items: baseline; }
+.chat-name { flex: none; color: var(--gold); font-weight: 600; }
+.chat-text { flex: 1; color: var(--text); word-break: break-word; }
+.chat-time { flex: none; margin-left: auto; color: var(--text-dim); font-size: 12px; }
+.chat-form { display: flex; gap: 10px; margin-top: 12px; }
+.chat-input { flex: 1; }
+
 .fk-result { border-color: var(--gold); }
 .fk-result .panel-title { color: var(--gold); }
 .fk-result .line { font-size: 14px; margin-top: 6px; }

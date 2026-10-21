@@ -292,6 +292,18 @@ def farkle_action(payload: dict, cat_token: str = Cookie(default="")) -> JSONRes
     return JSONResponse({"ok": True, "room": room})
 
 
+@app.post("/api/farkle/say")
+def farkle_say(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    err, room = farkle_web.say(str(payload.get("code", "")).strip(), qq,
+                               payload.get("text"), _nick_of(qq))
+    if err:
+        return JSONResponse({"ok": False, "msg": err}, status_code=400)
+    return JSONResponse({"ok": True, "room": room})
+
+
 # ==================== 快艇骰子网页版 ====================
 
 @app.get("/api/yahtzee/rooms")
@@ -367,6 +379,18 @@ def yahtzee_action(payload: dict, cat_token: str = Cookie(default="")) -> JSONRe
     return JSONResponse({"ok": True, "room": room})
 
 
+@app.post("/api/yahtzee/say")
+def yahtzee_say(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    err, room = yahtzee_web.say(str(payload.get("code", "")).strip(), qq,
+                                payload.get("text"), _nick_of(qq))
+    if err:
+        return JSONResponse({"ok": False, "msg": err}, status_code=400)
+    return JSONResponse({"ok": True, "room": room})
+
+
 # ==================== 17步麻将网页版 ====================
 
 @app.get("/api/mahjong17/rooms")
@@ -437,6 +461,18 @@ def mahjong17_action(payload: dict, cat_token: str = Cookie(default="")) -> JSON
     code = str(payload.get("code", "")).strip()
     action = str(payload.get("action", "")).strip()
     err, room = mahjong17_web.act(code, qq, action, payload)
+    if err:
+        return JSONResponse({"ok": False, "msg": err}, status_code=400)
+    return JSONResponse({"ok": True, "room": room})
+
+
+@app.post("/api/mahjong17/say")
+def mahjong17_say(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    err, room = mahjong17_web.say(str(payload.get("code", "")).strip(), qq,
+                                   payload.get("text"), _nick_of(qq))
     if err:
         return JSONResponse({"ok": False, "msg": err}, status_code=400)
     return JSONResponse({"ok": True, "room": room})
@@ -577,7 +613,7 @@ def yahtzee_weekly(cat_token: str = Cookie(default="")) -> JSONResponse:
         return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
     weekly = _yz_plugin._ensure_week()
     scores = weekly.get("scores") or {}
-    ranked = sorted(scores.items(), key=lambda kv: kv[1]["score"], reverse=True)[:10]
+    ranked = sorted(scores.items(), key=lambda kv: kv[1]["score"], reverse=True)
     ranks = [{
         "name": info["name"],
         "score": info["score"],

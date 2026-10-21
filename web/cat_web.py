@@ -205,14 +205,14 @@ def cat_collection(qq: int) -> dict:
 # ==================== 远征 ====================
 
 def _ranking(exp: dict) -> list:
-    """按 QQ 聚合伤害排行（前 10）"""
+    """按 QQ 聚合伤害排行（全部玩家）"""
     totals, names = {}, {}
     for entry in exp.get("damage_log", []):
         qq = entry.get("qq")
         totals[qq] = totals.get(qq, 0) + entry.get("damage", 0)
         names[qq] = entry.get("name", qq)
     ranked = sorted(totals.items(), key=lambda kv: kv[1], reverse=True)
-    return [{"name": names.get(qq, qq), "damage": dmg} for qq, dmg in ranked[:10]]
+    return [{"name": names.get(qq, qq), "damage": dmg} for qq, dmg in ranked]
 
 
 def expedition_state(qq: int):

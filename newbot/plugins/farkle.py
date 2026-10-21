@@ -388,18 +388,6 @@ def _subset_score_counts(counts, wilds):
     return best
 
 
-def _bot_subset_score(pairs) -> int:
-    """一组骰子（(kind, value) 序列）的得分；无解返回 None。"""
-    counts = [0] * 6
-    wilds = 0
-    for kind, value in pairs:
-        if kind == DICE_DEVIL and value == 1:
-            wilds += 1
-        else:
-            counts[value - 1] += 1
-    return _subset_score_counts(tuple(counts), wilds)
-
-
 def _bot_policy(dice, target: int):
     """取（并缓存）某副骰组在指定目标分下的最优策略表"""
     kinds = tuple(sorted(_kind_key(k) for k in (dice or [DICE_NORMAL] * DICE_NUM)))
@@ -447,7 +435,9 @@ def _bot_should_bank(my_total: int, target: int, player_dice, hand,
                      turn_score: int) -> bool:
     """是否入账：达到本轮目标分，或最优策略认为继续掷不如现在收手"""
     pol = _bot_policy(player_dice, target)
-    return pol.should_bank([d["kind"] for d in hand], turn_score, target - my_total)
+    # 与 _bot_best_lock 一样先归一化骰型：仙贝骰不在策略表的状态里
+    return pol.should_bank([_kind_key(d["kind"]) for d in hand], turn_score,
+                           target - my_total)
 
 
 # ==================== 插件 ====================

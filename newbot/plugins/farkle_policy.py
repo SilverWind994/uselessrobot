@@ -74,9 +74,14 @@ class Policy:
         self.s_max = max(STEP, int(s_max) // STEP * STEP)
         self._score_cache = {}
 
-        # 同分布的骰型合并（例如仙贝骰与普通骰完全一致），压缩状态空间
+        # 同分布的骰型合并（例如仙贝骰与普通骰完全一致），压缩状态空间。
+        # 带万能面的骰型不参与合并：概率分布虽然可能相同，但掷出万能面时的计分
+        # 规则不同，合并后会把手里的普通 1 也当成万能面，凭空多出顺子/三张。
         canon, seen = {}, {}
         for k in kinds:
+            if k == wild_kind:
+                canon[k] = k
+                continue
             sig = tuple(round(p, 9) for p in probs[k])
             if sig in seen:
                 canon[k] = seen[sig]

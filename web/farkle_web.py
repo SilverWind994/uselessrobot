@@ -16,8 +16,10 @@ from collections import Counter
 from plugins.farkle import (
     DICE_NORMAL, DICE_NUM, PLAYER_NUM, DEFAULT_TARGET, MIN_TARGET, MAX_TARGET,
     MAX_STONES, BID_STEP, BID_LIMIT, IDLE_SECONDS,
+    BOT_ID, BOT_NAME, BOT_BANK_LINE, _BOT_STATS_PATH, _bot_choose,
     _roll_die, _is_wild, _new_die, _faces_text, _dice_set_desc,
     _random_dice_set, _score_selection, _roll_has_score, _DIE_NAMES, _DIE_COLORS,
+    _load_json, _save_json,
 )
 
 _FINISHED_KEEP_SECONDS = 120   # 已结束的房间保留一会儿，供客户端看到结算结果
@@ -69,10 +71,12 @@ def _die_view(die: dict) -> dict:
 class Room:
     """一局 Farkle 的完整状态。所有公开方法返回错误文案（None 表示成功）。"""
 
-    def __init__(self, code: str, host_qq: int, host_name: str, target: int, stones: int):
+    def __init__(self, code: str, host_qq: int, host_name: str, target: int, stones: int,
+                 bot: bool = False):
         self.code = code
         self.target = target
         self.stones = stones
+        self.bot = bot              # 人机局：第二位玩家是机器人，不结算猫眼石
         self.phase = "waiting"        # waiting / auction / keep / decide / finished
         self.players = [self._new_player(host_qq, host_name)]
         self.seat_dice = []
@@ -187,6 +191,62 @@ class Room:
                   f"{cur['name']} 以 0 分开局")
         self._start_turn()
         return None
+
+    # ==================== 机器人自动行动 ====================
+
+    def start_as_bot(self) -> None:
+        """把机器人作为第二位玩家加入并直接进入先手拍卖（机器人先出价）"""
+        self.players.append(self._new_player(BOT_ID, BOT_NAME))
+        self.seat_dice = [_random_dice_set(), _random_dice_set()]
+        self.phase = "auction"
+        self.auction = {"bid": None, "holder": None, "turn": 1}
+        self._log(f"{self.players[0]['name']} 向 {BOT_NAME} 发起挑战")
+        self._log(self.seat_text())
+        self._touch()
+        self._run_bot()
+
+    def _run_bot(self) -> None:
+        """当前该机器人行动时让它自动走完：拍卖出价/接受，或整轮掷骰、锁定与入账。
+
+        人机局的所有交互都由玩家触发，机器人不会同时留在多个回合里，
+        所以这里循环到「轮到玩家」或「本局结束」为止即可。
+        """
+        if not self.bot or self.phase == "finished":
+            return
+        for _ in range(400):        # 防死循环兜底
+            if self.phase == "finished":
+                return
+            if self.phase == "auction":
+                au = self.auction
+                if au is None or self.players[au["turn"]]["qq"] != BOT_ID:
+                    return
+                if au["bid"] is None:
+                    self.bid(BOT_ID, BID_STEP)      # 无人出价：最小正数拿先手
+                else:
+                    self.accept(BOT_ID)             # 有人出价：直接把先手让给对方
+                continue
+            if self.players[self.turn]["qq"] != BOT_ID:
+                return
+            if self.phase == "keep":
+                gained, idx = _bot_choose([(d["kind"], d["value"]) for d in self.hand])
+                if gained <= 0:     # 兜底：无任何可计分组合时按爆骰处理
+                    p = self.players[self.turn]
+                    self._log(f"{p['name']} 掷出 {_faces_text(self.hand)}，无法计分——爆骰！"
+                              "本回合没有得分")
+                    self.turn = (self.turn + 1) % PLAYER_NUM
+                    self._start_turn()
+                    continue
+                if self.lock(BOT_ID, idx):
+                    return          # 理论不会发生；出错就交回玩家，避免卡死
+                continue
+            if self.phase == "decide":
+                if self.turn_score >= BOT_BANK_LINE:
+                    self.bank(BOT_ID)
+                else:
+                    self.roll(BOT_ID)
+                # 入账/爆骰后可能又轮回到机器人（玩家首掷即爆骰），所以继续判定
+                continue
+            return
 
     # ==================== 回合流转 ====================
 
@@ -308,6 +368,8 @@ class Room:
         self.settle_lines = self._settle(winner)
         for line in self.settle_lines:
             self._log(line)
+        if self.bot:
+            _record_bot_result(self, winner)
         self._touch()
 
     def _settle(self, winner: dict) -> list:
@@ -337,6 +399,7 @@ class Room:
             "phase": self.phase,
             "target": self.target,
             "stones": self.stones,
+            "bot": self.bot,
             "turn": self.turn,
             "my_index": mine,
             "is_player": mine >= 0,
@@ -383,6 +446,23 @@ def _score_selected(selected) -> int:
 
 # ==================== 房间管理 ====================
 
+def _record_bot_result(room: Room, winner: dict) -> None:
+    """人机局结束时记录玩家对机器人的胜负（与 QQ 端共用同一份战绩文件）"""
+    human = next((p for p in room.players if p["qq"] != BOT_ID), None)
+    if human is None:
+        return
+    try:
+        stats = _load_json(_BOT_STATS_PATH)
+        rec = stats.get(str(human["qq"])) or {"name": human["name"], "wins": 0, "losses": 0}
+        rec["name"] = human["name"]
+        key = "wins" if human["qq"] == winner["qq"] else "losses"
+        rec[key] = int(rec.get(key, 0)) + 1
+        stats[str(human["qq"])] = rec
+        _save_json(_BOT_STATS_PATH, stats)
+    except Exception:
+        pass    # 战绩只是附加信息，写失败不影响对局结算
+
+
 def _new_code() -> str:
     while True:
         code = str(random.randint(1000, 9999))
@@ -426,6 +506,7 @@ def list_rooms() -> list:
                 "host": r.players[0]["name"],
                 "target": r.target,
                 "stones": r.stones,
+                "bot": r.bot,
                 "phase": r.phase,
                 "players": [p["name"] for p in r.players],
             })
@@ -464,6 +545,50 @@ def create_room(qq: int, name: str, target, stones):
         code = _new_code()
         _ROOMS[code] = Room(code, qq, name, target, stones)
         return code, None
+
+
+def create_bot_room(qq: int, name: str, target):
+    """人机局：直接建房并把机器人拉进来，返回 (code, 错误文案)。不结算猫眼石。"""
+    with _ROOMS_LOCK:
+        _reap_locked()
+        exist = _in_other_room_locked(qq)
+        if exist:
+            return None, f"你已经在一个房间（{exist}）里了喵"
+        try:
+            target = int(target) if target not in (None, "") else DEFAULT_TARGET
+        except (TypeError, ValueError):
+            return None, "目标分要是数字喵"
+        if not (MIN_TARGET <= target <= MAX_TARGET):
+            return None, f"目标分要在 {MIN_TARGET}~{MAX_TARGET} 之间喵"
+        code = _new_code()
+        room = Room(code, qq, name, target, 0, bot=True)
+        _ROOMS[code] = room
+        room.start_as_bot()
+        return code, None
+
+
+def bot_rank(qq: int) -> dict:
+    """人机胜率排行（与 QQ 端共用 bot_stats.json）"""
+    stats = _load_json(_BOT_STATS_PATH)
+    rows = []
+    for uid, rec in stats.items():
+        wins = int(rec.get("wins", 0))
+        losses = int(rec.get("losses", 0))
+        games = wins + losses
+        if games <= 0:
+            continue
+        rows.append({"name": rec.get("name") or uid, "wins": wins, "losses": losses,
+                     "games": games, "rate": wins / games})
+    rows.sort(key=lambda r: (-r["rate"], -r["games"], -r["wins"]))
+    mine = stats.get(str(qq))
+    my_row = None
+    if mine is not None:
+        wins = int(mine.get("wins", 0))
+        losses = int(mine.get("losses", 0))
+        games = wins + losses
+        my_row = {"wins": wins, "losses": losses, "games": games,
+                  "rate": (wins / games) if games else 0.0}
+    return {"name": BOT_NAME, "rows": rows[:10], "mine": my_row}
 
 
 def join_room(code: str, qq: int, name: str):
@@ -525,4 +650,6 @@ def act(code: str, qq: int, action: str, payload: dict):
             err = room.surrender(qq)
         else:
             err = "未知操作喵"
+        if err is None:
+            room._run_bot()     # 玩家操作后若轮到机器人，让它自动走完
         return err, room.view(qq)

@@ -212,6 +212,7 @@ async function enterFarkle() {
   if (status === 401) { fkPanel.classList.add('hidden'); showLogin(); return; }
   if (status === 200 && data.ok && data.code) { enterRoom(data.code); return; }
   await refreshRooms();
+  loadBotRank();
   clearInterval(fkRoomTimer);
   fkLobbyTimer = setInterval(refreshRooms, 2500);
 }
@@ -223,6 +224,7 @@ function backToLobby() {
   fkRoom.classList.add('hidden');
   fkLobby.classList.remove('hidden');
   refreshRooms();
+  loadBotRank();
   clearInterval(fkLobbyTimer);
   fkLobbyTimer = setInterval(refreshRooms, 2500);
 }
@@ -246,6 +248,7 @@ async function refreshRooms() {
     const meta = document.createElement('div');
     meta.className = 'room-meta';
     meta.innerHTML = (ongoing ? '<span class="room-stone">对局中</span> · ' : '')
+      + (r.bot ? '人机局 · ' : '')
       + `目标 ${r.target} 分 · `
       + (r.stones > 0 ? `<span class="room-stone">猫眼石 ${r.stones}</span>` : '普通局')
       + ` · 房间号 ${esc(r.code)}`;
@@ -276,6 +279,40 @@ async function createRoom() {
   if (status === 200 && data.ok) enterRoom(data.code);
   else fkLobbyMsg.textContent = data.msg || '创建失败喵';
 }
+
+async function startBotGame() {
+  const msg = document.getElementById('fk-bot-msg');
+  const target = document.getElementById('fk-bot-target').value;
+  msg.textContent = '';
+  const { status, data } = await api('/api/farkle/bot', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ target: target }),
+  });
+  if (status === 200 && data.ok) enterRoom(data.code);
+  else msg.textContent = data.msg || '开局失败喵';
+}
+
+async function loadBotRank() {
+  const box = document.getElementById('fk-bot-rank');
+  const { status, data } = await api('/api/farkle/bot_rank');
+  if (status === 401) { fkPanel.classList.add('hidden'); showLogin(); return; }
+  if (status !== 200 || !data.ok) return;
+  const rows = data.rows.map((r, i) => `
+    <div class="rank-row">
+      <span class="rank-no">${i + 1}</span>
+      <span class="rank-name">${esc(r.name)}</span>
+      <span class="rank-val">${r.wins} 胜 ${r.losses} 负</span>
+      <span class="rank-reward">胜率 ${(r.rate * 100).toFixed(1)}%</span>
+    </div>`).join('');
+  const mine = data.mine
+    ? `<p class="hint">你的战绩：${data.mine.wins} 胜 ${data.mine.losses} 负（胜率 ${(data.mine.rate * 100).toFixed(1)}%）</p>`
+    : '<p class="hint">你还没有对战记录，挑战一次机器人吧</p>';
+  box.innerHTML = (rows || '<p class="room-empty">还没有人对战过机器人喵</p>') + mine;
+}
+
+document.getElementById('btn-fk-bot').addEventListener('click', startBotGame);
+document.getElementById('btn-fk-bot-rank').addEventListener('click', loadBotRank);
 
 async function joinRoom(code) {
   fkLobbyMsg.textContent = '';

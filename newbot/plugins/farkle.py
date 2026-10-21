@@ -383,7 +383,7 @@ def _bot_choose(roll):
 
     得分 0 表示这把骰子无法计分（爆骰）。roll 为 (kind, value) 序列。
     """
-    key = tuple(sorted(roll))
+    key = tuple(roll)   # 必须按手牌顺序缓存：返回的是下标，换个排列就指到别的骰子了
     hit = _BOT_DECIDE_CACHE.get(key)
     if hit is not None:
         return hit

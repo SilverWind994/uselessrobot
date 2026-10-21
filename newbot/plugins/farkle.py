@@ -24,7 +24,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from core.command_router import CommandContext, CommandRouter
 from core.message_sender import MessageSender, Target
-from plugins.farkle_policy import build_policy, RaceModel, WinTurn
+from plugins.farkle_policy import build_policy, RaceModel, WinTurn, build_race
 
 _BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # newbot/
 _ASSETS_DIR = os.path.join(_BASE_DIR, "assets")
@@ -418,7 +418,7 @@ def _dice_key(dice) -> tuple:
     return tuple(sorted(_kind_key(k) for k in kinds))
 
 
-def _bot_race(my_dice, opp_dice, target: int) -> RaceModel:
+def _bot_race(my_dice, opp_dice, target: int):
     """取（并缓存）双方骰组在指定目标分下的赛跑胜率表"""
     t = min(MAX_TARGET, max(MIN_TARGET, int(target)))
     key = (_dice_key(my_dice), _dice_key(opp_dice), t)
@@ -426,12 +426,16 @@ def _bot_race(my_dice, opp_dice, target: int) -> RaceModel:
     if race is None:
         if len(_BOT_RACE_CACHE) >= 16:      # 防止长期运行后无限增长
             _BOT_RACE_CACHE.clear()
-        # 每回合打到「达标即入账」为止的单回合得分分布，作为后续回合的参考
-        # 目标分越大，赛跑表的分数格越粗，避免建表阻塞太久
-        step = BID_STEP if t <= 4000 else (100 if t <= 6500 else 200)
-        race = RaceModel(_bot_policy(my_dice, t).turn_stats(t),
-                         _bot_policy(opp_dice, t).turn_stats(t),
-                         _rem_units(t, -t) * BID_STEP, step)
+        my_pol = _bot_policy(my_dice, t)
+        opp_pol = _bot_policy(opp_dice, t)
+        if t <= 1000:
+            # 小目标分：逐剩余分迭代，先手权的细微差距会被放大，必须算准
+            race = build_race(my_pol, opp_pol, t)
+        else:
+            # 目标分越大，赛跑表的分数格越粗，避免建表阻塞太久
+            step = BID_STEP if t <= 4000 else (100 if t <= 6500 else 200)
+            race = RaceModel(my_pol.turn_stats(t), opp_pol.turn_stats(t),
+                             _rem_units(t, -t) * BID_STEP, step)
         _BOT_RACE_CACHE[key] = race
     return race
 
@@ -1007,11 +1011,14 @@ class FarklePlugin:
             return
         fair = _bot_fair_bid(game.get("seat_dice"), game["target"])
         if au["bid"] is None or au["bid"] < fair:
-            cur = self._apply_bid(game, fair)
+            # 对手已经出价但还没到公允价时，只加一个最小加价档，
+            # 逼对手先亮出底价，避免直接跳到自己的心理价位多付
+            val = fair if au["bid"] is None else min(fair, au["bid"] + BID_STEP)
+            cur = self._apply_bid(game, val)
             self._save_game(gid, game)
             self._sender.reply(
-                ctx, f"{cur['name']} 出价 {fair} 分"
-                     f"（先手以 {self._fmt_open_score(fair)} 分开局）。\n"
+                ctx, f"{cur['name']} 出价 {val} 分"
+                     f"（先手以 {self._fmt_open_score(val)} 分开局）。\n"
                      + self._auction_prompt(game))
             return
         holder, bid, cur = self._resolve_accept(gid, game)

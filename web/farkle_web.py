@@ -224,7 +224,9 @@ class Room:
                 if au["bid"] is not None and au["bid"] >= fair:
                     self.accept(BOT_ID)             # 对手已出到公允价，让先手给对方
                 else:
-                    self.bid(BOT_ID, fair)          # 按公允价抢先手位
+                    # 未到公允价时只加一个最小加价档，避免直接跳到心理价位多付
+                    val = fair if au["bid"] is None else min(fair, au["bid"] + BID_STEP)
+                    self.bid(BOT_ID, val)           # 加价抢下先手位
                 continue
             if self.players[self.turn]["qq"] != BOT_ID:
                 return

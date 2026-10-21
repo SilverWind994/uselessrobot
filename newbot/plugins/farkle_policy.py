@@ -504,6 +504,67 @@ class RaceModel:
         return self.v_opp[self._idx(my_points)][self._idx(opp_points)]
 
 
+class RaceMulti:
+    """逐剩余分的双人赛跑胜率表。
+
+    与 RaceModel 的区别：每个「自己还差 i 分」用各自的回合分布 f[i]、
+    「对手还差 j 分」用 g[j]，而不是双方共用一个回合分布。
+
+    先用 Policy.turn_stats 的分布建表，再由 WinTurn.turn_stats 提取机器人真实
+    入账策略下的分布并迭代，赛跑表就会反映「离目标近时提前收手」等行为，
+    小目标分下的先手价值与喊价也能算得更准。
+    """
+
+    def __init__(self, my_dists, opp_dists, r_max, step: int = STEP):
+        step = max(STEP, int(step))
+        size = max(2, int(r_max) // step + 1)
+        if len(my_dists) < size or len(opp_dists) < size:
+            raise ValueError("赛跑分布数量不足")
+        self.step = step
+        self.size = size
+        fs = [_dist_of(my_dists[i], step) for i in range(size)]
+        gs = [_dist_of(opp_dists[i], step) for i in range(size)]
+        self.f0 = [sum(p for x, p in d if x == 0) for d in fs]
+        self.g0 = [sum(p for x, p in d if x == 0) for d in gs]
+        self.f_mid = [[(x, p) for x, p in d if 0 < x < i] for i, d in enumerate(fs)]
+        self.tail_f = [sum(p for x, p in d if x >= i) for i, d in enumerate(fs)]
+        self.g_mid = [[(x, p) for x, p in d if 0 < x < j] for j, d in enumerate(gs)]
+
+        v_me = [[0.0] * size for _ in range(size)]
+        v_opp = [[0.0] * size for _ in range(size)]
+        for k in range(size):
+            v_me[0][k] = 1.0            # 我已经达标
+            v_opp[0][k] = 1.0
+        for i in range(1, size):
+            v_me[i][0] = 0.0            # 对手已经达标
+            v_opp[i][0] = 0.0
+        for i in range(1, size):
+            row_me = v_me[i]
+            f0 = self.f0[i]
+            for j in range(1, size):
+                b = self.tail_f[i]
+                for x, p in self.f_mid[i]:
+                    b += p * v_opp[i - x][j]
+                d = 0.0
+                for y, p in self.g_mid[j]:
+                    d += p * row_me[j - y]
+                v = (b + f0 * d) / (1.0 - f0 * self.g0[j])
+                row_me[j] = v
+                v_opp[i][j] = d + self.g0[j] * v
+        self.v_me = v_me
+        self.v_opp = v_opp
+
+    def _idx(self, remaining_points: int) -> int:
+        return max(0, min(self.size - 1,
+                          -(-max(0, int(remaining_points)) // self.step)))
+
+    def win_prob_my_turn(self, my_points: int, opp_points: int) -> float:
+        return self.v_me[self._idx(my_points)][self._idx(opp_points)]
+
+    def win_prob_opp_turn(self, my_points: int, opp_points: int) -> float:
+        return self.v_opp[self._idx(my_points)][self._idx(opp_points)]
+
+
 class WinTurn:
     """本回合的胜率最优策略表。
 
@@ -571,6 +632,74 @@ class WinTurn:
     def best_lock(self, dice, s: int):
         """按胜率最大化选择本次锁定的骰子；无解返回 None"""
         return self.pol.best_lock(dice, s, value_fn=self._lock_value)
+
+    def turn_stats(self):
+        """按本表实际的入账/锁骰决策，统计本回合的得分分布。
+
+        返回 (bank, bust)，口径与 Policy.turn_stats 相同：bank[x] 为以 x 分
+        入账的概率，bust[s] 为累计 s 分时爆骰的概率。
+        """
+        pol = self.pol
+        n = self.n
+        layers = [dict() for _ in range(n + 1)]
+        layers[0][pol.full_index] = 1.0
+        bank, bust = defaultdict(float), defaultdict(float)
+        for i in range(n):
+            s = i * pol.step
+            layer = layers[i]
+            if not layer:
+                continue
+            for si, mass in layer.items():
+                if self._bank[si][i]:
+                    bank[s] += mass
+                    continue
+                for p, opts in pol.groups[si]:
+                    if not opts:
+                        bust[s] += mass * p       # 爆骰，本回合归零
+                        continue
+                    best_v, best_j, best_rem = -1.0, None, None
+                    for rem_i, sc in opts:
+                        j = i + sc // pol.step
+                        v = 1.0 if j >= n else self.W[rem_i][j]
+                        if v > best_v:
+                            best_v, best_j, best_rem = v, j, rem_i
+                    if best_j >= n:               # 达到剩余分，直接入账
+                        bank[best_j * pol.step] += mass * p
+                    else:
+                        layers[best_j][best_rem] = (layers[best_j].get(best_rem, 0.0)
+                                                    + mass * p)
+        return dict(bank), dict(bust)
+
+
+class _MirrorRace:
+    """赛跑表的对手视角（对手的胜率 = 1 - 我方胜率）"""
+
+    def __init__(self, race):
+        self._race = race
+
+    def win_prob_my_turn(self, my_points: int, opp_points: int) -> float:
+        return 1.0 - self._race.win_prob_opp_turn(opp_points, my_points)
+
+    def win_prob_opp_turn(self, my_points: int, opp_points: int) -> float:
+        return 1.0 - self._race.win_prob_my_turn(opp_points, my_points)
+
+
+def build_race(pol_me, pol_opp, target: int, rounds: int = 2) -> RaceMulti:
+    """逐剩余分迭代出双方赛跑胜率表（小目标分专用）。
+
+    初值用「达标即入账」的回合分布，之后每次用当前胜率表跑一遍 WinTurn，
+    提取双方真实策略下的回合分布并重建胜率表；两轮即可收敛。
+    """
+    units = -(-int(target) // STEP)
+    size = 2 * units + 1
+    my = [pol_me.turn_stats(i * STEP) for i in range(size)]
+    opp = [pol_opp.turn_stats(i * STEP) for i in range(size)]
+    for _ in range(rounds):
+        race = RaceMulti(my, opp, 2 * units * STEP)
+        mirror = _MirrorRace(race)
+        my = [WinTurn(pol_me, race, max(1, i), units).turn_stats() for i in range(size)]
+        opp = [WinTurn(pol_opp, mirror, max(1, i), units).turn_stats() for i in range(size)]
+    return RaceMulti(my, opp, 2 * units * STEP)
 
 
 def build_policy(kinds, probs, score_counts, s_max, wild_kind=None, wild_value=1) -> Policy:

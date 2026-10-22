@@ -1908,8 +1908,12 @@ function ucmlRankOptions() {
 
 const UCML_RANK_LABELS = { total: '总成绩', 1: '常规赛', 2: '半决赛', 3: '决赛' };
 
-async function loadUcml() {
-  const { status, data } = await api('/api/ucml/overview');
+async function loadUcml(season) {
+  const query = season == null ? '' : `?season=${encodeURIComponent(season)}`;
+  const { status, data } = await api(`/api/ucml/overview${query}`);
+  if (status === 404 && season != null) {
+    return loadUcml();
+  }
   if (status !== 200 || !data.ok) {
     ucmlSetMsg((data && data.msg) || '读取计分数据失败喵', false);
     return;
@@ -1949,8 +1953,10 @@ async function ucmlPost(path, body, onOk) {
 function renderUcml() {
   const d = ucmlState.data;
   if (!d) return;
-  document.getElementById('ucml-sub').textContent =
-    `第 ${d.season} 赛季 · ${d.stage_name} · ${d.teams.length} 支队伍 / ${d.players.length} 位选手 · 已记录 ${d.matches.length} 场`;
+  document.getElementById('ucml-sub').textContent = d.archived
+    ? `第 ${d.season} 赛季 · 历史归档 · ${d.teams.length} 支队伍 / ${d.players.length} 位选手 · 共 ${d.matches.length} 场`
+    : `第 ${d.season} 赛季 · ${d.stage_name} · ${d.teams.length} 支队伍 / ${d.players.length} 位选手 · 已记录 ${d.matches.length} 场`;
+  renderUcmlSeasonBar(d);
   renderUcmlAdminActions(d);
   renderUcmlScore(d);
   renderUcmlStandings(d);
@@ -1958,8 +1964,30 @@ function renderUcml() {
   renderUcmlRoster(d);
 }
 
+function renderUcmlSeasonBar(d) {
+  const bar = document.getElementById('ucml-season-bar');
+  const archived = (d.seasons || []).slice().sort((a, b) => b - a);
+  const items = [
+    `<button class="seg-btn${d.archived ? '' : ' is-active'}" data-ucml-season="" type="button">第 ${d.current_season} 赛季</button>`,
+  ];
+  archived.forEach((n) => {
+    items.push(`<button class="seg-btn${d.archived && d.season === n ? ' is-active' : ''}" data-ucml-season="${n}" type="button">第 ${n} 赛季 · 历史</button>`);
+  });
+  bar.innerHTML = items.join('');
+  bar.querySelectorAll('[data-ucml-season]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      ucmlSetMsg('', false);
+      loadUcml(btn.dataset.ucmlSeason ? Number(btn.dataset.ucmlSeason) : null);
+    });
+  });
+}
+
 function renderUcmlAdminActions(d) {
   const box = document.getElementById('ucml-admin-actions');
+  if (d.archived) {
+    box.innerHTML = '<span class="hint">历史赛季 · 只读</span>';
+    return;
+  }
   if (!d.is_admin) {
     box.innerHTML = '<span class="hint">计分与赛事管理仅限两位管理员</span>';
     return;
@@ -1982,10 +2010,15 @@ function renderUcmlAdminActions(d) {
 
 async function ucmlAdminAction(kind) {
   const paths = { next: '/api/ucml/stage/next', undo: '/api/ucml/match/undo', newseason: '/api/ucml/season/new' };
-  const labels = { next: '推进阶段', undo: '撤回最近一场比赛', newseason: '开始新赛季（会清空当前队伍、选手与比赛记录）' };
-  if (!confirm(`确定要${labels[kind]}吗喵？`)) return;
+  const names = { next: '推进阶段', undo: '撤回最近一场比赛', newseason: '开始新赛季' };
+  const confirmText = {
+    next: '推进阶段',
+    undo: '撤回最近一场比赛',
+    newseason: '开始新赛季（当前赛季会归档保存，之后仍可随时查看）',
+  };
+  if (!confirm(`确定要${confirmText[kind]}吗喵？`)) return;
   await ucmlPost(paths[kind], {}, (data) => {
-    ucmlSetMsg(`${labels[kind]}成功喵`, true);
+    ucmlSetMsg(`${names[kind]}成功喵`, true);
     ucmlState.formSig = '';
     ucmlApply(data.data, kind !== 'undo');
   });
@@ -2002,7 +2035,7 @@ function ucmlFormSignature(d) {
 
 function renderUcmlScore(d) {
   const card = document.getElementById('ucml-score-card');
-  const show = d.is_admin && d.stage >= 1 && d.stage <= 3;
+  const show = d.is_admin && !d.archived && d.stage >= 1 && d.stage <= 3;
   card.classList.toggle('hidden', !show);
   if (!show) return;
   const sig = ucmlFormSignature(d);
@@ -2244,7 +2277,7 @@ function renderUcmlMatches(d) {
     const cells = m.entries.map((entry) => `
       <td class="ucml-match-cell" style="background:${ucmlTint(entry)}">
         <div class="ucml-match-player">${ucmlEsc(entry.player)}</div>
-        <div class="ucml-match-meta">${ucmlTeamChip(entry.team, entry)}<span class="ucml-match-pt">${Number(entry.pt).toFixed(1)}pt</span><span class="ucml-raw">${entry.raw}</span></div>
+        <div class="ucml-match-meta">${ucmlTeamChip(entry.team, entry)}<span class="ucml-match-pt">${Number(entry.pt).toFixed(1)}pt</span><span class="ucml-raw">${entry.raw == null ? '—' : entry.raw}</span></div>
       </td>`).join('');
     return `<tr><td class="ucml-rank-cell">${m.id}</td><td>${m.stage_name}</td>${cells}</tr>`;
   }).join('');
@@ -2264,9 +2297,11 @@ function renderUcmlRoster(d) {
   const box = document.getElementById('ucml-roster');
   const canTeamEdit = d.is_admin && d.stage === 0;
   const canPlayerEdit = d.is_admin && d.stage < 4;
-  document.getElementById('ucml-roster-sub').textContent = d.stage === 0
-    ? '准备期可以增删队伍与选手，开赛后阵容锁定'
-    : '开赛后仍可补选手，已有比赛记录的选手不能移除';
+  document.getElementById('ucml-roster-sub').textContent = d.archived
+    ? '历史赛季阵容（只读）'
+    : (d.stage === 0
+      ? '准备期可以增删队伍与选手，开赛后阵容锁定'
+      : '开赛后仍可补选手，已有比赛记录的选手不能移除');
 
   const byTeam = {};
   d.players.forEach((p) => {

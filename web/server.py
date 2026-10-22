@@ -592,11 +592,14 @@ def _ucml_admin(cat_token: str):
 
 
 @app.get("/api/ucml/overview")
-def ucml_overview(cat_token: str = Cookie(default="")) -> JSONResponse:
+def ucml_overview(season: int = 0, cat_token: str = Cookie(default="")) -> JSONResponse:
     qq, err = _ucml_viewer(cat_token)
     if err:
         return err
-    return JSONResponse({"ok": True, "data": ucml_web.overview(Config.is_admin(qq))})
+    data = ucml_web.overview(Config.is_admin(qq), season or None)
+    if data is None:
+        return JSONResponse({"ok": False, "msg": "该历史赛季不存在喵"}, status_code=404)
+    return JSONResponse({"ok": True, "data": data})
 
 
 @app.post("/api/ucml/match/preview")

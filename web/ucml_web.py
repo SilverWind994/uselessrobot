@@ -11,6 +11,7 @@
 - 计分与赛事管理仅限管理员，权限校验在 server.py 里做。
 """
 
+import copy
 import json
 import os
 import threading
@@ -37,6 +38,7 @@ def _blank() -> dict:
         "players": [],      # [{"name": str, "team": str}]
         "matches": [],      # [{"id": int, "stage": int, "time": float, "entries": [...]}]
         "inherit": {},      # {"2": {"teams": {队名: pt}, "players": [选手名]}, ...}
+        "seasons": [],      # 已归档赛季快照：{season, stage, teams, players, matches, inherit}
     }
 
 
@@ -360,8 +362,19 @@ def new_season(is_admin=False):
         data = _load()
         if int(data.get("stage", 0)) != 4:
             return "当前赛季还没结束，无法开始新赛季", None
+        archived = copy.deepcopy(data.get("seasons", []))
+        if data["matches"]:
+            archived.append({
+                "season": int(data.get("season", 1)),
+                "stage": 4,
+                "teams": copy.deepcopy(data["teams"]),
+                "players": copy.deepcopy(data["players"]),
+                "matches": copy.deepcopy(data["matches"]),
+                "inherit": copy.deepcopy(data["inherit"]),
+            })
         fresh = _blank()
         fresh["season"] = int(data.get("season", 1)) + 1
+        fresh["seasons"] = archived
         _save(fresh)
         return None, _overview_locked(fresh, is_admin)
 
@@ -440,7 +453,7 @@ def delete_player(name, is_admin=False):
 
 # ==================== 对外快照 ====================
 
-def _overview_locked(data: dict, is_admin: bool) -> dict:
+def _overview_locked(data: dict, is_admin: bool, archived: bool = False) -> dict:
     stage = int(data.get("stage", 0))
 
     stage_tables = {}
@@ -458,11 +471,12 @@ def _overview_locked(data: dict, is_admin: bool) -> dict:
         entries = []
         for entry in match.get("entries", []):
             r, g, b = _team_color(data, entry.get("team", ""))
+            raw = entry.get("raw")
             entries.append({
                 "rank": int(entry.get("rank", 4)),
                 "player": entry.get("player", ""),
                 "team": entry.get("team", ""),
-                "raw": int(entry.get("raw", 0)),
+                "raw": None if raw is None else int(raw),
                 "pt": float(entry.get("pt", 0.0)),
                 "r": r, "g": g, "b": b,
             })
@@ -475,11 +489,12 @@ def _overview_locked(data: dict, is_admin: bool) -> dict:
         })
 
     last_stage = int(data["matches"][-1].get("stage", 0)) if data["matches"] else 0
-    return {
+    payload = {
         "season": int(data.get("season", 1)),
         "stage": stage,
         "stage_name": STAGE_NAMES.get(stage, "?"),
-        "is_admin": bool(is_admin),
+        "archived": bool(archived),
+        "is_admin": bool(is_admin) and not archived,
         "teams": [{"name": t["name"], "r": int(t.get("r", 120)),
                    "g": int(t.get("g", 120)), "b": int(t.get("b", 120))}
                   for t in data["teams"]],
@@ -488,10 +503,35 @@ def _overview_locked(data: dict, is_admin: bool) -> dict:
         "total_teams": _total_team_standings(data),
         "total_players": _total_player_standings(data),
         "matches": matches,
-        "can_undo": bool(data["matches"]) and last_stage == stage and stage in (1, 2, 3),
+        "can_undo": (not archived and bool(data["matches"])
+                     and last_stage == stage and stage in (1, 2, 3)),
     }
+    if not archived:
+        payload["seasons"] = _season_numbers(data)
+        payload["current_season"] = int(data.get("season", 1))
+    return payload
 
 
-def overview(is_admin: bool = False) -> dict:
+def _season_numbers(data: dict) -> list:
+    return sorted({int(s.get("season", 0)) for s in data.get("seasons", [])})
+
+
+def overview(is_admin: bool = False, season=None) -> dict:
+    """season 为 None 时返回当前赛季；传历史赛季号则返回已归档快照。"""
     with _LOCK:
-        return _overview_locked(_load(), is_admin)
+        data = _load()
+        numbers = _season_numbers(data)
+        if season is not None:
+            snap = None
+            for item in data.get("seasons", []):
+                if int(item.get("season", 0)) == int(season):
+                    snap = item
+                    break
+            if snap is None:
+                return None
+            payload = _overview_locked(snap, is_admin, archived=True)
+        else:
+            payload = _overview_locked(data, is_admin, archived=False)
+        payload["seasons"] = numbers
+        payload["current_season"] = int(data.get("season", 1))
+        return payload

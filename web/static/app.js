@@ -1697,6 +1697,7 @@ function buildGoldRoomDom() {
       <div class="fk-info">等待玩家加入……把房间号 <b id="gold-wait-code"></b> 发给大家，2~5 人，满 5 人自动开始</div>
       <div class="actions">
         <button id="gold-start" class="btn btn-primary btn-sm">开始探险</button>
+        <button id="gold-add-bot" class="btn btn-ghost btn-sm">添加机器人</button>
         <button id="gold-cancel" class="btn btn-ghost btn-sm">解散房间</button>
       </div>
       <p id="gold-wait-hint" class="hint"></p>
@@ -1737,6 +1738,7 @@ function buildGoldRoomDom() {
     </div>`;
 
   document.getElementById('gold-start').addEventListener('click', () => goldAct('start'));
+  document.getElementById('gold-add-bot').addEventListener('click', () => goldAct('add_bot'));
   document.getElementById('gold-continue').addEventListener('click', () => goldAct('continue'));
   document.getElementById('gold-leave').addEventListener('click', () => goldAct('leave'));
   document.getElementById('gold-cancel').addEventListener('click', cancelGoldRoom);
@@ -1765,8 +1767,11 @@ function renderGoldRoom(state) {
     const host = state.my_index === 0;
     document.getElementById('gold-start').classList.toggle('hidden', !host);
     document.getElementById('gold-cancel').classList.toggle('hidden', !host);
+    const addBot = document.getElementById('gold-add-bot');
+    addBot.classList.toggle('hidden', !host);
+    addBot.disabled = (state.players || []).length >= 5;
     document.getElementById('gold-wait-hint').textContent =
-      host ? '房主可以开始探险（至少 2 人）' : '等房主开始探险';
+      host ? '房主可以添加机器人，或开始探险（至少 2 人）' : '等房主开始探险';
   }
 
   const wrap = document.getElementById('gold-players');
@@ -1780,7 +1785,8 @@ function renderGoldRoom(state) {
     else if (p.left) meta = '本轮已下车';
     else if (!p.decided) meta = '待决定';
     else meta = '已决定';
-    div.innerHTML = `<div class="pname">${esc(p.name || '等待中')}${i === state.my_index ? '（你）' : ''}</div>`
+    div.innerHTML = `<div class="pname">${esc(p.name || '等待中')}${i === state.my_index ? '（你）' : ''}`
+      + `${p.bot ? ' · 机器人' : ''}</div>`
       + `<div class="pmeta">${meta}</div>`
       + `<div class="ptotal">${p.score} 根</div>`;
     wrap.appendChild(div);

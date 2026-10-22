@@ -12,6 +12,7 @@
 import random
 import threading
 import time
+from math import comb
 
 BASIC_CARDS = [1, 2, 3, 4, 5, 5, 7, 7, 9, 11, 11, 13, 14, 15, 17]
 MISTAKE_CARDS = [100, 101, 102, 103, 104]
@@ -25,6 +26,10 @@ ROUNDS = 5
 MIN_PLAYERS = 2
 MAX_PLAYERS = 5
 IDLE_SECONDS = 6 * 3600
+
+# 机器人：名字不同、风险偏好略有差异，避免多个机器人动作完全同步
+BOT_NAMES = ["喵机·谨慎", "喵机·稳健", "喵机·激进", "喵机·莽撞"]
+BOT_JITTER = [0.20, 0.05, -0.10, -0.22]   # 混合均衡下车概率的个体偏移
 _FINISHED_KEEP_SECONDS = 120
 
 _ROOMS = {}
@@ -64,14 +69,16 @@ class Room:
         self.decided = [True] * MAX_PLAYERS    # 本轮当前牌已做决定
         self.log = []
         self.chat = []
+        self._bot_running = False
         self.created_at = time.time()
         self.updated_at = time.time()
 
     # ==================== 小工具 ====================
 
     @staticmethod
-    def _new_player(qq: int, name: str) -> dict:
-        return {"qq": qq, "name": name, "score": 0}
+    def _new_player(qq: int, name: str, bot: bool = False, jitter: float = 0.0) -> dict:
+        return {"qq": qq, "name": name, "score": 0,
+                "bot": bot, "jitter": jitter}
 
     def _touch(self) -> None:
         self.updated_at = time.time()
@@ -116,6 +123,25 @@ class Room:
         if len(self.players) < MIN_PLAYERS:
             return f"至少需要 {MIN_PLAYERS} 人才能开始喵"
         self._start()
+        return None
+
+    def add_bot(self, qq: int):
+        """房主在等待阶段添加机器人（最多补满 5 人）"""
+        if self.phase != "waiting":
+            return "对局已经开始或结束，不能添加机器人喵"
+        if self.players[0]["qq"] != qq:
+            return "只有房主能添加机器人喵"
+        if len(self.players) >= MAX_PLAYERS:
+            return "人数已满喵"
+        k = sum(1 for p in self.players if p.get("bot"))
+        bot = self._new_player(-(k + 1), BOT_NAMES[k % len(BOT_NAMES)],
+                               bot=True, jitter=BOT_JITTER[k % len(BOT_JITTER)])
+        self.players.append(bot)
+        self._log(f"{bot['name']} 加入（{len(self.players)}/{MAX_PLAYERS}）")
+        self._touch()
+        if len(self.players) >= MAX_PLAYERS:
+            self._log("人数已满，自动开始")
+            self._start()
         return None
 
     def _start(self) -> None:
@@ -242,6 +268,7 @@ class Room:
         for i in active:
             self.decided[i] = False
         self._touch()
+        self._bots_play()
 
     def _finish(self) -> None:
         """五轮结束，按总点棒排名"""
@@ -270,10 +297,115 @@ class Room:
             return "未知操作喵"
         self.decided[i] = True
         self._touch()
+        self._resolve_if_ready()
+        return None
+
+    def _resolve_if_ready(self) -> None:
+        """所有在场玩家都决定后推进翻牌"""
         active = self._active()
         if active and all(self.decided[j] for j in active):
             self._advance()
-        return None
+
+    # ==================== 机器人 ====================
+
+    def _bots_play(self) -> None:
+        """让待决策的机器人依次行动；机器人全部行动完会连续翻牌"""
+        if self._bot_running:
+            return
+        self._bot_running = True
+        try:
+            guard = 0
+            while self.phase == "exploring" and guard < 1000:
+                guard += 1
+                pending = [i for i in self._active()
+                           if self.players[i].get("bot") and not self.decided[i]]
+                if not pending:
+                    break
+                for i in pending:
+                    action = self._bot_action(i)
+                    if action == "leave":
+                        self.leaving[i] = True
+                    self.decided[i] = True
+                    self._log(f"{self.players[i]['name']} 选择"
+                              + ("下车" if action == "leave" else "继续"))
+                self._touch()
+                self._resolve_if_ready()
+        finally:
+            self._bot_running = False
+
+    def _bot_action(self, i: int) -> str:
+        """对称混合均衡的近似求解：返回 continue / leave
+
+        在给定状态下，假设其他在场玩家都以同一概率 l 选择下车，求使自己
+         indifferent 的 l*（用下一张牌的一步期望近似继续价值），再按 l* 随机行动。
+        完全确定性的策略会让多个机器人动作完全一致，而本游戏不存在对称纯策略
+        均衡，所以这里用混合策略，并叠加每个机器人固定的偏好偏移打破同质化。
+        """
+        active = self._active()
+        n = len(active)
+        left_cards = self.deck[self.next_card:]
+        if n <= 0 or not left_cards:
+            return "leave"
+
+        A = self.turn_score
+        G = self.pot_gold
+        Y = self.pot_yakuman
+        revealed = set(self.revealed)
+        fatal = 0
+        gold_sum = 0
+        yak_sum = 0
+        for c in left_cards:
+            if c < 100:
+                gold_sum += c
+            elif c < 200:
+                if c in revealed:      # 同种陷阱第二次出现 -> 本轮立即结束
+                    fatal += 1
+            else:
+                yak_sum += YAKUMAN_SCORES[c - 200]
+        total = len(left_cards)
+        p_fatal = fatal / total
+        e_gold = gold_sum / total
+        e_yak = yak_sum / total
+
+        def ev_leave(l: float) -> float:
+            """自己下车：只有别人都不下车才能独吞池子"""
+            acc = 0.0
+            m = n - 1
+            for k in range(m + 1):
+                pk = comb(m, k) * (l ** k) * ((1 - l) ** (m - k))
+                acc += pk * ((A + G + Y) if k == 0 else (A + G // (k + 1)))
+            return acc
+
+        def ev_continue(l: float) -> float:
+            """自己继续：翻一张安全的牌后按“立刻下车”估价（保守下界）"""
+            acc = 0.0
+            m = n - 1
+            for k in range(m + 1):
+                pk = comb(m, k) * (l ** k) * ((1 - l) ** (m - k))
+                stay = n - k
+                acc += pk * (A + e_gold / stay + G + Y + e_yak)
+            return (1.0 - p_fatal) * acc
+
+        d0 = ev_leave(0.0) - ev_continue(0.0)
+        d1 = ev_leave(1.0) - ev_continue(1.0)
+        if d0 <= 0:
+            l = 0.0
+        elif d1 >= 0:
+            l = 1.0
+        else:
+            lo, hi = 0.0, 1.0
+            for _ in range(30):
+                mid = (lo + hi) / 2
+                if ev_leave(mid) - ev_continue(mid) > 0:
+                    lo = mid
+                else:
+                    hi = mid
+            l = (lo + hi) / 2
+
+        if 0.0 < l < 1.0:
+            # 均衡本身是混合的，加入个体偏移让不同机器人不会完全同步
+            l = min(0.95, max(0.05, l + self.players[i].get("jitter", 0.0)))
+        return "leave" if random.random() < l else "continue"
 
     # ==================== 房间发言 ====================
 
@@ -299,6 +431,7 @@ class Room:
             "score": p["score"],
             "left": self.left[i],
             "decided": self.decided[i],
+            "bot": p.get("bot", False),
         } for i, p in enumerate(self.players)]
         out = {
             "code": self.code,
@@ -455,6 +588,8 @@ def act(code: str, qq: int, action: str, payload: dict):
             return "房间不存在或已结束喵", None
         if action == "start":
             err = room.start(qq)
+        elif action == "add_bot":
+            err = room.add_bot(qq)
         elif action in ("continue", "leave"):
             err = room.decide(qq, action)
         else:

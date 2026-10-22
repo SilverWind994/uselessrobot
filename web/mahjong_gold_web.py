@@ -29,7 +29,9 @@ IDLE_SECONDS = 6 * 3600
 
 # 机器人：名字不同、风险偏好略有差异，避免多个机器人动作完全同步
 BOT_NAMES = ["喵机·谨慎", "喵机·稳健", "喵机·激进", "喵机·莽撞"]
-BOT_JITTER = [0.20, 0.05, -0.10, -0.22]   # 混合均衡下车概率的个体偏移
+BOT_JITTER = [0.20, 0.05, -0.10, -0.22]   # 无差异区间的个体偏向
+OPP_LEAVE_P = 0.35                        # 模拟中对其他玩家下车概率的估计
+MC_TRIALS = 200                           # 每个决策点的蒙特卡洛模拟局数
 _FINISHED_KEEP_SECONDS = 120
 
 _ROOMS = {}
@@ -70,6 +72,7 @@ class Room:
         self.log = []
         self.chat = []
         self._bot_running = False
+        self._mc_cache = {}
         self.created_at = time.time()
         self.updated_at = time.time()
 
@@ -334,78 +337,111 @@ class Room:
             self._bot_running = False
 
     def _bot_action(self, i: int) -> str:
-        """对称混合均衡的近似求解：返回 continue / leave
+        """蒙特卡洛评估：模拟剩余牌堆与对手行为，比较「下车」与「继续」的期望得分
 
-        在给定状态下，假设其他在场玩家都以同一概率 l 选择下车，求使自己
-         indifferent 的 l*（用下一张牌的一步期望近似继续价值），再按 l* 随机行动。
-        完全确定性的策略会让多个机器人动作完全一致，而本游戏不存在对称纯策略
-        均衡，所以这里用混合策略，并叠加每个机器人固定的偏好偏移打破同质化。
+        一步解析近似过于短视：继续之后的分牌、对手陆续下车、第二次陷阱结束
+        本轮等交互都被压成一个期望值。这里直接模拟本轮剩余过程，多步前瞻后
+        再做决策；同一决策点只计算一次，供该步所有机器人共用。
         """
         active = self._active()
-        n = len(active)
-        left_cards = self.deck[self.next_card:]
-        if n <= 0 or not left_cards:
+        if not active or self.next_card >= len(self.deck):
             return "leave"
 
-        A = self.turn_score
-        G = self.pot_gold
-        Y = self.pot_yakuman
-        revealed = set(self.revealed)
+        key = (self.round, self.next_card, self.turn_score, self.pot_gold,
+               self.pot_yakuman, len(active), tuple(sorted(set(self.revealed))))
+        cached = self._mc_cache.get(key)
+        if cached is None:
+            cached = self._mc_values(len(active), set(self.revealed))
+            self._mc_cache[key] = cached
+        ev_leave, ev_continue = cached
+
+        # 期望差距大时直接选优；接近无差异时按个体偏好混合，保留不可预测性
+        if ev_continue > ev_leave * 1.03:
+            return "continue"
+        if ev_leave > ev_continue * 1.03:
+            return "leave"
+        p = 0.5 + self.players[i].get("jitter", 0.0)
+        return "leave" if random.random() < min(0.9, max(0.1, p)) else "continue"
+
+    def _mc_values(self, n_active: int, revealed: set):
+        """固定种子模拟，返回 (立即下车期望, 继续期望)"""
+        remaining = self.deck[self.next_card:]
+        A, G, Y = self.turn_score, self.pot_gold, self.pot_yakuman
+        n_opp = n_active - 1
+        ev_leave = self._ev_leave_now(A, G, Y, n_opp)
+        seed = hash((self.round, self.next_card, A, G, Y, n_active,
+                     tuple(sorted(revealed)))) & 0xFFFFFFFF
+        total = 0.0
+        for t in range(MC_TRIALS):
+            rng = random.Random(seed + t)
+            order = remaining[:]
+            rng.shuffle(order)
+            total += self._sim_continue(order, A, G, Y, set(revealed), n_opp, rng)
+        return ev_leave, total / MC_TRIALS
+
+    @staticmethod
+    def _ev_leave_now(A: int, G: int, Y: int, n_opp: int) -> float:
+        """自己下车：只有别人都不下车才能独吞点棒池与役满池"""
+        acc = 0.0
+        for k in range(n_opp + 1):
+            pk = comb(n_opp, k) * (OPP_LEAVE_P ** k) * ((1 - OPP_LEAVE_P) ** (n_opp - k))
+            acc += pk * ((A + G + Y) if k == 0 else (A + G // (k + 1)))
+        return acc
+
+    @staticmethod
+    def _sim_should_leave(A: int, G: int, Y: int, n_opp: int,
+                          remaining, revealed) -> bool:
+        """模拟中我方的后续策略：风险加权后继续不再划算就下车"""
+        total = len(remaining)
+        if total <= 0:
+            return True
         fatal = 0
         gold_sum = 0
         yak_sum = 0
-        for c in left_cards:
+        for c in remaining:
             if c < 100:
                 gold_sum += c
             elif c < 200:
-                if c in revealed:      # 同种陷阱第二次出现 -> 本轮立即结束
+                if c in revealed:
                     fatal += 1
             else:
                 yak_sum += YAKUMAN_SCORES[c - 200]
-        total = len(left_cards)
-        p_fatal = fatal / total
-        e_gold = gold_sum / total
-        e_yak = yak_sum / total
+        p = fatal / total
+        gain = gold_sum / total / (n_opp + 1) + yak_sum / total
+        return p * (A + G + Y) >= (1.0 - p) * gain
 
-        def ev_leave(l: float) -> float:
-            """自己下车：只有别人都不下车才能独吞池子"""
-            acc = 0.0
-            m = n - 1
-            for k in range(m + 1):
-                pk = comb(m, k) * (l ** k) * ((1 - l) ** (m - k))
-                acc += pk * ((A + G + Y) if k == 0 else (A + G // (k + 1)))
-            return acc
-
-        def ev_continue(l: float) -> float:
-            """自己继续：翻一张安全的牌后按“立刻下车”估价（保守下界）"""
-            acc = 0.0
-            m = n - 1
-            for k in range(m + 1):
-                pk = comb(m, k) * (l ** k) * ((1 - l) ** (m - k))
-                stay = n - k
-                acc += pk * (A + e_gold / stay + G + Y + e_yak)
-            return (1.0 - p_fatal) * acc
-
-        d0 = ev_leave(0.0) - ev_continue(0.0)
-        d1 = ev_leave(1.0) - ev_continue(1.0)
-        if d0 <= 0:
-            l = 0.0
-        elif d1 >= 0:
-            l = 1.0
-        else:
-            lo, hi = 0.0, 1.0
-            for _ in range(30):
-                mid = (lo + hi) / 2
-                if ev_leave(mid) - ev_continue(mid) > 0:
-                    lo = mid
+    @classmethod
+    def _sim_continue(cls, order, A, G, Y, revealed, n_opp, rng) -> float:
+        """模拟「本轮继续」后我的最终收益（0 表示本轮血本无归）"""
+        pos = 0
+        while pos < len(order):
+            k = 0
+            for _ in range(n_opp):
+                if rng.random() < OPP_LEAVE_P:
+                    k += 1
+            # 首张牌已经翻开，决策从第二次选择开始
+            if pos > 0 and cls._sim_should_leave(A, G, Y, n_opp, order[pos:], revealed):
+                return (A + G + Y) if k == 0 else (A + G // (k + 1))
+            if k > 0:
+                if k == 1:          # 对手单走，拿走点棒池与役满池
+                    G, Y = 0, 0
                 else:
-                    hi = mid
-            l = (lo + hi) / 2
-
-        if 0.0 < l < 1.0:
-            # 均衡本身是混合的，加入个体偏移让不同机器人不会完全同步
-            l = min(0.95, max(0.05, l + self.players[i].get("jitter", 0.0)))
-        return "leave" if random.random() < l else "continue"
+                    G -= (G // k) * k
+                n_opp -= k
+            c = order[pos]
+            pos += 1
+            if c < 100:
+                n = n_opp + 1
+                share = c // n
+                A += share
+                G += c - share * n
+            elif c < 200:
+                if c in revealed:   # 同种陷阱第二次出现 -> 本轮结束
+                    return 0.0
+                revealed.add(c)
+            else:
+                Y += YAKUMAN_SCORES[c - 200]
+        return 0.0
 
     # ==================== 房间发言 ====================
 

@@ -388,8 +388,10 @@ async function enterRoom(code) {
 }
 
 async function pollRoom() {
-  if (!fkCode) return;
-  const { status, data } = await api('/api/farkle/state?code=' + encodeURIComponent(fkCode));
+  const code = fkCode;
+  if (!code) return;
+  const { status, data } = await api('/api/farkle/state?code=' + encodeURIComponent(code));
+  if (code !== fkCode) return;   // 已离开或换了房间，丢弃旧响应
   if (status === 401) { clearInterval(fkRoomTimer); fkPanel.classList.add('hidden'); showLogin(); return; }
   if (status === 404) {
     fkMsg('房间已结束喵');
@@ -808,8 +810,10 @@ async function enterYzRoom(code) {
 }
 
 async function pollYzRoom() {
-  if (!yzCode) return;
-  const { status, data } = await api('/api/yahtzee/state?code=' + encodeURIComponent(yzCode));
+  const code = yzCode;
+  if (!code) return;
+  const { status, data } = await api('/api/yahtzee/state?code=' + encodeURIComponent(code));
+  if (code !== yzCode) return;   // 已离开或换了房间，丢弃旧响应
   if (status === 401) { clearInterval(yzRoomTimer); yzPanel.classList.add('hidden'); showLogin(); return; }
   if (status === 404) { yzMsg('房间已结束喵'); backToYzLobby(); return; }
   if (status !== 200 || !data.ok) return;
@@ -1210,8 +1214,10 @@ async function enterMjRoom(code) {
 }
 
 async function pollMjRoom() {
-  if (!mjCode) return;
-  const { status, data } = await api('/api/mahjong17/state?code=' + encodeURIComponent(mjCode));
+  const code = mjCode;
+  if (!code) return;
+  const { status, data } = await api('/api/mahjong17/state?code=' + encodeURIComponent(code));
+  if (code !== mjCode) return;   // 已离开或换了房间，丢弃旧响应
   if (status === 401) { clearInterval(mjRoomTimer); mjPanel.classList.add('hidden'); showLogin(); return; }
   if (status === 404) { mjMsg('房间已结束喵'); backToMjLobby(); return; }
   if (status !== 200 || !data.ok) return;
@@ -1495,18 +1501,386 @@ document.getElementById('btn-mj-back').addEventListener('click', () => {
 });
 document.getElementById('btn-mj-create').addEventListener('click', createMjRoom);
 
+// ==================== 麻酱宝藏（印加宝藏麻将版） ====================
+
+const goldPanel = document.getElementById('gold-panel');
+const goldLobby = document.getElementById('gold-lobby');
+const goldRoom = document.getElementById('gold-room');
+const goldRooms = document.getElementById('gold-rooms');
+const goldLobbyMsg = document.getElementById('gold-lobby-msg');
+const goldToast = document.getElementById('gold-toast');
+
+const GOLD_MISTAKE_NAMES = ['舞蹈', '诈立', '错吃', '诈和', '夏哒！'];
+
+let goldCode = null;
+let goldState = null;
+let goldSig = null;
+let goldLobbyTimer = null;
+let goldRoomTimer = null;
+let goldToastTimer = null;
+
+function goldMsg(text, ok) {
+  goldToast.textContent = text || '';
+  goldToast.classList.toggle('ok', !!ok);
+  clearTimeout(goldToastTimer);
+  if (text) goldToastTimer = setTimeout(() => { goldToast.textContent = ''; }, 4000);
+}
+
+function goldCardImg(card) {
+  return `<img class="mg-card" src="/mgold/${card.id}.png" alt="${esc(card.label)}"`
+    + ` title="${esc(card.label)}">`;
+}
+
+async function enterGold() {
+  loginPanel.classList.add('hidden');
+  homePanel.classList.add('hidden');
+  pwdPanel.classList.add('hidden');
+  goldPanel.classList.remove('hidden');
+  goldLobby.classList.remove('hidden');
+  goldRoom.classList.add('hidden');
+  goldCode = null;
+  goldLobbyMsg.textContent = '';
+  const { status, data } = await api('/api/mahjong_gold/mine');
+  if (status === 401) { goldPanel.classList.add('hidden'); showLogin(); return; }
+  if (status === 200 && data.ok && data.code) { enterGoldRoom(data.code); return; }
+  await refreshGoldRooms();
+  clearInterval(goldRoomTimer);
+  goldRoomTimer = null;
+  clearInterval(goldLobbyTimer);
+  goldLobbyTimer = setInterval(refreshGoldRooms, 2500);
+}
+
+function backToGoldLobby() {
+  clearInterval(goldRoomTimer);
+  goldRoomTimer = null;
+  goldCode = null;
+  hideChat('gold');
+  goldRoom.classList.add('hidden');
+  goldLobby.classList.remove('hidden');
+  refreshGoldRooms();
+  clearInterval(goldLobbyTimer);
+  goldLobbyTimer = setInterval(refreshGoldRooms, 2500);
+}
+
+async function refreshGoldRooms() {
+  const { status, data } = await api('/api/mahjong_gold/rooms');
+  if (status === 401) { clearInterval(goldLobbyTimer); goldPanel.classList.add('hidden'); showLogin(); return; }
+  if (status !== 200 || !data.ok) return;
+  goldRooms.innerHTML = '';
+  if (!data.rooms.length) {
+    const p = document.createElement('p');
+    p.className = 'room-empty';
+    p.textContent = '还没有房间，创建一个等队友来吧';
+    goldRooms.appendChild(p);
+    return;
+  }
+  data.rooms.forEach((r) => {
+    const row = document.createElement('div');
+    row.className = 'room-row';
+    const ongoing = r.phase !== 'waiting';
+    const meta = document.createElement('div');
+    meta.className = 'room-meta';
+    meta.textContent = (ongoing ? '探险中 · ' : '等待中 · ')
+      + `房间号 ${r.code} · ${r.count}/${r.max} 人`;
+    const host = document.createElement('div');
+    host.className = 'room-host';
+    host.textContent = ongoing ? (r.players || []).join(' / ') : r.host;
+    const btn = document.createElement('button');
+    btn.className = 'btn btn-primary btn-sm';
+    btn.textContent = ongoing ? '观战' : '加入';
+    btn.addEventListener('click', () => (ongoing ? enterGoldRoom(r.code) : joinGoldRoom(r.code)));
+    row.appendChild(host);
+    row.appendChild(meta);
+    row.appendChild(btn);
+    goldRooms.appendChild(row);
+  });
+}
+
+async function createGoldRoom() {
+  goldLobbyMsg.textContent = '';
+  const { status, data } = await api('/api/mahjong_gold/create', { method: 'POST' });
+  if (status === 200 && data.ok) enterGoldRoom(data.code);
+  else goldLobbyMsg.textContent = data.msg || '创建失败喵';
+}
+
+async function joinGoldRoom(code) {
+  goldLobbyMsg.textContent = '';
+  const { status, data } = await api('/api/mahjong_gold/join', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code: code }),
+  });
+  if (status === 200 && data.ok) enterGoldRoom(data.code);
+  else goldLobbyMsg.textContent = data.msg || '加入失败喵';
+}
+
+async function cancelGoldRoom() {
+  if (!goldCode) return;
+  const { status, data } = await api('/api/mahjong_gold/cancel', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code: goldCode }),
+  });
+  if (status === 200 && data.ok) backToGoldLobby();
+  else goldMsg(data.msg || '取消失败喵');
+}
+
+async function goldAct(action) {
+  if (!goldCode) return;
+  const { status, data } = await api('/api/mahjong_gold/action', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code: goldCode, action: action }),
+  });
+  if (status === 200 && data.ok) {
+    goldSig = goldSignature(data.room);
+    renderGoldRoom(data.room);
+    renderChat('gold', data.room.chat);
+  } else {
+    goldMsg(data.msg || '操作失败喵');
+  }
+}
+
+function goldSignature(r) {
+  return JSON.stringify([
+    r.phase, r.round, r.pot_gold, r.pot_yakuman, r.turn_score, r.deck_left,
+    (r.revealed || []).map((c) => c.id), r.mistake_left, r.can_decide,
+    r.players, r.result, r.log.length,
+  ]);
+}
+
+async function enterGoldRoom(code) {
+  clearInterval(goldLobbyTimer);
+  goldLobbyTimer = null;
+  goldCode = code;
+  goldState = null;
+  goldSig = null;
+  goldLobby.classList.add('hidden');
+  goldRoom.classList.remove('hidden');
+  showChat('gold');
+  buildGoldRoomDom();
+  await pollGoldRoom();
+  clearInterval(goldRoomTimer);
+  goldRoomTimer = setInterval(pollGoldRoom, 1200);
+}
+
+async function pollGoldRoom() {
+  const code = goldCode;
+  if (!code) return;
+  const { status, data } = await api('/api/mahjong_gold/state?code=' + encodeURIComponent(code));
+  if (code !== goldCode) return;   // 已离开或换了房间，丢弃旧响应
+  if (status === 401) { clearInterval(goldRoomTimer); goldPanel.classList.add('hidden'); showLogin(); return; }
+  if (status === 404) { goldMsg('房间已结束喵'); backToGoldLobby(); return; }
+  if (status !== 200 || !data.ok) return;
+  const s = goldSignature(data.room);
+  if (s !== goldSig) {
+    goldSig = s;
+    renderGoldRoom(data.room);
+  }
+  renderChat('gold', data.room.chat);
+}
+
+function buildGoldRoomDom() {
+  goldRoom.innerHTML = `
+    <div class="card fk-head">
+      <div class="fk-head-top">
+        <div class="fk-title">麻酱宝藏<span id="gold-round-show"></span></div>
+        <div class="fk-head-right">
+          <div class="fk-code">房间号 <b id="gold-code-show"></b></div>
+          <div id="gold-spectate-badge" class="fk-spectate hidden">观战中</div>
+        </div>
+      </div>
+      <div id="gold-players" class="fk-players mg-players"></div>
+    </div>
+
+    <div id="gold-waiting" class="card fk-card hidden">
+      <div class="fk-info">等待玩家加入……把房间号 <b id="gold-wait-code"></b> 发给大家，2~5 人，满 5 人自动开始</div>
+      <div class="actions">
+        <button id="gold-start" class="btn btn-primary btn-sm">开始探险</button>
+        <button id="gold-cancel" class="btn btn-ghost btn-sm">解散房间</button>
+      </div>
+      <p id="gold-wait-hint" class="hint"></p>
+    </div>
+
+    <div id="gold-explore" class="card fk-card hidden">
+      <div class="mg-pools">
+        <div class="mg-pool"><div class="mg-pool-num" id="gold-turn-score">0</div><div class="mg-pool-label">本轮携带</div></div>
+        <div class="mg-pool"><div class="mg-pool-num" id="gold-pot-gold">0</div><div class="mg-pool-label">点棒池</div></div>
+        <div class="mg-pool"><div class="mg-pool-num" id="gold-pot-yakuman">0</div><div class="mg-pool-label">役满池</div></div>
+        <div class="mg-pool"><div class="mg-pool-num" id="gold-deck-left">0</div><div class="mg-pool-label">牌堆剩余</div></div>
+      </div>
+      <div class="mj-section">
+        <div class="mj-label">本轮已翻开</div>
+        <div id="gold-revealed" class="mg-card-row"></div>
+      </div>
+      <div id="gold-yakuman-tip" class="mg-yakuman-tip"></div>
+      <div class="mj-section">
+        <div class="mj-label">陷阱剩余张数</div>
+        <div id="gold-mistakes" class="mg-mistakes"></div>
+      </div>
+      <div class="actions">
+        <button id="gold-continue" class="btn btn-primary btn-sm">继续</button>
+        <button id="gold-leave" class="btn btn-ghost btn-sm">下车</button>
+        <span id="gold-decide-hint" class="hint"></span>
+      </div>
+    </div>
+
+    <div id="gold-result" class="card fk-result hidden"></div>
+
+    <div class="card fk-card">
+      <div class="panel-title">探险记录</div>
+      <div id="gold-log" class="log"></div>
+    </div>
+
+    <div class="actions">
+      <button id="gold-back-lobby" class="btn btn-ghost btn-sm">返回大厅</button>
+    </div>`;
+
+  document.getElementById('gold-start').addEventListener('click', () => goldAct('start'));
+  document.getElementById('gold-continue').addEventListener('click', () => goldAct('continue'));
+  document.getElementById('gold-leave').addEventListener('click', () => goldAct('leave'));
+  document.getElementById('gold-cancel').addEventListener('click', cancelGoldRoom);
+  document.getElementById('gold-back-lobby').addEventListener('click', backToGoldLobby);
+}
+
+function renderGoldRoom(state) {
+  goldState = state;
+  document.getElementById('gold-code-show').textContent = state.code;
+  document.getElementById('gold-round-show').textContent =
+    state.phase === 'waiting' ? '' : ` · 第 ${state.round}/${state.rounds} 轮`;
+  const waitCode = document.getElementById('gold-wait-code');
+  if (waitCode) waitCode.textContent = state.code;
+
+  const isWaiting = state.phase === 'waiting';
+  const isExploring = state.phase === 'exploring';
+  const isOver = state.phase === 'finished';
+  const spectator = !state.is_player;
+
+  fkToggle('gold-waiting', isWaiting);
+  fkToggle('gold-explore', isExploring);
+  fkToggle('gold-result', isOver);
+  document.getElementById('gold-spectate-badge').classList.toggle('hidden', !spectator);
+
+  if (isWaiting) {
+    const host = state.my_index === 0;
+    document.getElementById('gold-start').classList.toggle('hidden', !host);
+    document.getElementById('gold-cancel').classList.toggle('hidden', !host);
+    document.getElementById('gold-wait-hint').textContent =
+      host ? '房主可以开始探险（至少 2 人）' : '等房主开始探险';
+  }
+
+  const wrap = document.getElementById('gold-players');
+  wrap.innerHTML = '';
+  (state.players || []).forEach((p, i) => {
+    const div = document.createElement('div');
+    const active = isExploring && !p.left;
+    div.className = 'fk-player' + (active ? ' active' : '') + (i === state.my_index ? ' you' : '');
+    let meta;
+    if (isWaiting) meta = '等待中';
+    else if (p.left) meta = '本轮已下车';
+    else if (!p.decided) meta = '待决定';
+    else meta = '已决定';
+    div.innerHTML = `<div class="pname">${esc(p.name || '等待中')}${i === state.my_index ? '（你）' : ''}</div>`
+      + `<div class="pmeta">${meta}</div>`
+      + `<div class="ptotal">${p.score} 根</div>`;
+    wrap.appendChild(div);
+  });
+
+  if (isExploring) renderGoldExplore(state);
+  if (isOver) renderGoldResult(state);
+  renderGoldLog(state);
+}
+
+function renderGoldExplore(state) {
+  document.getElementById('gold-turn-score').textContent = state.turn_score;
+  document.getElementById('gold-pot-gold').textContent = state.pot_gold;
+  document.getElementById('gold-pot-yakuman').textContent = state.pot_yakuman;
+  document.getElementById('gold-deck-left').textContent = state.deck_left;
+
+  const revealed = document.getElementById('gold-revealed');
+  revealed.innerHTML = '';
+  if (!(state.revealed || []).length) {
+    revealed.innerHTML = '<span class="hint">还没有翻牌喵</span>';
+  } else {
+    state.revealed.forEach((c) => {
+      const extra = c.type === 'yakuman' ? ` +${c.value}`
+        : c.type === 'mistake' ? ' 陷阱' : '';
+      revealed.insertAdjacentHTML('beforeend',
+        `<figure class="mg-card-item ${c.type}">${goldCardImg(c)}`
+        + `<figcaption>${esc(c.label)}${extra}</figcaption></figure>`);
+    });
+  }
+
+  const tip = document.getElementById('gold-yakuman-tip');
+  tip.textContent = state.yakuman_card
+    ? `本轮新增役满牌：${state.yakuman_card.label}（${state.yakuman_card.value} 根）`
+    : '';
+
+  const mistakes = document.getElementById('gold-mistakes');
+  mistakes.innerHTML = '';
+  (state.mistake_left || []).forEach((n, i) => {
+    mistakes.insertAdjacentHTML('beforeend',
+      `<span class="mg-mistake${n ? '' : ' gone'}">${esc(GOLD_MISTAKE_NAMES[i])} × ${n}</span>`);
+  });
+
+  const canDecide = !!state.can_decide;
+  document.getElementById('gold-continue').disabled = !canDecide;
+  document.getElementById('gold-leave').disabled = !canDecide;
+  let hint;
+  if (!state.is_player) hint = '观战中';
+  else if (state.can_decide) hint = '继续翻牌，还是带着点棒下车？';
+  else if (state.players[state.my_index].left) hint = '你本轮已经下车，等其他人结束';
+  else hint = '等本轮其他人做决定……';
+  document.getElementById('gold-decide-hint').textContent = hint;
+}
+
+function renderGoldResult(state) {
+  const box = document.getElementById('gold-result');
+  const ranking = (state.result && state.result.ranking) || [];
+  let html = '<div class="panel-title">五轮结束 · 最终排名</div>';
+  ranking.forEach((r, i) => {
+    html += `<div class="line">${i + 1}. ${esc(r.name || '玩家')}：${r.score} 根</div>`;
+  });
+  box.innerHTML = html;
+}
+
+function renderGoldLog(state) {
+  const box = document.getElementById('gold-log');
+  box.innerHTML = '';
+  (state.log || []).forEach((l) => {
+    const d = document.createElement('div');
+    d.textContent = l;
+    box.appendChild(d);
+  });
+  box.scrollTop = box.scrollHeight;
+}
+
+document.getElementById('btn-gold').addEventListener('click', enterGold);
+document.getElementById('btn-gold-back').addEventListener('click', () => {
+  closeGamePanels();
+  refresh();
+});
+document.getElementById('btn-gold-create').addEventListener('click', createGoldRoom);
+
 // ==================== 房间发言（对局双方 + 观众） ====================
 
-const chatSigs = { fk: '', yz: '', mj: '' };
+const chatSigs = { fk: '', yz: '', mj: '', gold: '' };
+
+function clearChatDom(prefix) {
+  const list = document.getElementById(prefix + '-chat-list');
+  if (list) list.innerHTML = '';
+}
 
 function showChat(prefix) {
   chatSigs[prefix] = '';
+  clearChatDom(prefix);   // 换房间时先清掉上一间的残留消息
   const card = document.getElementById(prefix + '-chat');
   if (card) card.classList.remove('hidden');
 }
 
 function hideChat(prefix) {
   chatSigs[prefix] = '';
+  clearChatDom(prefix);
   const card = document.getElementById(prefix + '-chat');
   if (card) card.classList.add('hidden');
 }
@@ -1574,6 +1948,7 @@ function wireChat(prefix, endpoint, getCode, toast) {
 wireChat('fk', '/api/farkle/say', () => fkCode, fkMsg);
 wireChat('yz', '/api/yahtzee/say', () => yzCode, yzMsg);
 wireChat('mj', '/api/mahjong17/say', () => mjCode, mjMsg);
+wireChat('gold', '/api/mahjong_gold/say', () => goldCode, goldMsg);
 
 // ==================== 顶部导航（喵喵远征队 / 小游戏 / 个人 / 开发中 / 管理） ====================
 
@@ -1586,20 +1961,25 @@ function showTabNav() {
 }
 
 function closeGamePanels() {
-  [fkLobbyTimer, yzLobbyTimer, mjLobbyTimer, fkRoomTimer, yzRoomTimer, mjRoomTimer]
+  [fkLobbyTimer, yzLobbyTimer, mjLobbyTimer, goldLobbyTimer,
+    fkRoomTimer, yzRoomTimer, mjRoomTimer, goldRoomTimer]
     .forEach((t) => clearInterval(t));
   fkLobbyTimer = null;
   yzLobbyTimer = null;
   mjLobbyTimer = null;
+  goldLobbyTimer = null;
   fkRoomTimer = null;
   yzRoomTimer = null;
   mjRoomTimer = null;
+  goldRoomTimer = null;
   fkPanel.classList.add('hidden');
   yzPanel.classList.add('hidden');
   mjPanel.classList.add('hidden');
+  goldPanel.classList.add('hidden');
   hideChat('fk');
   hideChat('yz');
   hideChat('mj');
+  hideChat('gold');
   homePanel.classList.remove('hidden');
 }
 

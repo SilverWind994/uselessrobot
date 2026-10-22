@@ -35,10 +35,13 @@ import cat_web                                                       # noqa: E40
 import farkle_web                                                    # noqa: E402
 import yahtzee_web                                                   # noqa: E402
 import mahjong17_web                                                 # noqa: E402
+import mahjong_gold_web                                              # noqa: E402
 
 _STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 # 麻将牌面素材（mj0.png ~ mj37.png），供 17 步麻将网页版直接引用
 _MAHJONG_TILE_DIR = os.path.join(_NEWBOT_DIR, "assets", "mahjong")
+# 麻酱宝藏牌面素材（1.png ~ 204.png），沿用旧仓库的牌图
+_MGOLD_DIR = os.path.join(_REPO_DIR, "archive", "mybot", "mahjong_gold")
 _SECRET = Config.WEB_SECRET.encode("utf-8") or os.urandom(32)
 _COOKIE_NAME = "cat_token"
 _COOKIE_MAX_AGE = 7 * 24 * 60 * 60
@@ -46,6 +49,7 @@ _COOKIE_MAX_AGE = 7 * 24 * 60 * 60
 app = FastAPI(title="串子小车")
 app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
 app.mount("/mahjong", StaticFiles(directory=_MAHJONG_TILE_DIR), name="mahjong")
+app.mount("/mgold", StaticFiles(directory=_MGOLD_DIR), name="mgold")
 # 喵喵远征队素材：喵喵立绘 / 职业图标 / 国家旗帜 / 章节插画 / 世界地图（只挂素材目录，不暴露存档）
 app.mount("/catexp/cats", StaticFiles(directory=cat_web.CATS_DIR), name="catexp-cats")
 app.mount("/catexp/jobs", StaticFiles(directory=cat_web.JOBS_DIR), name="catexp-jobs")
@@ -473,6 +477,93 @@ def mahjong17_say(payload: dict, cat_token: str = Cookie(default="")) -> JSONRes
         return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
     err, room = mahjong17_web.say(str(payload.get("code", "")).strip(), qq,
                                    payload.get("text"), _nick_of(qq))
+    if err:
+        return JSONResponse({"ok": False, "msg": err}, status_code=400)
+    return JSONResponse({"ok": True, "room": room})
+
+
+# ==================== 麻酱宝藏网页版 ====================
+
+@app.get("/api/mahjong_gold/rooms")
+def mahjong_gold_rooms(cat_token: str = Cookie(default="")) -> JSONResponse:
+    if _auth_qq(cat_token) is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    return JSONResponse({"ok": True, "rooms": mahjong_gold_web.list_rooms()})
+
+
+@app.get("/api/mahjong_gold/mine")
+def mahjong_gold_mine(cat_token: str = Cookie(default="")) -> JSONResponse:
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    return JSONResponse({"ok": True, "code": mahjong_gold_web.my_room(qq)})
+
+
+@app.post("/api/mahjong_gold/create")
+def mahjong_gold_create(cat_token: str = Cookie(default="")) -> JSONResponse:
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    code, err = mahjong_gold_web.create_room(qq, _nick_of(qq))
+    if err:
+        return JSONResponse({"ok": False, "msg": err}, status_code=400)
+    return JSONResponse({"ok": True, "code": code})
+
+
+@app.post("/api/mahjong_gold/join")
+def mahjong_gold_join(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    code = str(payload.get("code", "")).strip()
+    err = mahjong_gold_web.join_room(code, qq, _nick_of(qq))
+    if err:
+        return JSONResponse({"ok": False, "msg": err}, status_code=400)
+    return JSONResponse({"ok": True, "code": code})
+
+
+@app.post("/api/mahjong_gold/cancel")
+def mahjong_gold_cancel(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    err = mahjong_gold_web.cancel_room(str(payload.get("code", "")).strip(), qq)
+    if err:
+        return JSONResponse({"ok": False, "msg": err}, status_code=400)
+    return JSONResponse({"ok": True})
+
+
+@app.get("/api/mahjong_gold/state")
+def mahjong_gold_state(code: str, cat_token: str = Cookie(default="")) -> JSONResponse:
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    room = mahjong_gold_web.snapshot(code, qq)
+    if room is None:
+        return JSONResponse({"ok": False, "msg": "房间不存在或已结束喵"}, status_code=404)
+    return JSONResponse({"ok": True, "room": room})
+
+
+@app.post("/api/mahjong_gold/action")
+def mahjong_gold_action(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    code = str(payload.get("code", "")).strip()
+    action = str(payload.get("action", "")).strip()
+    err, room = mahjong_gold_web.act(code, qq, action, payload)
+    if err:
+        return JSONResponse({"ok": False, "msg": err}, status_code=400)
+    return JSONResponse({"ok": True, "room": room})
+
+
+@app.post("/api/mahjong_gold/say")
+def mahjong_gold_say(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    err, room = mahjong_gold_web.say(str(payload.get("code", "")).strip(), qq,
+                                      payload.get("text"), _nick_of(qq))
     if err:
         return JSONResponse({"ok": False, "msg": err}, status_code=400)
     return JSONResponse({"ok": True, "room": room})

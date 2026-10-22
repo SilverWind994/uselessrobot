@@ -1868,6 +1868,507 @@ document.getElementById('btn-gold-back').addEventListener('click', () => {
 });
 document.getElementById('btn-gold-create').addEventListener('click', createGoldRoom);
 
+// ==================== UCML / UEML 赛事计分 ====================
+
+const ucmlState = { data: null, rankView: '', matchView: 'all', formSig: '' };
+
+function ucmlEsc(text) {
+  return String(text == null ? '' : text).replace(/[&<>"']/g, (m) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[m]));
+}
+
+function ucmlColor(item) {
+  return `rgb(${item.r == null ? 120 : item.r},${item.g == null ? 120 : item.g},${item.b == null ? 120 : item.b})`;
+}
+
+function ucmlTint(item) {
+  return `rgba(${item.r == null ? 120 : item.r},${item.g == null ? 120 : item.g},${item.b == null ? 120 : item.b},0.16)`;
+}
+
+function ucmlTeamChip(name, item) {
+  return `<span class="ucml-chip"><i style="background:${ucmlColor(item)}"></i>${ucmlEsc(name)}</span>`;
+}
+
+function ucmlSetMsg(text, ok) {
+  const el = document.getElementById('ucml-msg');
+  el.textContent = text || '';
+  el.classList.toggle('ok', !!ok);
+}
+
+function ucmlRankOptions() {
+  const d = ucmlState.data;
+  if (!d) return ['total'];
+  const opts = ['total'];
+  if (d.stage >= 1 || d.stage === 4) opts.push('1');
+  if (d.stage >= 2 || d.stage === 4) opts.push('2');
+  if (d.stage >= 3 || d.stage === 4) opts.push('3');
+  return opts;
+}
+
+const UCML_RANK_LABELS = { total: '总成绩', 1: '常规赛', 2: '半决赛', 3: '决赛' };
+
+async function loadUcml() {
+  const { status, data } = await api('/api/ucml/overview');
+  if (status !== 200 || !data.ok) {
+    ucmlSetMsg((data && data.msg) || '读取计分数据失败喵', false);
+    return;
+  }
+  ucmlState.data = data.data;
+  const options = ucmlRankOptions();
+  if (!options.includes(ucmlState.rankView)) {
+    ucmlState.rankView = data.data.stage >= 1 ? String(Math.min(data.data.stage, 3)) : 'total';
+  }
+  renderUcml();
+}
+
+function ucmlApply(data, resetRank) {
+  ucmlState.data = data;
+  if (resetRank) {
+    ucmlState.rankView = data.stage >= 1 ? String(Math.min(data.stage, 3)) : 'total';
+  }
+  const options = ucmlRankOptions();
+  if (!options.includes(ucmlState.rankView)) ucmlState.rankView = 'total';
+  renderUcml();
+}
+
+async function ucmlPost(path, body, onOk) {
+  const { status, data } = await api(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body || {}),
+  });
+  if (status !== 200 || !data.ok) {
+    ucmlSetMsg((data && data.msg) || '操作失败喵', false);
+    return;
+  }
+  ucmlSetMsg('', false);
+  if (onOk) onOk(data);
+}
+
+function renderUcml() {
+  const d = ucmlState.data;
+  if (!d) return;
+  document.getElementById('ucml-sub').textContent =
+    `第 ${d.season} 赛季 · ${d.stage_name} · ${d.teams.length} 支队伍 / ${d.players.length} 位选手 · 已记录 ${d.matches.length} 场`;
+  renderUcmlAdminActions(d);
+  renderUcmlScore(d);
+  renderUcmlStandings(d);
+  renderUcmlMatches(d);
+  renderUcmlRoster(d);
+}
+
+function renderUcmlAdminActions(d) {
+  const box = document.getElementById('ucml-admin-actions');
+  if (!d.is_admin) {
+    box.innerHTML = '<span class="hint">计分与赛事管理仅限两位管理员</span>';
+    return;
+  }
+  const buttons = [];
+  if (d.stage < 4) {
+    const labels = { 0: '开始常规赛', 1: '进入半决赛', 2: '进入决赛', 3: '结束赛季' };
+    buttons.push(`<button class="btn btn-primary btn-sm" data-ucml="next" type="button">${labels[d.stage] || '下一阶段'}</button>`);
+  } else {
+    buttons.push('<button class="btn btn-primary btn-sm" data-ucml="newseason" type="button">开始新赛季</button>');
+  }
+  if (d.can_undo) {
+    buttons.push('<button class="btn btn-ghost btn-sm" data-ucml="undo" type="button">撤回最近一场</button>');
+  }
+  box.innerHTML = buttons.join('');
+  box.querySelectorAll('[data-ucml]').forEach((btn) => {
+    btn.addEventListener('click', () => ucmlAdminAction(btn.dataset.ucml));
+  });
+}
+
+async function ucmlAdminAction(kind) {
+  const paths = { next: '/api/ucml/stage/next', undo: '/api/ucml/match/undo', newseason: '/api/ucml/season/new' };
+  const labels = { next: '推进阶段', undo: '撤回最近一场比赛', newseason: '开始新赛季（会清空当前队伍、选手与比赛记录）' };
+  if (!confirm(`确定要${labels[kind]}吗喵？`)) return;
+  await ucmlPost(paths[kind], {}, (data) => {
+    ucmlSetMsg(`${labels[kind]}成功喵`, true);
+    ucmlState.formSig = '';
+    ucmlApply(data.data, kind !== 'undo');
+  });
+}
+
+// ---------- 单场计分表单 ----------
+
+function ucmlFormSignature(d) {
+  const table = d.stage_tables[String(d.stage)] || { teams: [] };
+  const teams = (table.teams || []).map((t) => t.name).join('|');
+  const players = d.players.map((p) => `${p.name}@${p.team}`).join('|');
+  return `${d.stage}#${teams}#${players}`;
+}
+
+function renderUcmlScore(d) {
+  const card = document.getElementById('ucml-score-card');
+  const show = d.is_admin && d.stage >= 1 && d.stage <= 3;
+  card.classList.toggle('hidden', !show);
+  if (!show) return;
+  const sig = ucmlFormSignature(d);
+  if (sig !== ucmlState.formSig) {
+    ucmlState.formSig = sig;
+    buildUcmlForm(d);
+  }
+  ucmlUpdateSum();
+}
+
+function buildUcmlForm(d) {
+  const wrap = document.getElementById('ucml-rows');
+  const table = d.stage_tables[String(d.stage)] || { teams: [] };
+  const teams = (table.teams || []).map((t) => t.name);
+  const teamOptions = teams.map((n) => `<option value="${ucmlEsc(n)}">${ucmlEsc(n)}</option>`).join('');
+
+  wrap.innerHTML = '';
+  for (let i = 0; i < 4; i += 1) {
+    const row = document.createElement('div');
+    row.className = 'ucml-row';
+    row.innerHTML = `
+      <span class="ucml-rank">${i + 1}</span>
+      <select class="ucml-team-sel"><option value="">选择队伍</option>${teamOptions}</select>
+      <select class="ucml-player-sel" disabled><option value="">选择选手</option></select>
+      <input class="ucml-score" type="number" step="100" value="25000">
+      <span class="ucml-pt">—</span>`;
+    wrap.appendChild(row);
+
+    const teamSel = row.querySelector('.ucml-team-sel');
+    const playerSel = row.querySelector('.ucml-player-sel');
+    teamSel.addEventListener('change', () => {
+      const list = d.players.filter((p) => p.team === teamSel.value);
+      playerSel.innerHTML = '<option value="">选择选手</option>' +
+        list.map((p) => `<option value="${ucmlEsc(p.name)}">${ucmlEsc(p.name)}</option>`).join('');
+      playerSel.disabled = !list.length;
+      if (list.length === 1) playerSel.value = list[0].name;
+      ucmlRefreshTeams();
+      ucmlClearPreview();
+      ucmlUpdateSum();
+    });
+    playerSel.addEventListener('change', () => {
+      ucmlClearPreview();
+      ucmlUpdateSum();
+    });
+    row.querySelector('.ucml-score').addEventListener('input', () => {
+      ucmlClearPreview();
+      ucmlUpdateSum();
+    });
+  }
+}
+
+function ucmlRefreshTeams() {
+  const rows = Array.from(document.querySelectorAll('#ucml-rows .ucml-row'));
+  const chosen = rows.map((row) => row.querySelector('.ucml-team-sel').value).filter(Boolean);
+  rows.forEach((row) => {
+    const sel = row.querySelector('.ucml-team-sel');
+    Array.from(sel.options).forEach((opt) => {
+      if (!opt.value) return;
+      opt.disabled = chosen.includes(opt.value) && opt.value !== sel.value;
+    });
+  });
+}
+
+function ucmlCollect() {
+  return Array.from(document.querySelectorAll('#ucml-rows .ucml-row')).map((row) => ({
+    team: row.querySelector('.ucml-team-sel').value,
+    player: row.querySelector('.ucml-player-sel').value,
+    score: parseInt(row.querySelector('.ucml-score').value, 10),
+  }));
+}
+
+function ucmlUpdateSum() {
+  const items = ucmlCollect();
+  const sum = items.reduce((acc, it) => acc + (Number.isFinite(it.score) ? it.score : 0), 0);
+  document.getElementById('ucml-sum').textContent = sum;
+  const hint = document.getElementById('ucml-sum-hint');
+  if (sum === 100000) {
+    hint.textContent = '✓ 正好';
+    hint.className = 'hint ok';
+  } else if (sum > 100000) {
+    hint.textContent = `超出 ${sum - 100000}`;
+    hint.className = 'hint';
+  } else {
+    hint.textContent = `还差 ${100000 - sum}`;
+    hint.className = 'hint';
+  }
+}
+
+function ucmlClearPreview() {
+  document.querySelectorAll('#ucml-rows .ucml-row').forEach((row) => {
+    const pt = row.querySelector('.ucml-pt');
+    pt.textContent = '—';
+    pt.className = 'ucml-pt';
+    row.style.background = '';
+  });
+}
+
+function ucmlFormIssue(items) {
+  if (items.some((it) => !it.team)) return '请为 4 行都选择队伍';
+  if (items.some((it) => !it.player)) return '请为 4 行都选择选手';
+  if (new Set(items.map((it) => it.player)).size !== 4) return '同一场比赛不能重复出现同一选手';
+  if (new Set(items.map((it) => it.team)).size !== 4) return '同一队伍不能有两名选手同时出场';
+  const sum = items.reduce((acc, it) => acc + (Number.isFinite(it.score) ? it.score : 0), 0);
+  if (sum !== 100000) return `点数总和需要 100000（当前 ${sum}）`;
+  return '';
+}
+
+async function ucmlPreview() {
+  const items = ucmlCollect();
+  const issue = ucmlFormIssue(items);
+  if (issue) {
+    ucmlSetMsg(issue, false);
+    return;
+  }
+  const { status, data } = await api('/api/ucml/match/preview', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ players: items.map((it) => it.player), scores: items.map((it) => it.score) }),
+  });
+  if (status !== 200 || !data.ok) {
+    ucmlSetMsg((data && data.msg) || '预览失败喵', false);
+    return;
+  }
+  const byName = {};
+  data.entries.forEach((entry) => { byName[entry.player] = entry; });
+  const rows = Array.from(document.querySelectorAll('#ucml-rows .ucml-row'));
+  items.forEach((item, i) => {
+    const entry = byName[item.player];
+    if (!entry) return;
+    const pt = rows[i].querySelector('.ucml-pt');
+    pt.textContent = `${Number(entry.pt).toFixed(1)} pt`;
+    pt.className = 'ucml-pt' + (entry.rank === 1 ? ' is-first' : '');
+    rows[i].style.background = ucmlTint(entry);
+  });
+  ucmlSetMsg('预览完成，确认无误后点「记录比赛」', true);
+}
+
+async function ucmlSubmit() {
+  const items = ucmlCollect();
+  const issue = ucmlFormIssue(items);
+  if (issue) {
+    ucmlSetMsg(issue, false);
+    return;
+  }
+  if (!confirm('确认记录这场比赛吗喵？')) return;
+  const { status, data } = await api('/api/ucml/match/record', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ players: items.map((it) => it.player), scores: items.map((it) => it.score) }),
+  });
+  if (status !== 200 || !data.ok) {
+    ucmlSetMsg((data && data.msg) || '记录失败喵', false);
+    return;
+  }
+  ucmlSetMsg(`比赛记录成功，当前共 ${data.data.matches.length} 场喵`, true);
+  ucmlState.formSig = '';
+  ucmlApply(data.data, false);
+}
+
+// ---------- 排行榜 / 比赛记录 ----------
+
+function ucmlTeamTable(rows, withInherit) {
+  if (!rows.length) return '<p class="room-empty">当前阶段还没有队伍成绩喵</p>';
+  const head = `<tr><th>名次</th><th>队伍</th><th>比赛</th><th>一位</th><th>二位</th><th>三位</th><th>四位</th>${withInherit ? '<th>继承pt</th>' : ''}<th>总pt</th></tr>`;
+  const body = rows.map((row, i) => `
+    <tr style="background:${ucmlTint(row)}">
+      <td class="ucml-rank-cell">${i + 1}</td>
+      <td>${ucmlTeamChip(row.name, row)}</td>
+      <td>${row.match}</td>
+      <td>${row.first}</td><td>${row.second}</td><td>${row.third}</td><td>${row.forth}</td>
+      ${withInherit ? `<td>${Number(row.inherit || 0).toFixed(1)}</td>` : ''}
+      <td class="ucml-pt-cell">${Number(row.score).toFixed(1)}</td>
+    </tr>`).join('');
+  return `<div class="ucml-table-wrap"><table class="ucml-table"><thead>${head}</thead><tbody>${body}</tbody></table></div>`;
+}
+
+function ucmlPlayerTable(rows) {
+  if (!rows.length) return '<p class="room-empty">当前阶段还没有选手成绩喵</p>';
+  const head = '<tr><th>名次</th><th>选手</th><th>队伍</th><th>比赛</th><th>一位</th><th>二位</th><th>三位</th><th>四位</th><th>总pt</th></tr>';
+  const body = rows.map((row, i) => `
+    <tr style="background:${ucmlTint(row)}">
+      <td class="ucml-rank-cell">${i + 1}</td>
+      <td class="ucml-player-cell">${ucmlEsc(row.name)}</td>
+      <td>${ucmlTeamChip(row.team, row)}</td>
+      <td>${row.match}</td>
+      <td>${row.first}</td><td>${row.second}</td><td>${row.third}</td><td>${row.forth}</td>
+      <td class="ucml-pt-cell">${Number(row.score).toFixed(1)}</td>
+    </tr>`).join('');
+  return `<div class="ucml-table-wrap"><table class="ucml-table"><thead>${head}</thead><tbody>${body}</tbody></table></div>`;
+}
+
+function renderUcmlStandings(d) {
+  const seg = document.getElementById('ucml-rank-seg');
+  const options = ucmlRankOptions();
+  if (!options.includes(ucmlState.rankView)) ucmlState.rankView = options[0];
+  seg.innerHTML = options.map((key) => (
+    `<button class="seg-btn${key === ucmlState.rankView ? ' is-active' : ''}" data-rank="${key}" type="button">${UCML_RANK_LABELS[key]}</button>`
+  )).join('');
+  seg.querySelectorAll('[data-rank]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      ucmlState.rankView = btn.dataset.rank;
+      renderUcmlStandings(d);
+    });
+  });
+
+  const isTotal = ucmlState.rankView === 'total';
+  const table = isTotal ? null : (d.stage_tables[ucmlState.rankView] || { teams: [], players: [] });
+  const teams = isTotal ? d.total_teams : table.teams;
+  const players = isTotal ? d.total_players : table.players;
+
+  document.getElementById('ucml-rank-sub').textContent = isTotal
+    ? `第 ${d.season} 赛季 · 全部阶段累计`
+    : `第 ${d.season} 赛季 · ${UCML_RANK_LABELS[ucmlState.rankView]}（晋级的队伍含继承 pt）`;
+  document.getElementById('ucml-standings').innerHTML =
+    ucmlTeamTable(teams, !isTotal) + ucmlPlayerTable(players);
+}
+
+function renderUcmlMatches(d) {
+  const seg = document.getElementById('ucml-match-seg');
+  const options = [['all', '全部'], ['1', '常规赛'], ['2', '半决赛'], ['3', '决赛']];
+  seg.innerHTML = options.map(([key, label]) => (
+    `<button class="seg-btn${key === ucmlState.matchView ? ' is-active' : ''}" data-match="${key}" type="button">${label}</button>`
+  )).join('');
+  seg.querySelectorAll('[data-match]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      ucmlState.matchView = btn.dataset.match;
+      renderUcmlMatches(d);
+    });
+  });
+
+  const list = d.matches.filter((m) => ucmlState.matchView === 'all' || String(m.stage) === ucmlState.matchView);
+  const box = document.getElementById('ucml-matches');
+  if (!list.length) {
+    box.innerHTML = '<p class="room-empty">还没有比赛记录喵</p>';
+    return;
+  }
+  const head = '<tr><th>编号</th><th>阶段</th><th>一位</th><th>二位</th><th>三位</th><th>四位</th></tr>';
+  const body = list.map((m) => {
+    const cells = m.entries.map((entry) => `
+      <td class="ucml-match-cell" style="background:${ucmlTint(entry)}">
+        <div class="ucml-match-player">${ucmlEsc(entry.player)}</div>
+        <div class="ucml-match-meta">${ucmlTeamChip(entry.team, entry)}<span class="ucml-match-pt">${Number(entry.pt).toFixed(1)}pt</span><span class="ucml-raw">${entry.raw}</span></div>
+      </td>`).join('');
+    return `<tr><td class="ucml-rank-cell">${m.id}</td><td>${m.stage_name}</td>${cells}</tr>`;
+  }).join('');
+  box.innerHTML = `<div class="ucml-table-wrap"><table class="ucml-table ucml-match-table"><thead>${head}</thead><tbody>${body}</tbody></table></div>`;
+}
+
+// ---------- 队伍与选手 ----------
+
+function ucmlHexToRgb(hex) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || '').trim());
+  if (!m) return null;
+  const n = parseInt(m[1], 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+function renderUcmlRoster(d) {
+  const box = document.getElementById('ucml-roster');
+  const canTeamEdit = d.is_admin && d.stage === 0;
+  const canPlayerEdit = d.is_admin && d.stage < 4;
+  document.getElementById('ucml-roster-sub').textContent = d.stage === 0
+    ? '准备期可以增删队伍与选手，开赛后阵容锁定'
+    : '开赛后仍可补选手，已有比赛记录的选手不能移除';
+
+  const byTeam = {};
+  d.players.forEach((p) => {
+    if (!byTeam[p.team]) byTeam[p.team] = [];
+    byTeam[p.team].push(p.name);
+  });
+
+  const rows = d.teams.map((t) => {
+    const names = byTeam[t.name] || [];
+    const chips = names.length
+      ? names.map((n) => `<span class="ucml-name-chip">${ucmlEsc(n)}${canPlayerEdit ? `<button class="ucml-x" data-del-player="${ucmlEsc(n)}" type="button" title="移除选手">×</button>` : ''}</span>`).join('')
+      : '<span class="ucml-empty">暂无选手</span>';
+    const del = canTeamEdit
+      ? `<button class="btn btn-ghost btn-sm" data-del-team="${ucmlEsc(t.name)}" type="button">删除</button>`
+      : '';
+    return `<div class="ucml-roster-row">
+      <div class="ucml-roster-team">${ucmlTeamChip(t.name, t)}<span class="ucml-count">${names.length} 人</span></div>
+      <div class="ucml-roster-players">${chips}</div>
+      ${del}
+    </div>`;
+  }).join('');
+
+  let forms = '';
+  if (canTeamEdit) {
+    forms += `<div class="create-row ucml-add-row">
+      <label class="field inline"><span>新队伍</span><input id="ucml-team-name" type="text" maxlength="16" placeholder="队名（≤16 字）"></label>
+      <label class="field inline"><span>颜色</span><input id="ucml-team-color" type="color" value="#4f8cff"></label>
+      <button class="btn btn-primary btn-sm" id="btn-ucml-add-team" type="button">添加队伍</button>
+    </div>`;
+  }
+  if (canPlayerEdit && d.teams.length) {
+    const rosterTeams = (d.stage >= 1 && d.stage <= 3)
+      ? ((d.stage_tables[String(d.stage)] || { teams: d.teams }).teams || [])
+      : d.teams;
+    const opts = rosterTeams.map((t) => `<option value="${ucmlEsc(t.name)}">${ucmlEsc(t.name)}</option>`).join('');
+    forms += `<div class="create-row ucml-add-row">
+      <label class="field inline"><span>新选手</span><input id="ucml-player-name" type="text" maxlength="16" placeholder="选手名（≤16 字）"></label>
+      <label class="field inline"><span>队伍</span><select id="ucml-player-team">${opts}</select></label>
+      <button class="btn btn-primary btn-sm" id="btn-ucml-add-player" type="button">添加选手</button>
+    </div>`;
+  }
+
+  box.innerHTML = (rows || '<p class="room-empty">还没有队伍喵</p>') + forms;
+
+  box.querySelectorAll('[data-del-team]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      if (!confirm(`确定删除队伍「${btn.dataset.delTeam}」及其全部选手吗喵？`)) return;
+      ucmlPost('/api/ucml/team/delete', { name: btn.dataset.delTeam }, (data) => {
+        ucmlSetMsg('队伍已删除喵', true);
+        ucmlState.formSig = '';
+        ucmlApply(data.data, false);
+      });
+    });
+  });
+  box.querySelectorAll('[data-del-player]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      if (!confirm(`确定移除选手「${btn.dataset.delPlayer}」吗喵？`)) return;
+      ucmlPost('/api/ucml/player/delete', { name: btn.dataset.delPlayer }, (data) => {
+        ucmlSetMsg('选手已移除喵', true);
+        ucmlState.formSig = '';
+        ucmlApply(data.data, false);
+      });
+    });
+  });
+
+  const addTeam = document.getElementById('btn-ucml-add-team');
+  if (addTeam) {
+    addTeam.addEventListener('click', () => {
+      const name = document.getElementById('ucml-team-name').value.trim();
+      const color = ucmlHexToRgb(document.getElementById('ucml-team-color').value);
+      if (!name) { ucmlSetMsg('请填写队名喵', false); return; }
+      if (!color) { ucmlSetMsg('颜色格式不正确喵', false); return; }
+      ucmlPost('/api/ucml/team/add', { name: name, color: color }, (data) => {
+        ucmlSetMsg(`已添加队伍「${name}」喵`, true);
+        ucmlApply(data.data, false);
+      });
+    });
+  }
+
+  const addPlayer = document.getElementById('btn-ucml-add-player');
+  if (addPlayer) {
+    addPlayer.addEventListener('click', () => {
+      const name = document.getElementById('ucml-player-name').value.trim();
+      const team = document.getElementById('ucml-player-team').value;
+      if (!name) { ucmlSetMsg('请填写选手名喵', false); return; }
+      ucmlPost('/api/ucml/player/add', { name: name, team: team }, (data) => {
+        ucmlSetMsg(`已添加选手「${name}」喵`, true);
+        ucmlState.formSig = '';
+        ucmlApply(data.data, false);
+      });
+    });
+  }
+}
+
+document.getElementById('btn-ucml-fill').addEventListener('click', () => {
+  document.querySelectorAll('#ucml-rows .ucml-score').forEach((input) => { input.value = 25000; });
+  ucmlClearPreview();
+  ucmlUpdateSum();
+});
+document.getElementById('btn-ucml-preview').addEventListener('click', ucmlPreview);
+document.getElementById('btn-ucml-submit').addEventListener('click', ucmlSubmit);
+
 // ==================== 房间发言（对局双方 + 观众） ====================
 
 const chatSigs = { fk: '', yz: '', mj: '', gold: '' };
@@ -1959,7 +2460,7 @@ wireChat('gold', '/api/mahjong_gold/say', () => goldCode, goldMsg);
 // ==================== 顶部导航（喵喵远征队 / 小游戏 / 个人 / 开发中 / 管理） ====================
 
 const mainNav = document.getElementById('main-nav');
-const TAB_NAMES = ['expedition', 'games', 'profile', 'dev', 'admin'];
+const TAB_NAMES = ['expedition', 'games', 'ucml', 'profile', 'dev', 'admin'];
 let currentTab = 'expedition';
 
 function showTabNav() {
@@ -2000,6 +2501,7 @@ function switchTab(name) {
   });
   if (name === 'expedition') switchSub(currentSub);
   if (name === 'games') loadWeekly();
+  if (name === 'ucml') loadUcml();
   if (name === 'profile') loadProfile();
 }
 

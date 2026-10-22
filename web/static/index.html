@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>串子小车 · 网页端</title>
-  <link rel="stylesheet" href="/static/style.css?v=7">
+  <link rel="stylesheet" href="/static/style.css?v=8">
 </head>
 <body>
   <div class="bg-glow"></div>
@@ -17,6 +17,7 @@
     <nav id="main-nav" class="main-nav hidden">
       <button class="nav-tab is-active" data-tab="expedition" type="button">喵喵远征队</button>
       <button class="nav-tab" data-tab="games" type="button">小游戏</button>
+      <button class="nav-tab" data-tab="ucml" type="button">UCML 计分</button>
       <button class="nav-tab" data-tab="profile" type="button">个人</button>
       <button class="nav-tab" data-tab="dev" type="button">开发中</button>
       <button id="nav-admin" class="nav-tab hidden" data-tab="admin" type="button">管理</button>
@@ -295,6 +296,81 @@
               <li>QQ 群里发「喵签到」也可以自动建档，两种方式并存</li>
             </ol>
           </div>
+        </div>
+      </section>
+
+      <!-- ========== UCML / UEML 赛事计分 ========== -->
+      <section id="tab-ucml" class="tab-pane hidden">
+        <div class="card">
+          <div class="panel-head">
+            <div>
+              <div class="panel-title">UCML 赛事计分</div>
+              <div class="panel-sub" id="ucml-sub">加载中…</div>
+            </div>
+            <div class="create-row" id="ucml-admin-actions"></div>
+          </div>
+          <p id="ucml-msg" class="msg"></p>
+          <div class="tips">
+            <p class="tips-title">规则速览</p>
+            <ol>
+              <li>每场 4 位选手，点数总和必须为 100000，同一队伍不能有两人同时出场。</li>
+              <li>单场 pt =（点数 − 25000）/ 1000 + 名次分，名次分为 45 / 5 / −15 / −35，并列时按特殊规则折算。</li>
+              <li>常规赛前 6 队进半决赛、半决赛前 4 队进决赛，晋级队伍继承上一阶段分数的一半（+0.01 后保留 1 位）。</li>
+              <li>只有两位管理员可以录入成绩与推进阶段，其他人可以随时查看排行。</li>
+            </ol>
+          </div>
+        </div>
+
+        <!-- 管理员计分（仅管理员 + 比赛阶段显示） -->
+        <div id="ucml-score-card" class="card hidden">
+          <div class="panel-head">
+            <div>
+              <div class="panel-title">录入一场比赛</div>
+              <div class="panel-sub">先选队伍再选选手，右边的点数会自动算出名次与 pt</div>
+            </div>
+            <button id="btn-ucml-fill" class="btn btn-ghost btn-sm" type="button">重置为 25000</button>
+          </div>
+          <div id="ucml-rows" class="ucml-rows"></div>
+          <div class="ucml-sum-row">
+            <span>点数总和</span>
+            <strong id="ucml-sum">0</strong>
+            <span>/ 100000</span>
+            <span id="ucml-sum-hint" class="hint"></span>
+            <button id="btn-ucml-preview" class="btn btn-ghost btn-sm" type="button">预览 pt</button>
+            <button id="btn-ucml-submit" class="btn btn-primary btn-sm" type="button">记录比赛</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="panel-head">
+            <div>
+              <div class="panel-title">阶段排行</div>
+              <div class="panel-sub" id="ucml-rank-sub"></div>
+            </div>
+            <div class="seg" id="ucml-rank-seg"></div>
+          </div>
+          <div id="ucml-standings"></div>
+        </div>
+
+        <div class="card">
+          <div class="panel-head">
+            <div>
+              <div class="panel-title">比赛记录</div>
+              <div class="panel-sub">按录入顺序排列，pt 为计入排行榜的分数</div>
+            </div>
+            <div class="seg" id="ucml-match-seg"></div>
+          </div>
+          <div id="ucml-matches"></div>
+        </div>
+
+        <div class="card" id="ucml-roster-card">
+          <div class="panel-head">
+            <div>
+              <div class="panel-title">队伍与选手</div>
+              <div class="panel-sub" id="ucml-roster-sub"></div>
+            </div>
+          </div>
+          <div id="ucml-roster"></div>
         </div>
       </section>
 
@@ -594,6 +670,6 @@
 
   <footer class="foot">串子小车 · 网页端</footer>
 
-  <script src="/static/app.js?v=7"></script>
+  <script src="/static/app.js?v=8"></script>
 </body>
 </html>

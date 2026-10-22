@@ -36,6 +36,7 @@ import farkle_web                                                    # noqa: E40
 import yahtzee_web                                                   # noqa: E402
 import mahjong17_web                                                 # noqa: E402
 import mahjong_gold_web                                              # noqa: E402
+import ucml_web                                                      # noqa: E402
 
 _STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 # 麻将牌面素材（mj0.png ~ mj37.png），供 17 步麻将网页版直接引用
@@ -567,6 +568,134 @@ def mahjong_gold_say(payload: dict, cat_token: str = Cookie(default="")) -> JSON
     if err:
         return JSONResponse({"ok": False, "msg": err}, status_code=400)
     return JSONResponse({"ok": True, "room": room})
+
+
+# ==================== UCML / UEML 赛事计分 ====================
+
+def _ucml_viewer(cat_token: str):
+    """已登录即可查看；返回 (qq, 错误响应)"""
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return None, JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    return qq, None
+
+
+def _ucml_admin(cat_token: str):
+    """计分与赛事管理仅限默认的两个管理员"""
+    qq, err = _ucml_viewer(cat_token)
+    if err:
+        return None, err
+    if not Config.is_admin(qq):
+        return None, JSONResponse({"ok": False, "msg": "只有管理员可以计分喵"},
+                                  status_code=403)
+    return qq, None
+
+
+@app.get("/api/ucml/overview")
+def ucml_overview(cat_token: str = Cookie(default="")) -> JSONResponse:
+    qq, err = _ucml_viewer(cat_token)
+    if err:
+        return err
+    return JSONResponse({"ok": True, "data": ucml_web.overview(Config.is_admin(qq))})
+
+
+@app.post("/api/ucml/match/preview")
+def ucml_match_preview(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
+    _, err = _ucml_admin(cat_token)
+    if err:
+        return err
+    msg, entries = ucml_web.preview_match(payload.get("players"), payload.get("scores"))
+    if msg:
+        return JSONResponse({"ok": False, "msg": msg}, status_code=400)
+    return JSONResponse({"ok": True, "entries": entries})
+
+
+@app.post("/api/ucml/match/record")
+def ucml_match_record(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
+    _, err = _ucml_admin(cat_token)
+    if err:
+        return err
+    msg, data = ucml_web.record_match(payload.get("players"), payload.get("scores"), True)
+    if msg:
+        return JSONResponse({"ok": False, "msg": msg}, status_code=400)
+    return JSONResponse({"ok": True, "data": data})
+
+
+@app.post("/api/ucml/match/undo")
+def ucml_match_undo(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
+    _, err = _ucml_admin(cat_token)
+    if err:
+        return err
+    msg, data = ucml_web.undo_match(True)
+    if msg:
+        return JSONResponse({"ok": False, "msg": msg}, status_code=400)
+    return JSONResponse({"ok": True, "data": data})
+
+
+@app.post("/api/ucml/stage/next")
+def ucml_stage_next(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
+    _, err = _ucml_admin(cat_token)
+    if err:
+        return err
+    msg, data = ucml_web.next_stage(True)
+    if msg:
+        return JSONResponse({"ok": False, "msg": msg}, status_code=400)
+    return JSONResponse({"ok": True, "data": data})
+
+
+@app.post("/api/ucml/season/new")
+def ucml_season_new(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
+    _, err = _ucml_admin(cat_token)
+    if err:
+        return err
+    msg, data = ucml_web.new_season(True)
+    if msg:
+        return JSONResponse({"ok": False, "msg": msg}, status_code=400)
+    return JSONResponse({"ok": True, "data": data})
+
+
+@app.post("/api/ucml/team/add")
+def ucml_team_add(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
+    _, err = _ucml_admin(cat_token)
+    if err:
+        return err
+    msg, data = ucml_web.add_team(payload.get("name"), payload.get("color"), True)
+    if msg:
+        return JSONResponse({"ok": False, "msg": msg}, status_code=400)
+    return JSONResponse({"ok": True, "data": data})
+
+
+@app.post("/api/ucml/team/delete")
+def ucml_team_delete(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
+    _, err = _ucml_admin(cat_token)
+    if err:
+        return err
+    msg, data = ucml_web.delete_team(payload.get("name"), True)
+    if msg:
+        return JSONResponse({"ok": False, "msg": msg}, status_code=400)
+    return JSONResponse({"ok": True, "data": data})
+
+
+@app.post("/api/ucml/player/add")
+def ucml_player_add(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
+    _, err = _ucml_admin(cat_token)
+    if err:
+        return err
+    msg, data = ucml_web.add_player(payload.get("name"), payload.get("team"), True)
+    if msg:
+        return JSONResponse({"ok": False, "msg": msg}, status_code=400)
+    return JSONResponse({"ok": True, "data": data})
+
+
+@app.post("/api/ucml/player/delete")
+def ucml_player_delete(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
+    _, err = _ucml_admin(cat_token)
+    if err:
+        return err
+    msg, data = ucml_web.delete_player(payload.get("name"), True)
+    if msg:
+        return JSONResponse({"ok": False, "msg": msg}, status_code=400)
+    return JSONResponse({"ok": True, "data": data})
 
 
 # ==================== 喵喵远征队（图鉴 / 远征队 / 远征 / 绘图） ====================

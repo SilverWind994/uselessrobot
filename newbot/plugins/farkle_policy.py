@@ -68,7 +68,8 @@ class Policy:
         pol.best_lock(dice, s, T)        # 锁定哪些骰子最划算
     """
 
-    def __init__(self, kinds, probs, score_counts, s_max, wild_kind=None, wild_value=1):
+    def __init__(self, kinds, probs, score_counts, s_max, wild_kind=None, wild_value=1,
+                 force_kinds=()):
         self._probs = {}
         for k in set(kinds):
             dist = tuple(probs[k])
@@ -78,6 +79,8 @@ class Policy:
         self.score_counts = score_counts
         self.wild_kind = wild_kind
         self.wild_value = wild_value
+        # 强制计分的骰型（如开司骰）：每次掷出都必须在本次锁定中全部选中
+        self.force_kinds = set(force_kinds)
         self.step = STEP
         self.s_max = max(STEP, int(s_max) // STEP * STEP)
         self._score_cache = {}
@@ -198,7 +201,9 @@ class Policy:
 
             kind, face, cnt = buckets[i]
             wild = (kind == self.wild_kind and face == self.wild_value)
-            for k in range(cnt + 1):
+            # 强制计分的骰型必须整批选中（如开司骰）
+            choices = (cnt,) if kind in self.force_kinds else range(cnt + 1)
+            for k in choices:
                 if k:
                     sel_kinds[kind] += k
                     state["total"] += k
@@ -386,7 +391,9 @@ class Policy:
             kind, value = keys[i]
             idxs = buckets[keys[i]]
             wild = (kind == self.wild_kind and value == self.wild_value)
-            for k in range(len(idxs) + 1):
+            # 强制计分的骰型必须整批选中（如开司骰）
+            choices = (len(idxs),) if kind in self.force_kinds else range(len(idxs) + 1)
+            for k in choices:
                 if k:
                     sel_kinds[kind] += k
                     st["total"] += k
@@ -702,7 +709,8 @@ def build_race(pol_me, pol_opp, target: int, rounds: int = 2) -> RaceMulti:
     return RaceMulti(my, opp, 2 * units * STEP)
 
 
-def build_policy(kinds, probs, score_counts, s_max, wild_kind=None, wild_value=1) -> Policy:
+def build_policy(kinds, probs, score_counts, s_max, wild_kind=None, wild_value=1,
+                 force_kinds=()) -> Policy:
     """构造（并求解）一副骰组的最优策略。
 
     kinds        : 6 个骰型字符串
@@ -710,6 +718,8 @@ def build_policy(kinds, probs, score_counts, s_max, wild_kind=None, wild_value=1
     score_counts : (每面颗数 6 元组, 万能面数量) -> 得分 / None
     s_max        : 分数格上限（建议 = 目标分 + 先手竞价上限）
     wild_kind    : 恶魔骰这类「掷出某点数即为万能面」的骰型
+    force_kinds  : 每次掷出都必须全部计分的骰型（如开司骰）
     """
-    pol = Policy(kinds, probs, score_counts, s_max, wild_kind, wild_value)
+    pol = Policy(kinds, probs, score_counts, s_max, wild_kind, wild_value,
+                 force_kinds)
     return pol

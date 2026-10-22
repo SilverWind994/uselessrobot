@@ -94,6 +94,7 @@ DICE_TRICKY = "tricky"    # 骗子的骰：1/5 各 24%，2/4/6 各 14%，3 只�
 DICE_KAIJI = "kaiji"      # 开司骰：只能出 1
 DICE_BANCHOU = "banchou"  # 班长骰：只能出 4/5/6
 DICE_SENBEI = "senbei"    # 仙贝骰：与普通骰完全相同（无特效），仅颜色为粉色
+DICE_FIN = "fin"          # fin 骰：点数分布与普通骰相同，掷出 2、2、3 可组合计 223 分
 
 _DIE_ODD_FACES = (1, 3, 5)
 _DIE_EVEN_FACES = (2, 4, 6)
@@ -114,13 +115,14 @@ _DIE_DIST = {
     DICE_KAIJI: (1.0, 0.0, 0.0, 0.0, 0.0, 0.0),
     DICE_BANCHOU: (0.0, 0.0, 0.0, 1 / 3, 1 / 3, 1 / 3),
     DICE_DEVIL: (1 / 6,) * 6,
+    DICE_FIN: (1 / 6,) * 6,
 }
 
 _DIE_NAMES = {
     DICE_NORMAL: "普通", DICE_ODD: "奇数", DICE_EVEN: "偶数",
     DICE_DEVIL: "恶魔", DICE_LOADED: "灌铅", DICE_GROZAV: "格罗扎夫",
     DICE_TRICKY: "骗子", DICE_KAIJI: "开司", DICE_BANCHOU: "班长",
-    DICE_SENBEI: "仙贝",
+    DICE_SENBEI: "仙贝", DICE_FIN: "fin",
 }
 
 # 特制骰子的效果说明（公告与图例用）
@@ -131,13 +133,15 @@ DICE_INFO = {
     DICE_LOADED: "灌铅骰2/3概率出1",
     DICE_GROZAV: "格罗扎夫骰2/3概率出2",
     DICE_TRICKY: "骗子的骰更容易出1/5（各24%），3只有10%",
-    DICE_KAIJI: "开司骰只能出1",
+    DICE_KAIJI: "开司骰只能出1，且每次掷出都必须计分",
     DICE_BANCHOU: "班长骰只能出4/5/6",
+    DICE_FIN: "fin骰掷出2、2、3可作组合计223分",
 }
 
 # 骰组构成里各骰子的展示顺序
 _LOADOUT_ORDER = (DICE_DEVIL, DICE_LOADED, DICE_GROZAV, DICE_TRICKY, DICE_KAIJI,
-                  DICE_BANCHOU, DICE_ODD, DICE_EVEN, DICE_SENBEI, DICE_NORMAL)
+                  DICE_BANCHOU, DICE_ODD, DICE_EVEN, DICE_SENBEI, DICE_FIN,
+                  DICE_NORMAL)
 
 # 骰组池：先手位/后手位各从这里等概率抽一组（含全普通）
 DICE_LOADOUTS = {
@@ -149,6 +153,8 @@ DICE_LOADOUTS = {
     "grozav5": [DICE_GROZAV] * 5 + [DICE_NORMAL],                  # 5格罗扎夫+1普通
     "tricky3": [DICE_NORMAL] * 3 + [DICE_TRICKY] * 3,              # 3普通+3骗子
     "banchou4": [DICE_BANCHOU] * 4 + [DICE_NORMAL] * 2,            # 2普通+4班长
+    "fin6":    [DICE_FIN] * 6,                                     # 6fin（223组合）
+    "kaiji1":  [DICE_KAIJI] + [DICE_NORMAL] * 5,                   # 1开司+5普通
 }
 
 # 渲染配色（棋盘上按骰子类型着色）
@@ -163,6 +169,7 @@ _DIE_COLORS = {
     DICE_KAIJI:   {"fill": (196, 234, 246), "outline": (80, 165, 200)},
     DICE_BANCHOU: {"fill": (218, 218, 222), "outline": (125, 125, 138)},
     DICE_SENBEI:  {"fill": (255, 198, 214), "outline": (228, 82, 130)},
+    DICE_FIN:     {"fill": (72, 209, 204), "outline": (35, 150, 146)},
 }
 
 
@@ -289,8 +296,8 @@ def _random_dice_set() -> list:
 
 # ==================== 计分 ====================
 
-def _score_selection(counts: dict) -> int:
-    """计算一组锁定骰子的得分；含无法计分的骰子返回 None。
+def _base_score(counts: dict) -> int:
+    """计算一组锁定骰子的基础得分；含无法计分的骰子返回 None。
 
     支持：顺子 1~6；小顺子 1~5 / 2~6（可与额外的 1、5 单张一起锁定）；
     三张及以上同点；单张 1、5。
@@ -327,6 +334,53 @@ def _score_selection(counts: dict) -> int:
     return score
 
 
+def _score_selection(counts: dict, fin_counts: dict = None) -> int:
+    """计算一组锁定骰子的得分；含无法计分的骰子返回 None。
+
+    fin_counts 为该组中 fin 骰的点数构成：每凑出一套「2、2、3」可额外按 223 分
+    计分（消耗这三颗），其余骰子仍按基础规则计分；多套可同时生效。
+    """
+    best = _base_score(counts)
+    if fin_counts:
+        combos = min(fin_counts.get(2, 0) // 2, fin_counts.get(3, 0))
+        for k in range(1, combos + 1):
+            rest = dict(counts)
+            rest[2] = rest.get(2, 0) - 2 * k
+            rest[3] = rest.get(3, 0) - k
+            score = _base_score(rest)
+            if score is not None:
+                score += 223 * k
+                if best is None or score > best:
+                    best = score
+    return best
+
+
+def _score_dice(selected) -> int:
+    """按骰子对象计算一组锁定骰子的得分；不可计分返回 None。
+
+    恶魔骰的万能面必须参与组合（三张同点或顺子），不能单独当 1/5 散点；
+    fin 骰的 2、2、3 组合按 223 分计。
+    """
+    wilds = [d for d in selected if _is_wild(d)]
+    reals = Counter(d["value"] for d in selected if not _is_wild(d))
+    fins = Counter(d["value"] for d in selected
+                   if not _is_wild(d) and d.get("kind") == DICE_FIN)
+    if not wilds:
+        return _score_selection(reals, fins)
+    best = None
+    for combo in itertools.combinations_with_replacement(range(1, 7), len(wilds)):
+        assign = Counter(combo)
+        merged = Counter(reals)
+        merged.update(assign)
+        score = _score_selection(merged, fins)
+        if score is None:
+            continue
+        if all(merged[f] >= 3 or len(merged) >= 5 for f in assign):
+            if best is None or score > best:
+                best = score
+    return best
+
+
 def _roll_has_score(dice) -> bool:
     """这一把骰子是否存在任何可计分的组合（没有则爆骰）。
 
@@ -334,6 +388,10 @@ def _roll_has_score(dice) -> bool:
     只有能参与组合（三张同点/顺子/小顺子）时才算可计分。"""
     wilds = sum(1 for d in dice if _is_wild(d))
     real = Counter(d["value"] for d in dice if not _is_wild(d))
+    # fin 骰的 2、2、3 组合
+    fins = Counter(d["value"] for d in dice if not _is_wild(d) and d.get("kind") == DICE_FIN)
+    if fins.get(2, 0) >= 2 and fins.get(3, 0) >= 1:
+        return True
     # 真实的 1 / 5 散点
     if 1 in real or 5 in real:
         return True
@@ -388,6 +446,14 @@ def _subset_score_counts(counts, wilds):
     return best
 
 
+def _subset_score_counts_fin(counts, wilds):
+    """fin 骰组的策略计分：无万能面时启用 2、2、3 的 223 分组合。"""
+    if wilds:
+        return _subset_score_counts(counts, wilds)
+    reals = Counter({i + 1: c for i, c in enumerate(counts) if c})
+    return _score_selection(reals, reals)
+
+
 def _bot_policy(dice, target: int):
     """取（并缓存）某副骰组在指定目标分下的最优策略表"""
     kinds = tuple(sorted(_kind_key(k) for k in (dice or [DICE_NORMAL] * DICE_NUM)))
@@ -397,8 +463,10 @@ def _bot_policy(dice, target: int):
     key = (kinds, s_max)
     pol = _BOT_POLICY_CACHE.get(key)
     if pol is None:
-        pol = build_policy(kinds, _DIE_DIST, _subset_score_counts, s_max,
-                           wild_kind=DICE_DEVIL)
+        score_fn = _subset_score_counts_fin if DICE_FIN in kinds else _subset_score_counts
+        force_kinds = (DICE_KAIJI,) if DICE_KAIJI in kinds else ()
+        pol = build_policy(kinds, _DIE_DIST, score_fn, s_max,
+                           wild_kind=DICE_DEVIL, force_kinds=force_kinds)
         _BOT_POLICY_CACHE[key] = pol
     return pol
 
@@ -478,6 +546,7 @@ def _bot_best_lock(hand, turn_score: int, my_total: int, target: int,
     """按胜率最优策略选择本把锁定的骰子；返回 (得分, 下标列表)，爆骰返回 None"""
     win = _bot_win_turn(my_total, target, my_dice, opp_dice, opp_total)
     pairs = [(_kind_key(d["kind"]), d["value"]) for d in hand]
+    # 开司骰由策略表的 force_kinds 强制计分，best_lock 返回的下标必然包含它
     return win.best_lock(pairs, turn_score)
 
 
@@ -1167,7 +1236,8 @@ class FarklePlugin:
                 selected += taken
                 wild_faces += [face] * len(taken)
 
-        score = _score_selection(counts)
+        fin_counts = Counter(d["value"] for d in selected if d.get("kind") == DICE_FIN)
+        score = _score_selection(counts, fin_counts)
         if score is None:
             self._sender.reply(
                 ctx, "这组骰子无法计分喵：散落的 2/3/4/6 点要凑成三张及以上才能算")
@@ -1180,6 +1250,22 @@ class FarklePlugin:
                 self._sender.reply(
                     ctx, f"恶魔骰的万能面必须用于组合（三张同点/顺子），"
                          f"不能单独顶替 {face} 点当散分喵")
+                return
+
+        # 开司骰每次掷出都必须计分：玩家没锁它时自动补选并重新计分；
+        # 若已锁了普通 1，则让它让位给开司骰，保持锁定点数不变
+        forced = [d for d in hand if d.get("kind") == DICE_KAIJI]
+        if forced:
+            swap = next((d for d in selected
+                         if d.get("kind") != DICE_KAIJI and d.get("value") == 1), None)
+            if swap is not None:
+                selected.remove(swap)
+                hand.append(swap)
+            selected += forced
+            hand = [d for d in hand if d.get("kind") != DICE_KAIJI]
+            score = _score_dice(selected)
+            if score is None:
+                self._sender.reply(ctx, "这组骰子无法计分喵")
                 return
         game["hand"] = hand
 
@@ -1580,14 +1666,16 @@ class FarklePlugin:
             "· 格罗扎夫骰：2/3 概率出 2\n"
             "· 骗子的骰：更容易出 1/5（各 24%），3 只有 10%\n"
             "· 班长骰：只能出 4/5/6\n"
+            "· 开司骰：只能出 1，且每次掷出都必须计分\n"
+            "· fin 骰：点数分布同普通骰，掷出的 2、2、3 可作组合计 223 分\n"
             "· 仙贝骰：与普通骰完全相同（无特效），仅颜色为粉色；"
             "抽到普通骰组时会随机有 1~6 颗变成仙贝骰\n"
             "· 锁定时优先消耗普通骰子，其次特制骰的非万能面，最后才动用万能面\n"
-            "· 现有骰组（各 1/8 概率）：\n"
+            "· 现有骰组（各 1/10 概率）：\n"
             "  6普通 / 6偶数 / 1灌铅+5普通 / 1恶魔+5普通 / 2奇数+4普通 /\n"
-            "  5格罗扎夫+1普通 / 3普通+3骗子 / 2普通+4班长\n"
+            "  5格罗扎夫+1普通 / 3普通+3骗子 / 2普通+4班长 / 6fin / 1开司+5普通\n"
             "· 棋盘图按骰子类型着色：白=普通 蓝=奇数 绿=偶数 红=恶魔 金=灌铅 "
-            "紫=格罗扎夫 粉=骗子 灰=班长 玫粉=仙贝\n"
+            "紫=格罗扎夫 粉=骗子 灰=班长 玫粉=仙贝 青绿=fin 浅蓝=开司\n"
             "【先手拍卖】（正式掷骰前，骰组公告后进行）\n"
             f"· 由后加入的人先出价；出价必须是 {BID_STEP} 的倍数，可为 0 或负数，"
             f"范围 ±{BID_LIMIT}\n"

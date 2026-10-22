@@ -7,19 +7,17 @@
 机器人规则漂移；猫眼石结算复用 plugins/cat_expedition.py 的存档接口。
 """
 
-import itertools
 import random
 import threading
 import time
-from collections import Counter
 
 from plugins.farkle import (
-    DICE_NORMAL, DICE_NUM, PLAYER_NUM, DEFAULT_TARGET, MIN_TARGET, MAX_TARGET,
+    DICE_NORMAL, DICE_KAIJI, DICE_NUM, PLAYER_NUM, DEFAULT_TARGET, MIN_TARGET, MAX_TARGET,
     MAX_STONES, MAX_BOT_STONES, BID_STEP, BID_LIMIT, IDLE_SECONDS,
     BOT_ID, BOT_NAME, _bot_best_lock, _bot_should_bank, _bot_fair_bid,
     _bot_stats_rows, _record_bot_stats, _load_bot_stats,
     _roll_die, _is_wild, _new_die, _faces_text, _dice_set_desc,
-    _random_dice_set, _score_selection, _roll_has_score, _DIE_NAMES, _DIE_COLORS,
+    _random_dice_set, _score_dice, _roll_has_score, _DIE_NAMES, _DIE_COLORS,
 )
 
 _FINISHED_KEEP_SECONDS = 120   # 已结束的房间保留一会儿，供客户端看到结算结果
@@ -316,7 +314,19 @@ class Room:
             return "选择的骰子不对喵"
 
         picked = [self.hand[i] for i in idxs]
-        score = _score_selected(picked)
+        # 开司骰每次掷出都必须计分：未选中时自动补选；
+        # 若已选了普通 1，则让它让位，保持锁定点数不变
+        forced = [i for i in range(len(self.hand))
+                  if self.hand[i].get("kind") == DICE_KAIJI and i not in set(idxs)]
+        if forced:
+            swap = next((i for i in idxs
+                         if self.hand[i].get("kind") != DICE_KAIJI
+                         and self.hand[i].get("value") == 1), None)
+            if swap is not None:
+                idxs = [i for i in idxs if i != swap]
+            idxs = sorted(list(idxs) + forced)
+            picked = [self.hand[i] for i in idxs]
+        score = _score_dice(picked)
         if score is None:
             return "这组骰子无法计分喵：散落的 2/3/4/6 要凑成三张及以上才能算"
 
@@ -458,30 +468,6 @@ class Room:
             "log": self.log[-30:],
             "chat": self.chat[-30:],
         }
-
-
-def _score_selected(selected) -> int:
-    """一组被选中的骰子的得分；不可计分返回 None。
-
-    恶魔骰的万能面必须参与组合（三张同点或顺子），不能单独当 1/5 散点。
-    一个骰组最多 1 颗恶魔骰，故枚举万能面归属即可覆盖全部情况。"""
-    wilds = sum(1 for d in selected if _is_wild(d))
-    reals = Counter(d["value"] for d in selected if not _is_wild(d))
-    if wilds == 0:
-        return _score_selection(reals)
-    best = None
-    for combo in itertools.combinations_with_replacement(range(1, 7), wilds):
-        assign = Counter(combo)
-        merged = Counter(reals)
-        merged.update(assign)
-        score = _score_selection(merged)
-        if score is None:
-            continue
-        # 万能面顶替的点数必须参与三张同点或顺子
-        if all(merged[f] >= 3 or len(merged) >= 5 for f in assign):
-            if best is None or score > best:
-                best = score
-    return best
 
 
 # ==================== 房间管理 ====================

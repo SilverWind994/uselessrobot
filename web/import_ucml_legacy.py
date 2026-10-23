@@ -179,10 +179,11 @@ def main():
     print(f"旧库当前阶段：{stage_rows[0][0] if stage_rows else '未知'}")
     print(f"读取到 {len(snapshot['teams'])} 支队伍、{len(snapshot['players'])} 位选手、"
           f"{len(snapshot['matches'])} 场比赛")
-    for stage in (1, 2, 3):
+    for stage, name in ((1, "常规赛"), (2, "半决赛"), (3, "决赛")):
+        count = sum(1 for m in snapshot["matches"] if m["stage"] == stage)
         rows = ucml_web._team_standings(snapshot, stage)
-        if rows:
-            print(f"  阶段 {stage}：" + "、".join(f"{r['name']} {r['score']:.1f}" for r in rows[:6]))
+        detail = "、".join(f"{r['name']} {r['score']:.1f}" for r in rows[:6])
+        print(f"  {name}：{count} 场，{len(rows)} 支队伍" + (f"（{detail}）" if detail else ""))
 
     data = ucml_web._load()
     err = _merge_into(data, snapshot, args.season, args.force)

@@ -36,6 +36,7 @@ import farkle_web                                                    # noqa: E40
 import yahtzee_web                                                   # noqa: E402
 import mahjong17_web                                                 # noqa: E402
 import mahjong_gold_web                                              # noqa: E402
+import tournament_web                                                # noqa: E402
 import ucml_web                                                      # noqa: E402
 
 _STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
@@ -575,6 +576,96 @@ def mahjong_gold_say(payload: dict, cat_token: str = Cookie(default="")) -> JSON
     if err:
         return JSONResponse({"ok": False, "msg": err}, status_code=400)
     return JSONResponse({"ok": True, "room": room})
+
+
+# ==================== 锦标赛网页版 ====================
+
+@app.get("/api/tournament/state")
+def tournament_state(cat_token: str = Cookie(default="")) -> JSONResponse:
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    data = tournament_web.state_for(qq, Config.is_admin(qq))
+    data.update({
+        "ok": True,
+        "qq": qq,
+        "is_admin": Config.is_admin(qq),
+        "reward_admin": qq == Config.TOURNAMENT_ADMIN_QQ,
+    })
+    return JSONResponse(data)
+
+
+@app.post("/api/tournament/create")
+def tournament_create(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    if not Config.is_admin(qq):
+        return JSONResponse({"ok": False, "msg": "只有管理员可以创建锦标赛喵"}, status_code=403)
+    code, err = tournament_web.create(
+        qq, _nick_of(qq), payload.get("size"), payload.get("projects"),
+        payload.get("champion_fish"), payload.get("champion_stone"))
+    if err:
+        return JSONResponse({"ok": False, "msg": err}, status_code=400)
+    return JSONResponse({"ok": True, "code": code})
+
+
+@app.post("/api/tournament/join")
+def tournament_join(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    code = str(payload.get("code", "")).strip()
+    err = tournament_web.join(code, qq, _nick_of(qq))
+    if err:
+        return JSONResponse({"ok": False, "msg": err}, status_code=400)
+    return JSONResponse({"ok": True, "code": code})
+
+
+@app.post("/api/tournament/leave")
+def tournament_leave(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    err = tournament_web.leave(str(payload.get("code", "")).strip(), qq)
+    if err:
+        return JSONResponse({"ok": False, "msg": err}, status_code=400)
+    return JSONResponse({"ok": True})
+
+
+@app.post("/api/tournament/start")
+def tournament_start(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    err = tournament_web.start(str(payload.get("code", "")).strip())
+    if err:
+        return JSONResponse({"ok": False, "msg": err}, status_code=400)
+    return JSONResponse({"ok": True})
+
+
+@app.post("/api/tournament/cancel")
+def tournament_cancel(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    err = tournament_web.cancel(str(payload.get("code", "")).strip(), qq,
+                                Config.is_admin(qq))
+    if err:
+        return JSONResponse({"ok": False, "msg": err}, status_code=400)
+    return JSONResponse({"ok": True})
+
+
+@app.post("/api/tournament/force_end")
+def tournament_force_end(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    err = tournament_web.force_end(str(payload.get("code", "")).strip(), qq,
+                                   Config.is_admin(qq))
+    if err:
+        return JSONResponse({"ok": False, "msg": err}, status_code=400)
+    return JSONResponse({"ok": True})
 
 
 # ==================== UCML / UEML 赛事计分 ====================

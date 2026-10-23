@@ -691,4 +691,53 @@ code { background: #120f0d; border: 1px solid var(--line); border-radius: 6px; p
   #btn-ucml-preview { margin-left: 0; }
 }
 
+/* 锦标赛 */
+.nav-tab.has-notice { position: relative; }
+.nav-tab.has-notice::after {
+  content: "";
+  position: absolute; top: 4px; right: 6px;
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--danger);
+  box-shadow: 0 0 6px var(--danger);
+}
+
+.tour-card { margin-bottom: 16px; }
+.tour-code { color: var(--text-dim); font-size: 13px; font-weight: 400; margin-left: 6px; }
+.tour-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.tour-players { color: var(--text-dim); font-size: 14px; margin: 8px 0 4px; }
+.tour-mine {
+  margin: 10px 0; padding: 10px 12px; border-radius: 10px;
+  border: 1px dashed var(--gold); background: rgba(212, 175, 55, .06);
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 14px;
+}
+.tour-champion { margin: 10px 0 4px; font-weight: 700; color: var(--gold); }
+.tour-reward-lines {
+  margin: 6px 0 10px; padding: 10px 12px; border-radius: 10px;
+  background: #120f0d; border: 1px solid var(--line);
+  color: var(--text-dim); font-size: 13px; white-space: pre-wrap;
+}
+.tour-rounds { display: flex; gap: 12px; overflow-x: auto; padding: 8px 2px 4px; }
+.tour-round { min-width: 200px; flex: 1; }
+.tour-round-name {
+  font-size: 13px; color: var(--gold); font-weight: 700;
+  padding-bottom: 6px; border-bottom: 1px solid var(--line); margin-bottom: 8px;
+}
+.tour-match {
+  border: 1px solid var(--line); border-radius: 10px;
+  padding: 8px 10px; margin-bottom: 8px; background: #12100e;
+}
+.tour-match.is-active { border-color: var(--gold); box-shadow: 0 0 0 1px rgba(212, 175, 55, .25); }
+.tour-match-names { display: flex; align-items: center; gap: 8px; font-size: 14px; flex-wrap: wrap; }
+.tour-match-names .is-win { color: var(--gold); font-weight: 700; }
+.tour-vs { color: var(--text-dim); font-size: 12px; }
+.tour-match-sub { color: var(--text-dim); font-size: 12px; margin-top: 4px; }
+.tour-match-error { color: var(--danger); font-size: 12px; margin-top: 4px; }
+.tour-projects { display: flex; gap: 14px; flex-wrap: wrap; margin: 6px 0 10px; }
+.tour-projects .chk { padding-bottom: 0; }
+
+@media (max-width: 720px) {
+  .tour-rounds { flex-direction: column; }
+  .tour-round { min-width: 0; }
+}
+
 

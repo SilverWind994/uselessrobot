@@ -2513,7 +2513,7 @@ wireChat('gold', '/api/mahjong_gold/say', () => goldCode, goldMsg);
 // ==================== 顶部导航（喵喵远征队 / 小游戏 / 个人 / 开发中 / 管理） ====================
 
 const mainNav = document.getElementById('main-nav');
-const TAB_NAMES = ['expedition', 'games', 'ucml', 'profile', 'dev', 'admin'];
+const TAB_NAMES = ['expedition', 'games', 'tournament', 'ucml', 'profile', 'dev', 'admin'];
 let currentTab = 'expedition';
 
 function showTabNav() {
@@ -2552,6 +2552,8 @@ function switchTab(name) {
   TAB_NAMES.forEach((k) => {
     document.getElementById('tab-' + k).classList.toggle('hidden', k !== name);
   });
+  if (name === 'tournament') startTournamentPolling();
+  else stopTournamentPolling();
   if (name === 'expedition') switchSub(currentSub);
   if (name === 'ucml') loadUcml();
   if (name === 'profile') loadProfile();
@@ -3202,3 +3204,262 @@ document.getElementById('admin-form').addEventListener('submit', async (event) =
   msg.classList.add('ok');
   event.target.reset();
 });
+
+// ==================== 锦标赛 ====================
+
+const tourList = document.getElementById('tour-list');
+const tourMsgEl = document.getElementById('tour-msg');
+const tourCreateBox = document.getElementById('tour-create');
+const tourCreateMsg = document.getElementById('tour-create-msg');
+const tourProjectsBox = document.getElementById('tour-projects');
+
+let tourTimer = null;
+let tourMsgTimer = null;
+let tourProjectsBuilt = false;
+
+function tourMsg(text, ok) {
+  tourMsgEl.textContent = text || '';
+  tourMsgEl.classList.toggle('ok', !!ok);
+  clearTimeout(tourMsgTimer);
+  if (text) tourMsgTimer = setTimeout(() => { tourMsgEl.textContent = ''; }, 4000);
+}
+
+function tourStatusText(s) {
+  return { waiting: '报名中', playing: '进行中', done: '已结束' }[s] || s;
+}
+
+function buildTourProjects(data) {
+  if (tourProjectsBuilt) return;
+  tourProjectsBuilt = true;
+  tourProjectsBox.innerHTML = data.projects.map((p) => (
+    `<label class="chk"><input type="checkbox" value="${esc(p.key)}" checked> ${esc(p.name)}</label>`
+  )).join('');
+}
+
+function renderTourRounds(t) {
+  if (!t.rounds || !t.rounds.length) return '';
+  const cols = t.rounds.map((rnd) => {
+    const matches = rnd.matches.map((m) => {
+      const aWin = m.winner_idx === 0 ? 'is-win' : '';
+      const bWin = m.winner_idx === 1 ? 'is-win' : '';
+      const sub = m.winner
+        ? `胜者 ${esc(m.winner)}`
+        : (m.active ? '进行中' : '待定');
+      return `
+        <div class="tour-match${m.active ? ' is-active' : ''}">
+          <div class="tour-match-names">
+            <span class="${aWin}">${esc(m.names[0])}</span>
+            <span class="tour-vs">vs</span>
+            <span class="${bWin}">${esc(m.names[1])}</span>
+          </div>
+          <div class="tour-match-sub">${esc(m.project)}${m.games > 1 ? ` · 已打 ${m.games} 局` : ''} · ${sub}</div>
+          ${m.error ? `<div class="tour-match-error">${esc(m.error)}</div>` : ''}
+        </div>`;
+    }).join('');
+    return `
+      <div class="tour-round">
+        <div class="tour-round-name">${esc(rnd.name)}</div>
+        ${matches}
+      </div>`;
+  }).join('');
+  return `<div class="tour-rounds">${cols}</div>`;
+}
+
+function renderTourCard(t, data) {
+  const rewards = [];
+  if (t.champion_fish) rewards.push(`冠军 ${t.champion_fish} 鱼干`);
+  if (t.champion_stone) rewards.push(`冠军 ${t.champion_stone} 猫眼石`);
+  const rewardText = rewards.length ? rewards.join(' + ') + '（其余名次对半递减）' : '无奖励';
+  const poolText = t.pool.map((p) => p.name).join('、');
+  const names = t.players.map((p) => esc(p.name)).join('、') || '还没有人报名';
+
+  let acts = '';
+  if (t.status === 'waiting') {
+    if (t.joined) {
+      acts += `<button class="btn btn-ghost btn-sm" data-tour-act="leave" data-code="${t.code}">退出报名</button>`;
+    } else if (t.can_join) {
+      acts += `<button class="btn btn-primary btn-sm" data-tour-act="join" data-code="${t.code}">报名</button>`;
+    } else if (!t.full) {
+      acts += '<span class="hint">你已在另一场锦标赛中</span>';
+    }
+    if (t.full) {
+      acts += `<button class="btn btn-primary btn-sm" data-tour-act="start" data-code="${t.code}">开始比赛</button>`;
+    }
+    if (t.is_owner || data.is_admin) {
+      acts += `<button class="btn btn-ghost btn-sm" data-tour-act="cancel" data-code="${t.code}">取消</button>`;
+    }
+  } else if (t.status === 'playing' && data.is_admin) {
+    acts += `<button class="btn btn-ghost btn-sm" data-tour-act="force_end" data-code="${t.code}">强制结束</button>`;
+  }
+
+  let mine = '';
+  if (t.my_match) {
+    const m = t.my_match;
+    const label = `${esc(m.project)} · ${esc(m.names[0])} vs ${esc(m.names[1])}`;
+    mine = m.room
+      ? `<div class="tour-mine">你的对局：${label}
+          <button class="btn btn-primary btn-sm" data-tour-act="enter" data-key="${esc(m.key)}" data-room="${esc(m.room)}">进入对局</button>
+        </div>`
+      : `<div class="tour-mine">你的对局：${label} —— 正在开局${m.error ? `（${esc(m.error)}）` : '…'}</div>`;
+  }
+
+  const doneBlock = t.status === 'done'
+    ? `<div class="tour-champion">🏆 冠军：${esc(t.champion || '—')}</div>
+       ${t.reward_lines.length ? `<pre class="tour-reward-lines">${t.reward_lines.map(esc).join('\n')}</pre>` : ''}`
+    : '';
+
+  return `
+    <div class="card tour-card">
+      <div class="panel-head">
+        <div>
+          <div class="panel-title">${t.size} 人锦标赛 · ${tourStatusText(t.status)}
+            <span class="tour-code">${esc(t.code)}</span></div>
+          <div class="panel-sub">项目：${esc(poolText)}｜${esc(rewardText)}</div>
+        </div>
+        <div class="tour-actions">${acts}</div>
+      </div>
+      <div class="tour-players">报名 ${t.players.length}/${t.size}：${names}</div>
+      ${mine}
+      ${doneBlock}
+      ${renderTourRounds(t)}
+    </div>`;
+}
+
+function renderTournament(data) {
+  tourCreateBox.classList.toggle('hidden', !data.is_admin);
+  document.getElementById('tour-reward-hint').textContent = data.reward_admin
+    ? '可以设置冠军鱼干 / 猫眼石奖励，其余名次按对半递减'
+    : '当前账号不能设置奖励（带奖励的锦标赛仅指定管理员可以开放）';
+  const fishInput = document.getElementById('tour-fish');
+  const stoneInput = document.getElementById('tour-stone');
+  fishInput.disabled = !data.reward_admin;
+  stoneInput.disabled = !data.reward_admin;
+  if (!data.reward_admin) { fishInput.value = '0'; stoneInput.value = '0'; }
+  buildTourProjects(data);
+
+  if (!data.list.length) {
+    tourList.innerHTML = '<div class="card"><p class="room-empty">还没有锦标赛喵，等管理员开一场吧</p></div>';
+    return;
+  }
+  tourList.innerHTML = data.list.map((t) => renderTourCard(t, data)).join('');
+}
+
+function updateTournamentNotice(data) {
+  const btn = mainNav.querySelector('.nav-tab[data-tab="tournament"]');
+  if (!btn) return;
+  const mine = (data.list || []).find((t) => t.my_match && t.my_match.room);
+  btn.classList.toggle('has-notice', !!mine);
+}
+
+async function loadTournament() {
+  const { status, data } = await api('/api/tournament/state');
+  if (status === 401) {
+    stopTournamentPolling();
+    homePanel.classList.add('hidden');
+    showLogin();
+    return;
+  }
+  if (status !== 200 || !data.ok) return;
+  renderTournament(data);
+  updateTournamentNotice(data);
+}
+
+function startTournamentPolling() {
+  loadTournament();
+  clearInterval(tourTimer);
+  tourTimer = setInterval(loadTournament, 2000);
+}
+
+function stopTournamentPolling() {
+  if (tourTimer) {
+    clearInterval(tourTimer);
+    tourTimer = null;
+  }
+}
+
+async function tournamentAct(act, code) {
+  if (!code) return;
+  const { status, data } = await api('/api/tournament/' + act, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code: code }),
+  });
+  if (status === 401) { homePanel.classList.add('hidden'); showLogin(); return; }
+  if (status !== 200 || !data.ok) { tourMsg(data.msg || '操作失败喵'); return; }
+  await loadTournament();
+}
+
+async function createTournament() {
+  tourCreateMsg.textContent = '';
+  tourCreateMsg.classList.remove('ok');
+  const projects = Array.from(tourProjectsBox.querySelectorAll('input:checked'))
+    .map((i) => i.value);
+  if (!projects.length) {
+    tourCreateMsg.textContent = '至少选一个比赛项目喵';
+    return;
+  }
+  const body = {
+    size: document.getElementById('tour-size').value,
+    projects: projects,
+    champion_fish: document.getElementById('tour-fish').value || 0,
+    champion_stone: document.getElementById('tour-stone').value || 0,
+  };
+  const { status, data } = await api('/api/tournament/create', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (status === 401) { homePanel.classList.add('hidden'); showLogin(); return; }
+  if (status !== 200 || !data.ok) {
+    tourCreateMsg.textContent = data.msg || '创建失败喵';
+    return;
+  }
+  tourCreateMsg.textContent = '创建成功喵，把编号发给对手报名吧';
+  tourCreateMsg.classList.add('ok');
+  await loadTournament();
+}
+
+async function enterTournamentMatch(key, room) {
+  if (!room) return;
+  currentTab = 'tournament';
+  stopTournamentPolling();
+  loginPanel.classList.add('hidden');
+  pwdPanel.classList.add('hidden');
+  homePanel.classList.add('hidden');
+  if (key === 'yahtzee') {
+    yzPanel.classList.remove('hidden');
+    await enterYzRoom(room);
+  } else if (key === 'farkle') {
+    fkPanel.classList.remove('hidden');
+    await enterRoom(room);
+  } else if (key === 'mahjong17') {
+    mjPanel.classList.remove('hidden');
+    await enterMjRoom(room);
+  } else if (key === 'mahjong_gold') {
+    goldPanel.classList.remove('hidden');
+    await enterGoldRoom(room);
+  } else {
+    tourMsg('未知的比赛项目喵');
+  }
+}
+
+document.getElementById('btn-tour-refresh').addEventListener('click', () => loadTournament());
+document.getElementById('btn-tour-create').addEventListener('click', createTournament);
+
+tourList.addEventListener('click', async (event) => {
+  const btn = event.target.closest('button[data-tour-act]');
+  if (!btn) return;
+  const act = btn.dataset.tourAct;
+  if (act === 'enter') {
+    enterTournamentMatch(btn.dataset.key, btn.dataset.room);
+    return;
+  }
+  await tournamentAct(act, btn.dataset.code);
+});
+
+// 不在锦标赛页时也低频检查一下自己有没有待进的对局，给导航加红点
+setInterval(async () => {
+  if (tourTimer || homePanel.classList.contains('hidden')) return;
+  const { status, data } = await api('/api/tournament/state');
+  if (status === 200 && data.ok) updateTournamentNotice(data);
+}, 6000);

@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>串子小车 · 网页端</title>
-  <link rel="stylesheet" href="/static/style.css?v=9">
+  <link rel="stylesheet" href="/static/style.css?v=10">
 </head>
 <body>
   <div class="bg-glow"></div>
@@ -224,18 +224,6 @@
             <div class="game-desc">印加宝藏麻将版，翻牌押运 · 2~5 人 · 5 轮</div>
             <button id="btn-gold" class="btn btn-primary btn-sm" type="button">进入大厅</button>
           </div>
-        </div>
-
-        <h2 class="section-title">每周挑战 · 快艇骰子</h2>
-        <div class="card weekly-card">
-          <div class="panel-head">
-            <div>
-              <div class="panel-title">本周排行榜</div>
-              <div class="panel-sub" id="weekly-sub">每周只记你「本周第一次」的分数，换周按排名发鱼干</div>
-            </div>
-            <button id="btn-weekly-refresh" class="btn btn-ghost btn-sm" type="button">刷新</button>
-          </div>
-          <div id="weekly-ranks" class="rank-list"><p class="room-empty">本周还没有人完成对局喵</p></div>
         </div>
       </section>
 
@@ -477,6 +465,19 @@
             <p class="room-empty">还没有人对战过机器人喵</p>
           </div>
         </div>
+
+        <h2 class="section-title">骰组说明</h2>
+        <div class="card">
+          <div class="panel-head">
+            <div>
+              <div class="panel-title">全部可用骰组</div>
+              <div class="panel-sub">先手位与后手位各随机抽一组（每组 1/10 概率），开局拍卖决定归属</div>
+            </div>
+          </div>
+          <div id="fk-loadouts" class="loadout-list">
+            <p class="room-empty">加载中…</p>
+          </div>
+        </div>
       </div>
 
       <!-- 对局中 -->
@@ -524,6 +525,18 @@
         <h2 class="section-title">进行中的房间</h2>
         <div id="yz-rooms" class="room-list">
           <p class="room-empty">还没有房间，创建一个等对手来吧</p>
+        </div>
+
+        <h2 class="section-title">每周挑战 · 快艇骰子</h2>
+        <div class="card weekly-card">
+          <div class="panel-head">
+            <div>
+              <div class="panel-title">本周排行榜</div>
+              <div class="panel-sub" id="weekly-sub">每周只记你「本周第一次」的分数，换周按排名发鱼干</div>
+            </div>
+            <button id="btn-weekly-refresh" class="btn btn-ghost btn-sm" type="button">刷新</button>
+          </div>
+          <div id="weekly-ranks" class="rank-list"><p class="room-empty">本周还没有人完成对局喵</p></div>
         </div>
       </div>
 
@@ -671,6 +684,6 @@
 
   <footer class="foot">串子小车 · 网页端</footer>
 
-  <script src="/static/app.js?v=9"></script>
+  <script src="/static/app.js?v=10"></script>
 </body>
 </html>

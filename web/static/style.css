@@ -487,6 +487,24 @@ code { background: #120f0d; border: 1px solid var(--line); border-radius: 6px; p
 .rank-val { color: var(--blue); font-weight: 700; }
 .rank-reward { color: var(--text-dim); font-size: 12px; }
 
+/* ---------- Farkle 骰组说明 ---------- */
+
+.loadout-list { display: flex; flex-direction: column; gap: 6px; }
+.loadout-row {
+  display: flex; align-items: baseline; gap: 12px;
+  padding: 8px 14px;
+  background: #120f0d;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font-size: 14px;
+}
+.loadout-name { min-width: 200px; color: var(--gold); font-weight: 700; }
+.loadout-desc { flex: 1; color: var(--text-dim); font-size: 13px; }
+@media (max-width: 560px) {
+  .loadout-row { flex-direction: column; gap: 4px; }
+  .loadout-name { min-width: 0; }
+}
+
 /* ---------- 图鉴 / 猫猫卡片 ---------- */
 
 .pedia-group { margin-bottom: 22px; }

@@ -250,6 +250,13 @@ def farkle_bot_rank(cat_token: str = Cookie(default="")) -> JSONResponse:
     return JSONResponse({"ok": True, **farkle_web.bot_rank(qq)})
 
 
+@app.get("/api/farkle/loadouts")
+def farkle_loadouts(cat_token: str = Cookie(default="")) -> JSONResponse:
+    if _auth_qq(cat_token) is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    return JSONResponse({"ok": True, "loadouts": farkle_web.loadouts_info()})
+
+
 @app.post("/api/farkle/join")
 def farkle_join(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
     qq = _auth_qq(cat_token)

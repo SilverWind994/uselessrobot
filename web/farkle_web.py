@@ -18,6 +18,7 @@ from plugins.farkle import (
     _bot_stats_rows, _record_bot_stats, _load_bot_stats,
     _roll_die, _is_wild, _new_die, _faces_text, _dice_set_desc,
     _random_dice_set, _score_dice, _roll_has_score, _DIE_NAMES, _DIE_COLORS,
+    DICE_LOADOUTS,
 )
 
 _FINISHED_KEEP_SECONDS = 120   # 已结束的房间保留一会儿，供客户端看到结算结果
@@ -607,6 +608,12 @@ def bot_rank(qq: int) -> dict:
                   "rate": (wins / games) if games else 0.0,
                   "net": int(mine.get("net", 0))}
     return {"name": BOT_NAME, "rows": rows, "mine": my_row}
+
+
+def loadouts_info() -> list:
+    """所有可用骰组的构成与效果说明（网页大厅展示用）"""
+    return [{"key": key, "desc": _dice_set_desc(kinds)}
+            for key, kinds in DICE_LOADOUTS.items()]
 
 
 def join_room(code: str, qq: int, name: str):

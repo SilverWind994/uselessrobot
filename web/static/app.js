@@ -208,6 +208,7 @@ async function enterFarkle() {
   fkRoom.classList.add('hidden');
   fkCode = null;
   fkLobbyMsg.textContent = '';
+  loadLoadouts();
   const { status, data } = await api('/api/farkle/mine');
   if (status === 401) { fkPanel.classList.add('hidden'); showLogin(); return; }
   if (status === 200 && data.ok && data.code) { enterRoom(data.code); return; }
@@ -293,6 +294,21 @@ async function startBotGame() {
   });
   if (status === 200 && data.ok) enterRoom(data.code);
   else msg.textContent = data.msg || '开局失败喵';
+}
+
+async function loadLoadouts() {
+  const box = document.getElementById('fk-loadouts');
+  const { status, data } = await api('/api/farkle/loadouts');
+  if (status !== 200 || !data.ok) return;
+  box.innerHTML = data.loadouts.map((l) => {
+    const parts = String(l.desc || '').split('｜');
+    const comp = parts[0] || '';
+    const effect = parts[1] || '无特效，与普通骰一致';
+    return `<div class="loadout-row">
+      <span class="loadout-name">${esc(comp)}</span>
+      <span class="loadout-desc">${esc(effect)}</span>
+    </div>`;
+  }).join('');
 }
 
 async function loadBotRank() {
@@ -684,6 +700,7 @@ async function enterYahtzee() {
   yzRoom.classList.add('hidden');
   yzCode = null;
   yzLobbyMsg.textContent = '';
+  loadWeekly();
   const { status, data } = await api('/api/yahtzee/mine');
   if (status === 401) { yzPanel.classList.add('hidden'); showLogin(); return; }
   if (status === 200 && data.ok && data.code) { enterYzRoom(data.code); return; }
@@ -701,6 +718,7 @@ function backToYzLobby() {
   yzRoom.classList.add('hidden');
   yzLobby.classList.remove('hidden');
   refreshYzRooms();
+  loadWeekly();
   clearInterval(yzLobbyTimer);
   yzLobbyTimer = setInterval(refreshYzRooms, 2500);
 }
@@ -2535,7 +2553,6 @@ function switchTab(name) {
     document.getElementById('tab-' + k).classList.toggle('hidden', k !== name);
   });
   if (name === 'expedition') switchSub(currentSub);
-  if (name === 'games') loadWeekly();
   if (name === 'ucml') loadUcml();
   if (name === 'profile') loadProfile();
 }
@@ -3031,7 +3048,7 @@ const weeklySub = document.getElementById('weekly-sub');
 
 async function loadWeekly() {
   const { status, data } = await api('/api/yahtzee/weekly');
-  if (status === 401) { homePanel.classList.add('hidden'); showLogin(); return; }
+  if (status === 401) { yzPanel.classList.add('hidden'); showLogin(); return; }
   if (status !== 200 || !data.ok) return;
   weeklySub.textContent = `本周（${data.week}）只记你「本周第一次」的分数，换周后按排名发鱼干`;
   if (!data.ranks.length) {

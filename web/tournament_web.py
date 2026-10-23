@@ -58,17 +58,6 @@ _worker = None
 
 # ==================== 小工具 ====================
 
-def _debt_of(qq: int) -> int:
-    """猫眼石欠债（余额为负时为其绝对值），不建档避免副作用"""
-    try:
-        import cat_web
-        player = cat_web._player(qq) or {}
-        balance = int(player.get("eye_stones", 0))
-    except Exception:
-        return 0
-    return -balance if balance < 0 else 0
-
-
 def _name_of(t: dict, qq: int) -> str:
     for p in t["players"]:
         if p["qq"] == qq:
@@ -514,10 +503,6 @@ def join(code: str, qq: int, name: str):
         other = _active_tournament_locked(qq, exclude=code)
         if other:
             return f"你已经在另一场锦标赛（{other}）里了喵"
-        if t["champion_stone"] > 0:
-            debt = _debt_of(qq)
-            if debt > 0:
-                return f"你还有 {debt} 个猫眼石欠债，不能参加带猫眼石奖励的锦标赛喵"
         t["players"].append({"qq": qq, "name": name})
         t["updated_at"] = time.time()
         _ensure_worker()

@@ -171,6 +171,24 @@ function dieEl(die, opts) {
     + (opts.selectable ? ' selectable' : '') + (opts.selected ? ' sel' : '');
   el.style.background = die.fill;
   el.style.borderColor = die.outline;
+  if (die.kind === 'd20' && die.raw) {
+    el.classList.add('d20');
+    el.style.display = 'flex';
+    el.style.flexDirection = 'column';
+    el.style.alignItems = 'center';
+    el.style.justifyContent = 'center';
+    const big = document.createElement('span');
+    big.className = 'd20-face';
+    big.textContent = String(die.raw);
+    el.appendChild(big);
+    if (die.value) {
+      const sub = document.createElement('span');
+      sub.className = 'd20-sub';
+      sub.textContent = '=' + die.value;
+      el.appendChild(sub);
+    }
+    return el;
+  }
   if (die.wild || !die.value) {
     el.style.display = 'flex';
     el.style.alignItems = 'center';

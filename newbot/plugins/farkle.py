@@ -95,6 +95,13 @@ DICE_KAIJI = "kaiji"      # 开司骰：只能出 1
 DICE_BANCHOU = "banchou"  # 班长骰：只能出 4/5/6
 DICE_SENBEI = "senbei"    # 仙贝骰：与普通骰完全相同（无特效），仅颜色为粉色
 DICE_FIN = "fin"          # fin 骰：点数分布与普通骰相同，掷出 2、2、3 可组合计 223 分
+DICE_D20 = "d20"          # 20面骰：掷出 1 爆骰，掷出 20 得奖励分并整副取回，其余模 6+1
+
+DICE_D20_BUST = 1         # 20 面骰的爆骰面
+DICE_D20_JACKPOT = 20     # 20 面骰的大成功面
+DICE_D20_BONUS = 1000     # 大成功奖励分
+DICE_D20_BUST_P = 1 / 20  # 爆骰概率
+DICE_D20_BONUS_P = 1 / 20  # 大成功概率
 
 _DIE_ODD_FACES = (1, 3, 5)
 _DIE_EVEN_FACES = (2, 4, 6)
@@ -116,13 +123,15 @@ _DIE_DIST = {
     DICE_BANCHOU: (0.0, 0.0, 0.0, 1 / 3, 1 / 3, 1 / 3),
     DICE_DEVIL: (1 / 6,) * 6,
     DICE_FIN: (1 / 6,) * 6,
+    # 20 面骰只列出 2~19 面的映射结果（1 点爆骰、20 点大成功另行处理）
+    DICE_D20: (1 / 6,) * 6,
 }
 
 _DIE_NAMES = {
     DICE_NORMAL: "普通", DICE_ODD: "奇数", DICE_EVEN: "偶数",
     DICE_DEVIL: "恶魔", DICE_LOADED: "灌铅", DICE_GROZAV: "格罗扎夫",
     DICE_TRICKY: "骗子", DICE_KAIJI: "开司", DICE_BANCHOU: "班长",
-    DICE_SENBEI: "仙贝", DICE_FIN: "fin",
+    DICE_SENBEI: "仙贝", DICE_FIN: "fin", DICE_D20: "二十面",
 }
 
 # 特制骰子的效果说明（公告与图例用）
@@ -136,10 +145,12 @@ DICE_INFO = {
     DICE_KAIJI: "开司骰只能出1，且每次掷出都必须计分",
     DICE_BANCHOU: "班长骰只能出4/5/6",
     DICE_FIN: "fin骰掷出2、2、3可作组合计223分",
+    DICE_D20: f"20面骰掷出1直接爆骰，掷出20得{DICE_D20_BONUS}分并拿回全部骰子，"
+              "其余点数按 模6+1 当 1~6 点计分",
 }
 
 # 骰组构成里各骰子的展示顺序
-_LOADOUT_ORDER = (DICE_DEVIL, DICE_LOADED, DICE_GROZAV, DICE_TRICKY, DICE_KAIJI,
+_LOADOUT_ORDER = (DICE_D20, DICE_DEVIL, DICE_LOADED, DICE_GROZAV, DICE_TRICKY, DICE_KAIJI,
                   DICE_BANCHOU, DICE_ODD, DICE_EVEN, DICE_SENBEI, DICE_FIN,
                   DICE_NORMAL)
 
@@ -155,6 +166,7 @@ DICE_LOADOUTS = {
     "banchou4": [DICE_BANCHOU] * 4 + [DICE_NORMAL] * 2,            # 2普通+4班长
     "fin6":    [DICE_FIN] * 6,                                     # 6fin（223组合）
     "kaiji1":  [DICE_KAIJI] + [DICE_NORMAL] * 5,                   # 1开司+5普通
+    "d20_1":   [DICE_D20] + [DICE_NORMAL] * 5,                     # 1二十面+5普通
 }
 
 # 渲染配色（棋盘上按骰子类型着色）
@@ -170,6 +182,7 @@ _DIE_COLORS = {
     DICE_BANCHOU: {"fill": (218, 218, 222), "outline": (125, 125, 138)},
     DICE_SENBEI:  {"fill": (255, 198, 214), "outline": (228, 82, 130)},
     DICE_FIN:     {"fill": (72, 209, 204), "outline": (35, 150, 146)},
+    DICE_D20:     {"fill": (255, 224, 178), "outline": (230, 140, 40)},
 }
 
 
@@ -205,11 +218,19 @@ def _center_text(draw: ImageDraw.ImageDraw, box, text: str, fnt, fill) -> None:
 
 
 def _draw_die(draw: ImageDraw.ImageDraw, x: int, y: int, size: int, value: int,
-              kind: str = DICE_NORMAL, wild: bool = False) -> None:
-    """画一颗骰子（圆角底 + 点数），底色按骰子类型区分；万能面中央画「万」"""
+              kind: str = DICE_NORMAL, wild: bool = False, raw: int = 0) -> None:
+    """画一颗骰子（圆角底 + 点数），底色按骰子类型区分；万能面中央画「万」；
+    20 面骰直接画原始点数，底部标注它当几点的计分点数"""
     colors = _DIE_COLORS.get(kind, _DIE_COLORS[DICE_NORMAL])
     draw.rounded_rectangle((x, y, x + size, y + size), radius=int(size * 0.18),
                            fill=colors["fill"], outline=colors["outline"], width=2)
+    if kind == DICE_D20 and raw:
+        _center_text(draw, (x, y, x + size, y + int(size * 0.62)), str(raw),
+                     _font(int(size * 0.5)), (150, 80, 20))
+        if 1 <= value <= 6:
+            _center_text(draw, (x, y + int(size * 0.60), x + size, y + size),
+                         f"={value}", _font(int(size * 0.24)), (150, 80, 20))
+        return
     if wild:
         # 恶魔骰的万能面：中央一个「万」字
         _center_text(draw, (x, y, x + size, y + size), "万",
@@ -232,10 +253,16 @@ def _draw_die(draw: ImageDraw.ImageDraw, x: int, y: int, size: int, value: int,
 
 
 def _faces_text(dice) -> str:
-    """骰子点数的展示文本（骰子对象列表），万能面标注「万」，如 1万 3 5"""
+    """骰子点数的展示文本（骰子对象列表），万能面标注「万」，如 1万 3 5；
+    20 面骰展示原始点数与计分点数，如 13(2)"""
     parts = []
     for d in sorted(dice, key=lambda x: x.get("value", 0)):
-        if _is_wild(d):
+        if d.get("kind") == DICE_D20 and d.get("raw"):
+            if d.get("value"):
+                parts.append(f"{d['raw']}({d['value']})")
+            else:
+                parts.append(str(d["raw"]))
+        elif _is_wild(d):
             parts.append(f"{d['value']}万")
         else:
             parts.append(str(d.get("value", 0)))
@@ -243,7 +270,12 @@ def _faces_text(dice) -> str:
 
 
 def _roll_die(kind: str) -> int:
-    """按骰子类型掷出 1~6 点（概率表见 _DIE_DIST）"""
+    """按骰子类型掷出点数（概率表见 _DIE_DIST）。
+
+    20 面骰返回原始的 1~20；其余骰型返回 1~6。
+    """
+    if kind == DICE_D20:
+        return random.randint(1, DICE_D20_JACKPOT)
     dist = _DIE_DIST.get(kind, _DIE_DIST[DICE_NORMAL])
     r = random.random()
     acc = 0.0
@@ -252,6 +284,30 @@ def _roll_die(kind: str) -> int:
         if r < acc:
             return face
     return 6
+
+
+def _roll_dice_hand(dice) -> tuple:
+    """掷一把骰子并把点数写回骰子对象，返回 (是否爆骰, 是否 20 面大成功)。
+
+    20 面骰掷出 1 直接爆骰、掷出 20 大成功（+奖励分并整副取回），其余点数
+    按 (点数 % 6) + 1 当 1~6 点计分；原始点数记在 raw 里供展示。
+    """
+    for die in dice:
+        raw = _roll_die(die.get("kind"))
+        if die.get("kind") == DICE_D20:
+            die["raw"] = raw
+            die["value"] = (0 if raw in (DICE_D20_BUST, DICE_D20_JACKPOT)
+                            else (raw % 6) + 1)
+        else:
+            die["value"] = raw
+    bust = any(d.get("kind") == DICE_D20 and d.get("raw") == DICE_D20_BUST for d in dice)
+    jackpot = any(d.get("kind") == DICE_D20 and d.get("raw") == DICE_D20_JACKPOT
+                  for d in dice)
+    if bust:
+        return True, False
+    if jackpot:
+        return False, True
+    return (not _roll_has_score(dice)), False
 
 
 def _is_wild(die: dict) -> bool:
@@ -465,8 +521,13 @@ def _bot_policy(dice, target: int):
     if pol is None:
         score_fn = _subset_score_counts_fin if DICE_FIN in kinds else _subset_score_counts
         force_kinds = (DICE_KAIJI,) if DICE_KAIJI in kinds else ()
+        d20 = DICE_D20 in kinds
         pol = build_policy(kinds, _DIE_DIST, score_fn, s_max,
-                           wild_kind=DICE_DEVIL, force_kinds=force_kinds)
+                           wild_kind=DICE_DEVIL, force_kinds=force_kinds,
+                           special_kind=DICE_D20 if d20 else None,
+                           special_bust_p=DICE_D20_BUST_P,
+                           special_bonus_p=DICE_D20_BONUS_P,
+                           special_bonus_score=DICE_D20_BONUS)
         _BOT_POLICY_CACHE[key] = pol
     return pol
 
@@ -1135,13 +1196,26 @@ class FarklePlugin:
             self._bot_play_turn(ctx, gid, game)
             return
         hand = game["hand"]
-        for die in hand:
-            die["value"] = _roll_die(die["kind"])
+        bust, jackpot = _roll_dice_hand(hand)
+        faces = _faces_text(hand)
 
-        if not _roll_has_score(hand):
+        if jackpot:
+            game["turn_score"] += DICE_D20_BONUS
+            game["phase"] = "decide"
+            game["locked"] = []
+            game["hand"] = [_new_die(k) for k in player.get("dice")
+                            or [DICE_NORMAL] * DICE_NUM]
+            self._save_game(gid, game)
+            self._sender.reply(
+                ctx, f"{player['name']} 掷出 {faces}，20面大成功！"
+                     f"+{DICE_D20_BONUS} 分并拿回全部骰子，"
+                     f"本回合累计 {game['turn_score']} 分，可继续掷或入账")
+            return
+
+        if bust:
             lost = game["turn_score"]
             self._sender.reply(
-                ctx, f"{player['name']} 掷出 {_faces_text(hand)}，无法计分——爆骰！"
+                ctx, f"{player['name']} 掷出 {faces}，无法计分——爆骰！"
                      + (f"本回合累计的 {lost} 分全部作废" if lost > 0 else "本回合没有得分"))
             self._end_turn(ctx, gid, game)
             return
@@ -1149,7 +1223,7 @@ class FarklePlugin:
         game["phase"] = "keep"
         self._save_game(gid, game)
         self._sender.reply(
-            ctx, f"{player['name']} 掷出 {_faces_text(hand)}。\n"
+            ctx, f"{player['name']} 掷出 {faces}。\n"
                  f"发送「farkle 留 <点数>」锁定至少一颗计分骰，例如「farkle 留 15」；"
                  f"也可在点数后直接加 r（继续掷）或 b（入账），如「farkle 留 14445 b」；"
                  f"点数不够的部分会自动用恶魔骰的万能面顶替")
@@ -1343,10 +1417,36 @@ class FarklePlugin:
         while True:
             game["phase"] = "roll"
             hand = game["hand"]
-            for die in hand:
-                die["value"] = _roll_die(die["kind"])
+            bust, jackpot = _roll_dice_hand(hand)
             faces = _faces_text(hand)
-            if not _roll_has_score(hand):
+            if jackpot:
+                # 20 面大成功：加奖励分并拿回整副骰子，继续按入账判断
+                game["turn_score"] += DICE_D20_BONUS
+                game["locked"] = []
+                game["hand"] = [_new_die(k) for k in player.get("dice")
+                                or [DICE_NORMAL] * DICE_NUM]
+                game["phase"] = "decide"
+                self._sender.reply(
+                    ctx, f"{player['name']} 掷出 {faces}，20面大成功！"
+                         f"+{DICE_D20_BONUS} 分并拿回全部骰子，"
+                         f"本回合累计 {game['turn_score']} 分")
+                opp = game["players"][1 - game["turn"]]
+                if _bot_should_bank(player["total"], game["target"],
+                                    player.get("dice"), opp.get("dice"), opp["total"],
+                                    game["hand"], game["turn_score"]):
+                    player["total"] += game["turn_score"]
+                    self._sender.reply(
+                        ctx, f"{player['name']} 入账 +{game['turn_score']} 分，"
+                             f"总分 {player['total']} 分")
+                    if player["total"] >= game["target"]:
+                        self._finish(ctx, game, player)
+                        return
+                    self._end_turn(ctx, gid, game)
+                    return
+                self._save_game(gid, game)
+                continue
+
+            if bust:
                 lost = game["turn_score"]
                 self._sender.reply(
                     ctx, f"{player['name']} 掷出 {faces}，无法计分——爆骰！"
@@ -1615,13 +1715,14 @@ class FarklePlugin:
             x0 = (width - row_w) // 2
             for i, d in enumerate(pool):
                 _draw_die(draw, x0 + i * (size + gap), 186, size,
-                          d.get("value", 0), d.get("kind", DICE_NORMAL), _is_wild(d))
+                          d.get("value", 0), d.get("kind", DICE_NORMAL), _is_wild(d),
+                          d.get("raw", 0))
             # 图例：只列出当前手牌出现的骰子类型（按固定顺序），避免超出画面宽度
             present = {d.get("kind", DICE_NORMAL) for d in pool}
             fixed = [k for k in _LOADOUT_ORDER if k in present]
             if len(fixed) > 5 and DICE_NORMAL in fixed:
                 fixed = [k for k in fixed if k != DICE_NORMAL]   # 项数过多时省略「普通」项
-            labels = {DICE_DEVIL: "恶魔(1=万)"}
+            labels = {DICE_DEVIL: "恶魔(1=万)", DICE_D20: "20面"}
             lx = 60
             for kind in fixed[:6]:
                 colors = _DIE_COLORS[kind]
@@ -1668,14 +1769,17 @@ class FarklePlugin:
             "· 班长骰：只能出 4/5/6\n"
             "· 开司骰：只能出 1，且每次掷出都必须计分\n"
             "· fin 骰：点数分布同普通骰，掷出的 2、2、3 可作组合计 223 分\n"
+            f"· 20面骰：掷出 1 直接爆骰；掷出 20 得 {DICE_D20_BONUS} 分并拿回全部骰子"
+            "（热骰）；其余点数按 模6+1 当 1~6 点计分\n"
             "· 仙贝骰：与普通骰完全相同（无特效），仅颜色为粉色；"
             "抽到普通骰组时会随机有 1~6 颗变成仙贝骰\n"
             "· 锁定时优先消耗普通骰子，其次特制骰的非万能面，最后才动用万能面\n"
-            "· 现有骰组（各 1/10 概率）：\n"
+            "· 现有骰组（各 1/11 概率）：\n"
             "  6普通 / 6偶数 / 1灌铅+5普通 / 1恶魔+5普通 / 2奇数+4普通 /\n"
-            "  5格罗扎夫+1普通 / 3普通+3骗子 / 2普通+4班长 / 6fin / 1开司+5普通\n"
+            "  5格罗扎夫+1普通 / 3普通+3骗子 / 2普通+4班长 / 6fin / 1开司+5普通 /\n"
+            "  1二十面+5普通\n"
             "· 棋盘图按骰子类型着色：白=普通 蓝=奇数 绿=偶数 红=恶魔 金=灌铅 "
-            "紫=格罗扎夫 粉=骗子 灰=班长 玫粉=仙贝 青绿=fin 浅蓝=开司\n"
+            "紫=格罗扎夫 粉=骗子 灰=班长 玫粉=仙贝 青绿=fin 浅蓝=开司 橙=20面\n"
             "【先手拍卖】（正式掷骰前，骰组公告后进行）\n"
             f"· 由后加入的人先出价；出价必须是 {BID_STEP} 的倍数，可为 0 或负数，"
             f"范围 ±{BID_LIMIT}\n"

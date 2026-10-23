@@ -69,7 +69,8 @@ class Policy:
     """
 
     def __init__(self, kinds, probs, score_counts, s_max, wild_kind=None, wild_value=1,
-                 force_kinds=()):
+                 force_kinds=(), special_kind=None, special_bust_p=0.0,
+                 special_bonus_p=0.0, special_bonus_score=0):
         self._probs = {}
         for k in set(kinds):
             dist = tuple(probs[k])
@@ -81,6 +82,12 @@ class Policy:
         self.wild_value = wild_value
         # 强制计分的骰型（如开司骰）：每次掷出都必须在本次锁定中全部选中
         self.force_kinds = set(force_kinds)
+        # 特殊结果骰型（如 20 面骰）：bust_p 的概率直接爆骰、bonus_p 的概率
+        # 加 special_bonus_score 分并把整副骰组取回；其余概率按 6 面分布正常掷。
+        self.special_kind = special_kind
+        self.special_bust_p = float(special_bust_p)
+        self.special_bonus_p = float(special_bonus_p)
+        self.special_bonus_score = int(special_bonus_score)
         self.step = STEP
         self.s_max = max(STEP, int(s_max) // STEP * STEP)
         self._score_cache = {}
@@ -91,7 +98,8 @@ class Policy:
         # 规则不同，合并后会把手里的普通 1 也当成万能面，凭空多出顺子/三张。
         canon, seen = {}, {}
         for k in kinds:
-            if k == wild_kind:
+            # 特殊结果骰型不能与同分布的普通骰合并：它有爆骰/大成功等额外语义
+            if k == wild_kind or k == special_kind:
                 canon[k] = k
                 continue
             sig = tuple(round(p, 9) for p in probs[k])
@@ -233,7 +241,22 @@ class Policy:
                 best = self._options(outcome, state_counts)
                 key = tuple(sorted(best.items())) if best else ()
                 grouped[key] += p
-            self.groups.append([(p, key) for key, p in grouped.items()])
+            # 特殊结果骰型（20 面骰）：正常面的概率整体收缩，另外拆出
+            # 「爆骰」（无任何可锁选项，本轮归零）与「大成功」（+奖励分并整副取回）。
+            sp = state_counts.get(self.special_kind, 0) if self.special_kind else 0
+            if sp:
+                normal_p = (1.0 - self.special_bust_p - self.special_bonus_p) ** sp
+                no_bust_p = (1.0 - self.special_bust_p) ** sp
+                bust_p = 1.0 - no_bust_p
+                bonus_p = no_bust_p - normal_p
+                if normal_p != 1.0:
+                    for key in list(grouped):
+                        grouped[key] *= normal_p
+                if bonus_p > 0:
+                    grouped[((self.full_index, self.special_bonus_score),)] += bonus_p
+                if bust_p > 0:
+                    grouped[()] += bust_p
+            self.groups.append([(p, key) for key, p in grouped.items() if p > 0])
 
     # ==================== 动态规划 ====================
 
@@ -710,7 +733,8 @@ def build_race(pol_me, pol_opp, target: int, rounds: int = 2) -> RaceMulti:
 
 
 def build_policy(kinds, probs, score_counts, s_max, wild_kind=None, wild_value=1,
-                 force_kinds=()) -> Policy:
+                 force_kinds=(), special_kind=None, special_bust_p=0.0,
+                 special_bonus_p=0.0, special_bonus_score=0) -> Policy:
     """构造（并求解）一副骰组的最优策略。
 
     kinds        : 6 个骰型字符串
@@ -719,7 +743,11 @@ def build_policy(kinds, probs, score_counts, s_max, wild_kind=None, wild_value=1
     s_max        : 分数格上限（建议 = 目标分 + 先手竞价上限）
     wild_kind    : 恶魔骰这类「掷出某点数即为万能面」的骰型
     force_kinds  : 每次掷出都必须全部计分的骰型（如开司骰）
+    special_kind : 有爆骰/大成功等特殊结果的骰型（如 20 面骰）
+    special_bust_p / special_bonus_p / special_bonus_score:
+                   该骰型掷出爆骰的概率、大成功的概率与大成功奖励分
     """
     pol = Policy(kinds, probs, score_counts, s_max, wild_kind, wild_value,
-                 force_kinds)
+                 force_kinds, special_kind, special_bust_p, special_bonus_p,
+                 special_bonus_score)
     return pol

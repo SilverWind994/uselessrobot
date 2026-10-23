@@ -247,6 +247,9 @@ code { background: #120f0d; border: 1px solid var(--line); border-radius: 6px; p
 .die.small .pip { width: 5px; height: 5px; }
 .die .wild { font-size: 20px; font-weight: 700; color: #a01e1e; line-height: 1; }
 .die .blank { font-size: 22px; font-weight: 700; color: #b9b2a6; }
+.die .d20-face { font-size: 20px; font-weight: 700; color: #96501a; line-height: 1; }
+.die.small .d20-face { font-size: 15px; }
+.die .d20-sub { font-size: 10px; color: #96501a; line-height: 1.1; }
 .die.selectable { cursor: pointer; transition: transform .1s ease; }
 .die.selectable:hover { transform: translateY(-3px); }
 .die.sel { outline: 3px solid var(--gold); outline-offset: 1px; }

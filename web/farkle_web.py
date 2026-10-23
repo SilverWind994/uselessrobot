@@ -12,12 +12,13 @@ import threading
 import time
 
 from plugins.farkle import (
-    DICE_NORMAL, DICE_KAIJI, DICE_NUM, PLAYER_NUM, DEFAULT_TARGET, MIN_TARGET, MAX_TARGET,
-    MAX_STONES, MAX_BOT_STONES, BID_STEP, BID_LIMIT, IDLE_SECONDS,
+    DICE_NORMAL, DICE_KAIJI, DICE_NUM, PLAYER_NUM, DEFAULT_TARGET, MIN_TARGET,
+    MAX_TARGET, MAX_STONES, MAX_BOT_STONES, BID_STEP, BID_LIMIT, IDLE_SECONDS,
+    DICE_D20_BONUS,
     BOT_ID, BOT_NAME, _bot_best_lock, _bot_should_bank, _bot_fair_bid,
     _bot_stats_rows, _record_bot_stats, _load_bot_stats,
-    _roll_die, _is_wild, _new_die, _faces_text, _dice_set_desc,
-    _random_dice_set, _score_dice, _roll_has_score, _DIE_NAMES, _DIE_COLORS,
+    _roll_dice_hand, _is_wild, _new_die, _faces_text, _dice_set_desc,
+    _random_dice_set, _score_dice, _DIE_NAMES, _DIE_COLORS,
     DICE_LOADOUTS,
 )
 
@@ -59,6 +60,7 @@ def _die_view(die: dict) -> dict:
     colors = _DIE_COLORS.get(kind, _DIE_COLORS[DICE_NORMAL])
     return {
         "value": die.get("value", 0),
+        "raw": die.get("raw", 0),
         "kind": kind,
         "name": _DIE_NAMES.get(kind, "普通"),
         "wild": _is_wild(die),
@@ -267,19 +269,33 @@ class Room:
             self.turn_score = 0
             self.hand = [_new_die(k) for k in p["dice"]]
             self._log(f"—— 轮到 {p['name']} ——")
-            if not self._roll_hand():
-                self.phase = "keep"
-                self._log(f"{p['name']} 掷出 {_faces_text(self.hand)}，请锁定至少一颗计分骰")
+            bust, jackpot = _roll_dice_hand(self.hand)
+            faces = _faces_text(self.hand)
+            if jackpot:
+                self._apply_jackpot(p, faces)
                 break
-            self._log(f"{p['name']} 掷出 {_faces_text(self.hand)}，爆骰！本回合没有得分")
-            self.turn = (self.turn + 1) % PLAYER_NUM
+            if bust:
+                self._log(f"{p['name']} 掷出 {faces}，爆骰！本回合没有得分")
+                self.turn = (self.turn + 1) % PLAYER_NUM
+                continue
+            self.phase = "keep"
+            self._log(f"{p['name']} 掷出 {faces}，请锁定至少一颗计分骰")
+            break
         self._touch()
 
-    def _roll_hand(self) -> bool:
-        """掷当前手牌，返回是否爆骰"""
-        for die in self.hand:
-            die["value"] = _roll_die(die["kind"])
-        return not _roll_has_score(self.hand)
+    def _apply_jackpot(self, p: dict, faces: str) -> None:
+        """20 面大成功：加奖励分并拿回整副骰子"""
+        self.turn_score += DICE_D20_BONUS
+        self.locked = []
+        self.hand = [_new_die(k) for k in p["dice"]]
+        self.phase = "decide"
+        self._log(f"{p['name']} 掷出 {faces}，20面大成功！+{DICE_D20_BONUS} 分"
+                  "并拿回全部骰子，可继续掷或入账")
+        self._touch()
+
+    def _roll_hand(self) -> tuple:
+        """掷当前手牌，返回 (是否爆骰, 是否 20 面大成功)"""
+        return _roll_dice_hand(self.hand)
 
     def roll(self, qq: int):
         """继续掷（当前手牌）"""
@@ -288,15 +304,20 @@ class Room:
             return err
         if self.phase != "decide":
             return "现在要先锁定至少一颗计分骰喵"
-        if self._roll_hand():
+        bust, jackpot = self._roll_hand()
+        faces = _faces_text(self.hand)
+        if jackpot:
+            self._apply_jackpot(p, faces)
+            return None
+        if bust:
             lost = self.turn_score
-            self._log(f"{p['name']} 掷出 {_faces_text(self.hand)}，爆骰！"
+            self._log(f"{p['name']} 掷出 {faces}，爆骰！"
                       + (f"本回合 {lost} 分全部作废" if lost else "本回合没有得分"))
             self.turn = (self.turn + 1) % PLAYER_NUM
             self._start_turn()
             return None
         self.phase = "keep"
-        self._log(f"{p['name']} 掷出 {_faces_text(self.hand)}，请锁定计分骰")
+        self._log(f"{p['name']} 掷出 {faces}，请锁定计分骰")
         self._touch()
         return None
 

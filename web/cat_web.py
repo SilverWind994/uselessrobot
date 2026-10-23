@@ -259,6 +259,7 @@ def expedition_state(qq: int):
         "eye_stones": player.get("eye_stones", 0),
         "signin_done": player.get("last_signin") == _today(),
         "summon_cost": CatConfig.CAT_SUMMON_COST,
+        "insurance": _plugin.insurance_status(player),
     }
 
 
@@ -290,6 +291,41 @@ def signin(qq: int) -> dict:
     }
 
 
+def _drawn_payload(results) -> list:
+    """把插件抽卡结果整理成网页绘图/展示用的列表"""
+    drawn = []
+    for r in results:
+        pool_cat = _plugin._find_pool_cat(r["id"]) or {"name": r["name"], "job_path": []}
+        drawn.append({
+            "id": r["id"],
+            "name": r["name"],
+            "rarity": r["rarity"],
+            "star": r["star"],
+            "job": r.get("job", ""),
+            "portrait": _portrait_name(pool_cat),
+            "is_new": not r["is_dup"],
+            "refunded": r["refunded"],
+            "refund_amt": r["refund_amt"],
+            "star_up": r["star_up"],
+            "job_up": r["job_up"],
+        })
+    return drawn
+
+
+def _insurance_event_payload(event):
+    """把插件返回的保险事件整理成 JSON（赔付结果转成 drawn 列表）"""
+    if not event or event.get("status") in (None, "none"):
+        return None
+    data = dict(event)
+    payout = data.get("payout")
+    if payout:
+        payout = dict(payout)
+        if payout.get("results"):
+            payout["drawn"] = _drawn_payload(payout.pop("results"))
+        data["payout"] = payout
+    return data
+
+
 def summon(qq: int, count, pool: str):
     """抽卡：复用插件 _summon_batch_core，返回 (错误信息, 结果)；pool 为空或「全」表示全部卡池"""
     try:
@@ -312,32 +348,48 @@ def summon(qq: int, count, pool: str):
     if player.get("fish", 0) < total_cost:
         return f"鱼干不够啦！需要 {total_cost}，还差 {total_cost - player.get('fish', 0)} 鱼干 🐟", None
 
-    results, cost, lucky = _plugin._summon_batch_core(player, count, pool_key)
+    results, cost, lucky, insurance = _plugin._summon_batch_core(player, count, pool_key)
     _plugin._update_player(qq, player)
 
-    drawn = []
-    for r in results:
-        pool_cat = _plugin._find_pool_cat(r["id"]) or {"name": r["name"], "job_path": []}
-        drawn.append({
-            "id": r["id"],
-            "name": r["name"],
-            "rarity": r["rarity"],
-            "star": r["star"],
-            "job": r.get("job", ""),
-            "portrait": _portrait_name(pool_cat),
-            "is_new": not r["is_dup"],
-            "refunded": r["refunded"],
-            "refund_amt": r["refund_amt"],
-            "star_up": r["star_up"],
-            "job_up": r["job_up"],
-        })
     return None, {
-        "drawn": drawn,
+        "drawn": _drawn_payload(results),
         "cost": cost,
         "lucky": lucky,
         "fish": player.get("fish", 0),
         "eye_stones": player.get("eye_stones", 0),
         "summon_count": player.get("summon_count", 0),
+        "insurance": _plugin.insurance_status(player),
+        "insurance_event": _insurance_event_payload(insurance),
+    }
+
+
+# ==================== 喵保险 ====================
+
+def insurance_info(qq: int) -> dict:
+    """保险档位说明与当前保单状态"""
+    player = _player(qq)
+    return {
+        "tiers": _plugin.insurance_tiers(),
+        "insurance": _plugin.insurance_status(player),
+        "fish": player.get("fish", 0),
+        "eye_stones": player.get("eye_stones", 0),
+    }
+
+
+def insurance_buy(qq: int, tier: str):
+    """购买喵保险，返回 (错误信息, 最新状态)"""
+    if tier not in CatConfig.CAT_INSURANCE_TIERS:
+        return "没找到这个保险档位喵", None
+    player = _plugin._get_player(qq)
+    err = _plugin._insurance_buy(player, tier)
+    if err:
+        return err, None
+    _plugin._update_player(qq, player)
+    return None, {
+        "tiers": _plugin.insurance_tiers(),
+        "insurance": _plugin.insurance_status(player),
+        "fish": player.get("fish", 0),
+        "eye_stones": player.get("eye_stones", 0),
     }
 
 

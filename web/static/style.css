@@ -471,6 +471,26 @@ code { background: #120f0d; border: 1px solid var(--line); border-radius: 6px; p
 .summon-new { color: var(--gold); }
 .summon-star { font-size: 13px; color: var(--gold); }
 
+/* ---------- 喵保险 ---------- */
+
+.ins-rule { margin: 0 0 14px; font-size: 13px; color: var(--text-dim); }
+.ins-rule b { color: var(--text); }
+.ins-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+.ins-btn {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 3px;
+  padding: 10px 14px; text-align: left;
+  background: #120f0d; border: 1px solid var(--line); border-radius: 10px;
+  color: var(--text); font-family: inherit; cursor: pointer;
+}
+.ins-btn:hover { border-color: var(--gold); }
+.ins-btn-name { font-size: 14px; font-weight: 700; }
+.ins-btn-cost { font-size: 15px; font-weight: 700; color: var(--gold); }
+.ins-btn-pay { font-size: 12px; color: var(--text-dim); }
+
+@media (max-width: 560px) {
+  .ins-grid { grid-template-columns: 1fr; }
+}
+
 /* ---------- 排行榜（伤害排行 / 每周挑战） ---------- */
 
 .rank-list { display: flex; flex-direction: column; gap: 6px; }

@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>串子小车 · 网页端</title>
-  <link rel="stylesheet" href="/static/style.css?v=10">
+  <link rel="stylesheet" href="/static/style.css?v=11">
 </head>
 <body>
   <div class="bg-glow"></div>
@@ -110,6 +110,18 @@
             </div>
             <p id="summon-msg" class="msg"></p>
             <div id="summon-result" class="summon-list"></div>
+          </div>
+
+          <div class="card">
+            <div class="panel-head">
+              <div>
+                <div class="panel-title">喵保险</div>
+                <div class="panel-sub" id="ins-status">未购买 · 十抽全普通即赔付</div>
+              </div>
+            </div>
+            <p class="ins-rule">购买后，接下来 <b>10 次付费抽卡</b>（单抽或十连中的每一抽）全部为<b>普通</b>才赔付；欧气「一抽变十连」不消耗进度，抽到稀有 / 史诗 / 传说立即失效且保费不退。同时只能持有一张保单。</p>
+            <div id="ins-tiers" class="ins-grid"><p class="room-empty">加载中…</p></div>
+            <p id="ins-msg" class="msg"></p>
           </div>
 
           <div class="card">
@@ -684,6 +696,6 @@
 
   <footer class="foot">串子小车 · 网页端</footer>
 
-  <script src="/static/app.js?v=10"></script>
+  <script src="/static/app.js?v=11"></script>
 </body>
 </html>

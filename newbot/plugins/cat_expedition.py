@@ -152,7 +152,8 @@ class CatExpeditionPlugin:
                 "research_limit": CatConfig.CAT_INITIAL_RESEARCH_LIMIT,
                 "collection": [],
                 "web_pwd_salt": "",   # 网页登录密码的盐与哈希（仅存哈希，不可回显）
-                "web_pwd_hash": ""
+                "web_pwd_hash": "",
+                "insurance": None     # 喵保险保单：{tier, remaining}，None 表示没有
             }
             self._save_players(players)
         return players[str(qq)]
@@ -241,6 +242,11 @@ class CatExpeditionPlugin:
             description="猫猫远征队·查看卡池与介绍"
         )
         router.register(
+            ["喵保险", "猫保险", "catinsure", ".catinsure"],
+            self.cmd_insurance,
+            description="猫猫远征队·喵保险（十抽全普通则赔付，喵保险 查看说明与购买）"
+        )
+        router.register(
             ["喵地图", "catmap", ".catmap"],
             self.cmd_map,
             description="猫猫远征队·世界地图"
@@ -326,7 +332,8 @@ class CatExpeditionPlugin:
         return ("请指定卡池！\n"
                 "用法：抽喵 [数量] <卡池名>   例：抽喵 3 方桌骑士\n"
                 "输入「全」可从全部卡池抽取：例 抽喵 10 全\n"
-                "发送「喵卡池」查看所有卡池与介绍")
+                "发送「喵卡池」查看所有卡池与介绍\n"
+                "发送「喵保险」了解十抽全普通的赔付保险")
 
     def cmd_summon(self, ctx: CommandContext) -> None:
         args = ctx.get_args().strip()
@@ -365,7 +372,7 @@ class CatExpeditionPlugin:
             )
             return
 
-        results, cost, lucky = self._summon_batch_core(player, count, pool_key)
+        results, cost, lucky, insurance = self._summon_batch_core(player, count, pool_key)
         self._update_player(ctx.user_id, player)
 
         # 拼消息
@@ -373,29 +380,36 @@ class CatExpeditionPlugin:
         if lucky:
             header = f"✨ 欧气爆发！一抽变十连！\n{header}"
         lines = [header]
-        for r in results:
-            rname = CatConfig.CAT_RARITY_NAMES[r["rarity"]]
-            line = f"  [{rname}] {r['name']}"
-            if r["job"]:
-                line += f"（{r['job']}）"
-            if r["is_dup"]:
-                if r["refunded"]:
-                    line += f"（已满星，返还 {r['refund_amt']} 鱼干）"
-                else:
-                    line += f"（已拥有，当前 ★{r['star']}）"
-            if r["star_up"]:
-                line += f" ★★ 升到 ★{r['star']}！"
-            if r["job_up"]:
-                line += f" ✨ 转职为 {r['job']}！"
-            lines.append(line)
-
+        lines.extend(self._summon_result_lines(results))
+        lines.extend(self._insurance_lines(insurance))
         lines.append(f"\n当前余额：{player['fish']} 鱼干 | 猫眼石：{player['eye_stones']}")
         self._sender.reply(ctx, "\n".join(lines))
 
+    @staticmethod
+    def _summon_result_lines(results: List[dict]) -> List[str]:
+        """把一次抽卡结果格式化为逐行文本"""
+        lines = []
+        for r in results:
+            rname = CatConfig.CAT_RARITY_NAMES[r["rarity"]]
+            line = f"  [{rname}] {r['name']}"
+            if r.get("job"):
+                line += f"（{r['job']}）"
+            if r.get("is_dup"):
+                if r.get("refunded"):
+                    line += f"（已满星，返还 {r['refund_amt']} 鱼干）"
+                else:
+                    line += f"（已拥有，当前 ★{r['star']}）"
+            if r.get("star_up"):
+                line += f" ★★ 升到 ★{r['star']}！"
+            if r.get("job_up"):
+                line += f" ✨ 转职为 {r['job']}！"
+            lines.append(line)
+        return lines
+
     def _summon_batch_core(self, player: dict, count: int,
                            pool_key: Optional[str] = None):
-        """执行一次抽卡扣费与结算（就地修改 player），返回 (results, total_cost, lucky)。
-        调用方需自行保证鱼干足够。"""
+        """执行一次抽卡扣费与结算（就地修改 player），
+        返回 (results, total_cost, lucky, insurance_event)。调用方需自行保证鱼干足够。"""
         total_cost = count * CatConfig.CAT_SUMMON_COST
         # 幸运：单抽有概率直接变成十连，仍只按 1 抽扣费
         lucky = (count == 1
@@ -406,7 +420,203 @@ class CatExpeditionPlugin:
         # 每次抽卡获得猫眼石（幸运十连只按实际付费抽数计）
         player["eye_stones"] = player.get("eye_stones", 0) + count * CatConfig.CAT_EYE_STONE_PER_SUMMON
         player["summon_count"] = player.get("summon_count", 0) + count
-        return results, total_cost, lucky
+        insurance = self._insurance_consume(player, count, results, lucky)
+        return results, total_cost, lucky, insurance
+
+    # ==================== 喵保险 ====================
+
+    @staticmethod
+    def insurance_tiers() -> List[dict]:
+        """全部保险档位（网页端展示用）"""
+        return [{"key": key, "name": cfg.get("name", key),
+                 "cost_fish": cfg.get("cost_fish", 0),
+                 "cost_eye": cfg.get("cost_eye", 0),
+                 "payout_text": cfg.get("payout_text", "")}
+                for key, cfg in CatConfig.CAT_INSURANCE_TIERS.items()]
+
+    @staticmethod
+    def insurance_status(player: dict) -> Optional[dict]:
+        """当前保单状态（没有保单返回 None）"""
+        policy = player.get("insurance")
+        if not policy:
+            return None
+        window = CatConfig.CAT_INSURANCE_WINDOW
+        cfg = CatConfig.CAT_INSURANCE_TIERS.get(policy.get("tier", ""), {})
+        remaining = policy.get("remaining", 0)
+        return {"tier": policy.get("tier", ""),
+                "tier_name": cfg.get("name", policy.get("tier", "")),
+                "payout_text": cfg.get("payout_text", ""),
+                "window": window,
+                "remaining": remaining,
+                "used": window - remaining}
+
+    @staticmethod
+    def _resolve_insurance_tier(arg: str) -> Optional[str]:
+        """按档位 key / 价格 / 简称解析保险档位"""
+        aliases = {
+            "66": "fish66", "66鱼干": "fish66", "鱼干66": "fish66", "基础保": "fish66",
+            "88": "fish88", "88鱼干": "fish88", "鱼干88": "fish88", "豪华保": "fish88",
+            "8": "eye8", "8眼": "eye8", "眼8": "eye8", "猫眼8": "eye8",
+            "16": "eye16", "16眼": "eye16", "眼16": "eye16", "猫眼16": "eye16",
+        }
+        if arg in CatConfig.CAT_INSURANCE_TIERS:
+            return arg
+        return aliases.get(arg)
+
+    def _insurance_buy(self, player: dict, tier: str) -> Optional[str]:
+        """购买保单（就地修改 player），成功返回 None，失败返回错误信息"""
+        if player.get("insurance"):
+            return "你已经有一张生效中的保单喵，先抽完这 10 次再来吧"
+        cfg = CatConfig.CAT_INSURANCE_TIERS[tier]
+        fish = cfg.get("cost_fish", 0)
+        eye = cfg.get("cost_eye", 0)
+        if fish and player.get("fish", 0) < fish:
+            return (f"鱼干不够喵！{cfg['name']}需要 {fish} 鱼干，"
+                    f"你还差 {fish - player.get('fish', 0)} 鱼干")
+        if eye and player.get("eye_stones", 0) < eye:
+            return (f"猫眼石不够喵！{cfg['name']}需要 {eye} 猫眼石，"
+                    f"当前只有 {player.get('eye_stones', 0)} 个")
+        player["fish"] = player.get("fish", 0) - fish
+        player["eye_stones"] = player.get("eye_stones", 0) - eye
+        player["insurance"] = {"tier": tier,
+                               "remaining": CatConfig.CAT_INSURANCE_WINDOW}
+        return None
+
+    def _insurance_payout(self, player: dict, tier: str) -> dict:
+        """按档位发放赔付（就地修改 player），返回展示用数据"""
+        kind = CatConfig.CAT_INSURANCE_TIERS.get(tier, {}).get("payout")
+        if kind == "ten_pull":
+            results = self._do_summon(player, 10, None)
+            return {"kind": kind, "text": "全卡池十连一次", "results": results}
+        if kind == "fish_eye":
+            fish = CatConfig.CAT_INSURANCE_PAYOUT_FISH
+            eye = CatConfig.CAT_INSURANCE_PAYOUT_EYE
+            player["fish"] = player.get("fish", 0) + fish
+            player["eye_stones"] = player.get("eye_stones", 0) + eye
+            return {"kind": kind, "fish": fish, "eye": eye,
+                    "text": f"{fish} 鱼干 + {eye} 猫眼石"}
+        if kind == "eye":
+            eye = CatConfig.CAT_INSURANCE_PAYOUT_EYE_ONLY
+            player["eye_stones"] = player.get("eye_stones", 0) + eye
+            return {"kind": kind, "eye": eye, "text": f"{eye} 猫眼石"}
+        if kind == "legends":
+            # 普通（default）卡池没有传说，从其余卡池中随机抽一个，赔付其全部传说
+            pool_keys = [k for k in self._pools if k != "default"]
+            pool_key = random.choice(pool_keys)
+            pool = self._pools[pool_key]
+            cats = [c for c in pool.get("cats", []) if c.get("rarity") == "legend"]
+            results = [self._grant_cat(player, c) for c in cats]
+            pool_name = pool.get("name", pool_key)
+            return {"kind": kind, "pool": pool_name,
+                    "text": f"{pool_name} 全部传说各一只", "results": results}
+        return {"kind": "none", "text": ""}
+
+    def _insurance_consume(self, player: dict, count: int,
+                           results: List[dict], lucky: bool) -> dict:
+        """结算本次抽卡对保单的影响（就地修改 player），返回展示用事件"""
+        policy = player.get("insurance")
+        if not policy:
+            return {"status": "none"}
+        tier = policy.get("tier", "")
+        cfg = CatConfig.CAT_INSURANCE_TIERS.get(tier, {})
+        window = CatConfig.CAT_INSURANCE_WINDOW
+        base = {"tier": tier, "tier_name": cfg.get("name", tier),
+                "payout_text": cfg.get("payout_text", ""), "window": window}
+
+        # 欧气十连不消耗保单进度
+        if lucky:
+            return {**base, "status": "skipped",
+                    "remaining": policy.get("remaining", 0),
+                    "used": window - policy.get("remaining", 0)}
+
+        # 本次付费抽数逐个结算；十连跨过保单末尾时只结算窗口内的部分
+        for r in results[:count]:
+            policy["remaining"] -= 1
+            if r["rarity"] != "normal":
+                player["insurance"] = None
+                return {**base, "status": "failed", "remaining": 0, "used": window,
+                        "order": window - policy["remaining"],
+                        "rarity": r["rarity"], "name": r["name"]}
+            if policy["remaining"] <= 0:
+                payout = self._insurance_payout(player, tier)
+                player["insurance"] = None
+                return {**base, "status": "paid", "remaining": 0, "used": window,
+                        "payout": payout}
+        return {**base, "status": "active",
+                "remaining": policy["remaining"],
+                "used": window - policy["remaining"]}
+
+    def _insurance_lines(self, insurance: Optional[dict]) -> List[str]:
+        """把保险事件转成 QQ 消息行"""
+        if not insurance or insurance.get("status") in ("none", None):
+            return []
+        window = insurance.get("window", CatConfig.CAT_INSURANCE_WINDOW)
+        status = insurance["status"]
+        if status == "skipped":
+            return [f"🛡 欧气十连不消耗保单进度（{insurance.get('used', 0)}/{window}）"]
+        if status == "active":
+            return [f"🛡 保单进度 {insurance.get('used', 0)}/{window}（全普通才赔付）"]
+        if status == "failed":
+            rname = CatConfig.CAT_RARITY_NAMES.get(insurance.get("rarity", ""), "非普通")
+            return [f"🛡 保单失效：第 {insurance.get('order', 0)} 抽出现"
+                    f"[{rname}] {insurance.get('name', '')}，本单不赔付"]
+        if status == "paid":
+            payout = insurance.get("payout") or {}
+            lines = [f"🛡 保险赔付！{insurance.get('tier_name', '')}：{payout.get('text', '')}"]
+            if payout.get("results"):
+                lines.append("—— 赔付抽卡结果 ——")
+                lines.extend(self._summon_result_lines(payout["results"]))
+            return lines
+        return []
+
+    def _insurance_help(self, player: dict) -> str:
+        """保单说明 + 购买方法 + 当前进度"""
+        window = CatConfig.CAT_INSURANCE_WINDOW
+        lines = ["【喵保险】", 
+                 f"购买后，接下来 {window} 次付费抽卡（单抽或十连中的每一抽）全部为普通，即触发赔付。",
+                 "· 欧气「一抽变十连」不消耗保单进度",
+                 "· 抽到稀有 / 史诗 / 传说立即失效，保费不退",
+                 "· 同时只能持有一张保单，赔付或失效后可再买",
+                 "",
+                 "档位与购买方法："]
+        labels = {"fish66": "66", "fish88": "88", "eye8": "8眼", "eye16": "16眼"}
+        for key, cfg in CatConfig.CAT_INSURANCE_TIERS.items():
+            cost = (f"{cfg['cost_fish']} 鱼干" if cfg.get("cost_fish")
+                    else f"{cfg['cost_eye']} 猫眼石")
+            lines.append(f"  · 喵保险 {labels.get(key, key)} —— {cost}，{cfg['payout_text']}")
+        lines.append("")
+        status = self.insurance_status(player)
+        if status:
+            lines.append(f"当前保单：{status['tier_name']} 生效中"
+                         f"（{status['used']}/{status['window']}，{status['payout_text']}）")
+        else:
+            lines.append("当前保单：无")
+        lines.append(f"余额：{player.get('fish', 0)} 鱼干 | {player.get('eye_stones', 0)} 猫眼石")
+        return "\n".join(lines)
+
+    def cmd_insurance(self, ctx: CommandContext) -> None:
+        args = ctx.get_args().strip()
+        player = self._get_player(ctx.user_id)
+        if not args or args in ("说明", "状态", "查询", "help"):
+            self._sender.reply(ctx, self._insurance_help(player))
+            return
+        tier = self._resolve_insurance_tier(args.split()[0])
+        if tier is None:
+            self._sender.reply(ctx, f"没找到保险档位「{args}」喵。\n\n"
+                                    f"{self._insurance_help(player)}")
+            return
+        err = self._insurance_buy(player, tier)
+        if err:
+            self._sender.reply(ctx, err)
+            return
+        self._update_player(ctx.user_id, player)
+        cfg = CatConfig.CAT_INSURANCE_TIERS[tier]
+        lines = [f"🛡 购买成功：{cfg['name']}",
+                 f"接下来 {CatConfig.CAT_INSURANCE_WINDOW} 次付费抽卡全部为普通即赔付："
+                 f"{cfg['payout_text']}",
+                 f"当前余额：{player.get('fish', 0)} 鱼干 | 猫眼石：{player.get('eye_stones', 0)}",
+                 "发送「喵保险」可随时查看进度"]
+        self._sender.reply(ctx, "\n".join(lines))
 
     # ==================== 卡池查询 ====================
 
@@ -818,14 +1028,17 @@ class CatExpeditionPlugin:
         lucky_times = 0
         rarity_counts = {"legend": 0, "epic": 0, "rare": 0, "normal": 0}
         highlights = []
+        insurance_notes = []
         MAX_SWEEP_DRAWS = 500   # 安全上限，防止极端返还导致长时间循环
         while player["fish"] >= cost and total_draws < MAX_SWEEP_DRAWS:
-            results, spent, lucky = self._summon_batch_core(player, 1, None)
+            results, spent, lucky, insurance = self._summon_batch_core(player, 1, None)
             total_draws += 1
             total_got += len(results)
             total_spent += spent
             if lucky:
                 lucky_times += 1
+            if insurance and insurance.get("status") in ("paid", "failed"):
+                insurance_notes.extend(self._insurance_lines(insurance))
             for r in results:
                 rarity_counts[r["rarity"]] = rarity_counts.get(r["rarity"], 0) + 1
                 rname = CatConfig.CAT_RARITY_NAMES.get(r["rarity"], r["rarity"])
@@ -872,6 +1085,10 @@ class CatExpeditionPlugin:
                     lines.append(f"  {hl}")
                 if len(highlights) > 25:
                     lines.append(f"  …等共 {len(highlights)} 条亮点")
+
+        if insurance_notes:
+            lines.append("—— 喵保险 ——")
+            lines.extend(insurance_notes)
 
         # 抽卡结果立即落盘：远征可能因「今天已经远征过了」提前返回而不落盘
         self._update_player(ctx.user_id, player)

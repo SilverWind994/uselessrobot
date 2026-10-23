@@ -2648,6 +2648,7 @@ async function loadExpedition() {
   if (status !== 200 || !data.ok) { expSetMsg(data.msg || '读取远征状态失败喵'); return; }
   renderExpedition(data.state);
   loadSummonPools();
+  loadInsurance();
 }
 
 function renderExpedition(s) {
@@ -2741,6 +2742,7 @@ function renderWallet(s) {
   btnSignin.disabled = !!s.signin_done;
   btnSignin.textContent = s.signin_done ? '今日已签' : '签到';
   updateSummonHint();
+  renderInsurance(s.insurance);
 }
 
 async function loadSummonPools() {
@@ -2786,10 +2788,26 @@ btnSummon.addEventListener('click', async () => {
     return;
   }
   const head = `共 ${data.drawn.length} 只，消耗 ${data.cost} 鱼干`;
-  setSummonMsg(data.lucky ? `✨ 欧气爆发！一抽变十连！${head}` : head, true);
-  renderSummonResult(data.drawn);
+  const eventText = insuranceEventText(data.insurance_event);
+  const payoutDrawn = (data.insurance_event && data.insurance_event.payout
+    && data.insurance_event.payout.drawn) || [];
+  const fullHead = data.lucky ? `✨ 欧气爆发！一抽变十连！${head}` : head;
+  setSummonMsg(eventText ? `${fullHead}　${eventText}` : fullHead, true);
+  renderSummonResult(data.drawn.concat(payoutDrawn));
+  renderInsurance(data.insurance);
   refresh();
 });
+
+function insuranceEventText(event) {
+  if (!event) return '';
+  if (event.status === 'paid') return `🛡 保险赔付：${event.payout ? event.payout.text : ''}`;
+  if (event.status === 'failed') {
+    return `🛡 保单失效：第 ${event.order} 抽出现${rarityName(event.rarity)}「${event.name}」`;
+  }
+  if (event.status === 'skipped') return '🛡 欧气十连不消耗保单进度';
+  if (event.status === 'active') return `🛡 保单进度 ${event.used}/${event.window}`;
+  return '';
+}
 
 function renderSummonResult(drawn) {
   summonResult.innerHTML = drawn.map((r) => {
@@ -2810,6 +2828,60 @@ function renderSummonResult(drawn) {
       <div class="summon-star">★${r.star}</div>
     </div>`;
   }).join('');
+}
+
+// ---------- 喵保险 ----------
+
+const insStatus = document.getElementById('ins-status');
+const insTiers = document.getElementById('ins-tiers');
+const insMsg = document.getElementById('ins-msg');
+let insTiersFilled = false;
+
+function renderInsurance(ins) {
+  if (!ins) {
+    insStatus.textContent = '未购买 · 十抽全普通即赔付';
+    return;
+  }
+  insStatus.textContent = `${ins.tier_name} 生效中 · 进度 ${ins.used}/${ins.window} · ${ins.payout_text}`;
+}
+
+async function loadInsurance() {
+  const { status, data } = await api('/api/cat/insurance');
+  if (status === 401) { homePanel.classList.add('hidden'); showLogin(); return; }
+  if (status !== 200 || !data.ok) return;
+  renderInsurance(data.insurance);
+  if (insTiersFilled) return;
+  insTiers.innerHTML = data.tiers.map((t) => {
+    const cost = t.cost_fish ? `${t.cost_fish} 鱼干` : `${t.cost_eye} 猫眼石`;
+    return `<button class="ins-btn" data-tier="${esc(t.key)}" type="button">
+      <span class="ins-btn-name">${esc(t.name)}</span>
+      <span class="ins-btn-cost">${esc(cost)}</span>
+      <span class="ins-btn-pay">${esc(t.payout_text)}</span>
+    </button>`;
+  }).join('');
+  insTiers.querySelectorAll('.ins-btn').forEach((btn) => {
+    btn.addEventListener('click', () => buyInsurance(btn.dataset.tier));
+  });
+  insTiersFilled = true;
+}
+
+async function buyInsurance(tier) {
+  insMsg.textContent = '购买中…';
+  insMsg.className = 'msg';
+  const { status, data } = await api('/api/cat/insurance/buy', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tier }),
+  });
+  if (status === 401) { homePanel.classList.add('hidden'); showLogin(); return; }
+  if (status !== 200 || !data.ok) {
+    insMsg.textContent = data.msg || '购买失败喵';
+    return;
+  }
+  insMsg.textContent = `购买成功：${data.insurance.tier_name} 生效中`;
+  insMsg.className = 'msg ok';
+  renderInsurance(data.insurance);
+  refresh();
 }
 
 // ---------- 远征队 ----------

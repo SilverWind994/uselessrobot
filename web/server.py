@@ -783,6 +783,27 @@ def cat_summon(payload: dict, cat_token: str = Cookie(default="")) -> JSONRespon
     return JSONResponse({"ok": True, **data})
 
 
+@app.get("/api/cat/insurance")
+def cat_insurance(cat_token: str = Cookie(default="")) -> JSONResponse:
+    """喵保险：档位说明与当前保单状态"""
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    return JSONResponse({"ok": True, **cat_web.insurance_info(qq)})
+
+
+@app.post("/api/cat/insurance/buy")
+def cat_insurance_buy(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
+    """购买喵保险（复用插件保单逻辑）"""
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    err, data = cat_web.insurance_buy(qq, str(payload.get("tier", "")))
+    if err:
+        return JSONResponse({"ok": False, "msg": err}, status_code=400)
+    return JSONResponse({"ok": True, **data})
+
+
 @app.get("/api/cat/book")
 def cat_book(code: str, cat_token: str = Cookie(default="")) -> FileResponse:
     """国家图鉴拼图（PIL 合成，含本人收集情况）"""

@@ -44,6 +44,25 @@ class CatConfig:
     CAT_EYE_STONE_PER_SUMMON = 1
     CAT_EYE_STONE_COST = 100
 
+    # ==================== 喵保险 ====================
+    # 购买后，接下来 10 次付费抽卡全部为普通（normal）才触发赔付；
+    # 欧气「一抽变十连」不消耗进度；出现稀有及以上立即失效（保费不退）。
+    CAT_INSURANCE_WINDOW = 10
+    CAT_INSURANCE_PAYOUT_FISH = 1000      # 鱼干档赔付的鱼干数
+    CAT_INSURANCE_PAYOUT_EYE = 10         # 鱼干档赔付的猫眼石数
+    CAT_INSURANCE_PAYOUT_EYE_ONLY = 88    # 猫眼石档赔付的猫眼石数
+    # 档位：price 为购买消耗（fish/eye），payout 为赔付类型
+    CAT_INSURANCE_TIERS = {
+        "fish66": {"name": "鱼干基础保", "cost_fish": 66, "cost_eye": 0,
+                   "payout": "ten_pull", "payout_text": "赔付一次全卡池十连"},
+        "fish88": {"name": "鱼干豪华保", "cost_fish": 88, "cost_eye": 0,
+                   "payout": "fish_eye", "payout_text": "赔付 1000 鱼干 + 10 猫眼石"},
+        "eye8": {"name": "猫眼石基础保", "cost_fish": 0, "cost_eye": 8,
+                 "payout": "eye", "payout_text": "赔付 88 猫眼石"},
+        "eye16": {"name": "猫眼石豪华保", "cost_fish": 0, "cost_eye": 16,
+                  "payout": "legends", "payout_text": "赔付随机卡池全部传说各一只"},
+    }
+
     # ==================== 养成与战斗 ====================
     CAT_MAX_STAR = 5              # 星级上限
 

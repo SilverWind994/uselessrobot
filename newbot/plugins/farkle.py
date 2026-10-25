@@ -1063,7 +1063,8 @@ class FarklePlugin:
         holder = game["players"][au["holder"]]
         return (f"当前最高出价：{holder['name']} 出 {au['bid']}"
                 f"（先手以 {self._fmt_open_score(au['bid'])} 分开局）。\n"
-                f"{cur['name']} 请选择：「farkle 出价 <高于 {au['bid']}>」加价抢先手，"
+                f"{cur['name']} 请选择：「farkle 出价 <高于 {au['bid']}>」加价抢先手"
+                f"（直接发「farkle 出价」= 默认加到 {au['bid'] + BID_STEP}），"
                 f"或「farkle 接受」让 {holder['name']} "
                 f"以 {self._fmt_open_score(au['bid'])} 分先手开局")
 
@@ -1079,13 +1080,21 @@ class FarklePlugin:
             self._sender.reply(ctx, f"现在轮到 {cur['name']} 出价喵")
             return
         rest = rest.strip()
-        try:
-            val = int(rest)
-        except ValueError:
-            self._sender.reply(
-                ctx, f"出价要填整数分喵，且必须是 {BID_STEP} 的倍数，"
-                     f"如「farkle 出价 300」或「farkle 出价 -300」")
-            return
+        if not rest:
+            # 省略分数 = 默认加价到「对方出价 + 50」，省一条指令
+            if au["bid"] is None:
+                self._sender.reply(
+                    ctx, f"首个出价要填分数喵（{BID_STEP} 的倍数），如「farkle 出价 300」")
+                return
+            val = au["bid"] + BID_STEP
+        else:
+            try:
+                val = int(rest)
+            except ValueError:
+                self._sender.reply(
+                    ctx, f"出价要填整数分喵，且必须是 {BID_STEP} 的倍数，"
+                         f"如「farkle 出价 300」或「farkle 出价 -300」")
+                return
         if val % BID_STEP != 0:
             self._sender.reply(ctx, f"出价必须是 {BID_STEP} 的倍数喵")
             return

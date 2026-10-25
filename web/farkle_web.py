@@ -158,7 +158,10 @@ class Room:
         try:
             val = int(val)
         except (TypeError, ValueError):
-            return f"出价要填整数分喵，且必须是 {BID_STEP} 的倍数"
+            # 省略分数 = 默认加价到「对方出价 + 50」
+            if au["bid"] is None:
+                return f"首个出价要填分数喵，且必须是 {BID_STEP} 的倍数"
+            val = au["bid"] + BID_STEP
         if val % BID_STEP != 0:
             return f"出价必须是 {BID_STEP} 的倍数喵"
         if not (-BID_LIMIT <= val <= BID_LIMIT):

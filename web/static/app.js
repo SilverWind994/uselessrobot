@@ -504,7 +504,7 @@ function buildRoomDom() {
     const v = el.value.trim();
     // 留空 = 交给后端按「对方出价 + 50」补默认值
     fkAct('bid', { value: v });
-    if (v === '') { delete el.dataset.forTurn; }
+    if (v === '') { delete el.dataset.forBid; }
   });
   document.getElementById('fk-accept').addEventListener('click', () => fkAct('accept'));
   document.getElementById('fk-lock').addEventListener('click', () => {
@@ -599,10 +599,10 @@ function renderAuction(state) {
   bidInput.disabled = !mine;
   document.getElementById('fk-bid').disabled = !mine;
   document.getElementById('fk-accept').disabled = !mine || au.bid == null;
-  // 默认出价 = 对方出价 + 50：轮到本人且已有出价时自动填好，直接点「出价」即可
-  if (mine && au.bid != null && bidInput.dataset.forTurn !== String(curIdx)) {
+  // 默认出价 = 对方出价 + 50：轮到本人且对方出价变化时自动填好，直接点「出价」即可
+  if (mine && au.bid != null && bidInput.dataset.forBid !== String(au.bid)) {
     bidInput.value = au.bid + 50;
-    bidInput.dataset.forTurn = String(curIdx);
+    bidInput.dataset.forBid = String(au.bid);
   }
   document.getElementById('fk-auction-hint').textContent = mine
     ? (au.bid == null

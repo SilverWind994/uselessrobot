@@ -354,6 +354,8 @@ class SimpleFunctionsPlugin:
                 for cmd in self._router.get_all_commands():
                     names = "/".join(cmd.names[:3])
                     desc = cmd.description
+                    if desc.startswith("[隐藏]"):
+                        continue
                     if "[暂不可用]" in desc:
                         unavailable.append(f"  {names} - {desc.replace('[暂不可用] ', '')}")
                     elif desc.startswith("猫猫远征队"):
@@ -380,6 +382,8 @@ class SimpleFunctionsPlugin:
                 cat_lines = ["── 猫猫远征队 ──"]
                 for cmd in self._router.get_all_commands():
                     desc = cmd.description
+                    if desc.startswith("[隐藏]"):
+                        continue
                     if desc.startswith("猫猫远征队"):
                         names = "/".join(cmd.names[:3])
                         cat_lines.append(f"  {names} - {desc.replace('猫猫远征队·', '')}")

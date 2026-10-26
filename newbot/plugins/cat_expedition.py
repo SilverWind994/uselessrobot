@@ -25,6 +25,34 @@ CAT_RARITY_RGB = {
 CAT_TEXT_RGB = (60, 45, 35)
 CAT_STAR_RGB = (225, 170, 30)
 
+# 娱乐指令「喵充值」的汇率文案（纯玩笑，不涉及真实充值）
+RECHARGE_RATES_TEXT = (
+    "【喵充值 · 今日汇率】\n"
+    "🪄 加隆（哈利波特）：1 加隆 = 17 西可 = 493 纳特 ≈ 5 鱼干\n"
+    "   古灵阁备注：妖精今日心情一般，汇率偏贵喵。\n"
+    "🧝 卢比（塞尔达传说）：1 卢比 ≈ 1 鱼干（只有绿卢比说话算数）\n"
+    "   海拉鲁备注：砸十来个罐子，大概能凑出 1 鱼干。\n"
+    "🍃 铃钱（动物森友会）：1,000 铃钱 ≈ 3 鱼干\n"
+    "   狸克备注：支持分期，利息也用铃钱结算喵。\n"
+    "🖤 吉欧（空洞骑士）：100 吉欧 ≈ 1 鱼干\n"
+    "   德特茅斯备注：坐长椅免费，但汇率不打折。\n"
+    "⭐ 银河信用点（星球大战）：1 信用点 ≈ 2 鱼干\n"
+    "   帝国铸币局：不接受绝地武士讨价还价。\n"
+    "想听更多作品的报价？发送「喵充值 更多」\n"
+    "（以上全是玩笑，本喵不会真的充值喵～）"
+)
+
+RECHARGE_MORE_TEXT = (
+    "【喵充值 · 更多汇率】\n"
+    "🎮 摩拉（原神）：1,000 摩拉 ≈ 1 鱼干（派蒙：就这？）\n"
+    "💎 源石（明日方舟）：1 源石 ≈ 30 鱼干（凯尔希：理智已归零）\n"
+    "🟩 绿宝石（Minecraft）：1 绿宝石 ≈ 8 鱼干（村民坚持要 64 个才肯换）\n"
+    "🌍 铂金币（泰拉瑞亚）：1 铂金币 ≈ 60 鱼干（向导：建议先挖点矿）\n"
+    "🐉 金币（魔兽世界）：100 金币 ≈ 10 鱼干（地精：时间就是金钱，朋友）\n"
+    "💰 宝可梦币（宝可梦）：1,000 宝可梦币 ≈ 2 鱼干（馆主只收现金）\n"
+    "（以上全是玩笑，本喵不会真的充值喵～）"
+)
+
 # 详情卡片表格线坐标（底图 1536x1536，已检测）
 _X_LABEL_END, _X_PHOTO_L, _X_PHOTO_R, _X_RIGHT = 438, 769, 1099, 1428
 _Y_TOP, _Y_R1, _Y_R2, _Y_JOB = 235, 401, 483, 566
@@ -256,6 +284,23 @@ class CatExpeditionPlugin:
             self.cmd_mail,
             description="猫猫远征队·管理员全服邮件（仅管理员可用）",
             permission_check=lambda ctx: ctx.user_id == Config.CAT_ADMIN_QQ
+        )
+
+        # 娱乐指令：不在帮助列表中展示
+        router.register(
+            ["退游喵", "喵退游"],
+            self.cmd_quit_game,
+            description="[隐藏] 娱乐指令·退游喵"
+        )
+        router.register(
+            ["分解喵", "喵分解"],
+            self.cmd_decompose,
+            description="[隐藏] 娱乐指令·分解喵"
+        )
+        router.register(
+            ["喵充值", "充值喵"],
+            self.cmd_recharge,
+            description="[隐藏] 娱乐指令·喵充值"
         )
 
     # ==================== 签到 ====================
@@ -1811,3 +1856,74 @@ class CatExpeditionPlugin:
             if cat["id"] == cat_id:
                 return cat
         return None
+
+    # ==================== 娱乐指令（不在帮助列表中展示） ====================
+
+    def cmd_quit_game(self, ctx: CommandContext) -> None:
+        """「退游喵」：假装删档，实际不做任何修改"""
+        self._sender.reply(
+            ctx,
+            "⚠️ 已注销你的喵喵远征队档案喵。\n"
+            "所有猫猫、鱼干、猫眼石与远征记录都已删除。\n"
+            "\n……骗你的喵！档案好好地在这儿，一只猫都没少。"
+        )
+
+    def cmd_decompose(self, ctx: CommandContext) -> None:
+        """「分解喵」：按星级估价可返还的鱼干，但不会真的分解"""
+        player = self._get_player(ctx.user_id)
+        collection = player.get("collection", [])
+        if not collection:
+            self._sender.reply(ctx, "你还没有猫猫可以分解喵～先去「抽喵喵」吧")
+            return
+
+        arg = ctx.get_args().strip()
+        if arg:
+            owned = None
+            key = arg.lower()
+            for cat in collection:
+                if cat.get("name") == arg or str(cat.get("id", "")).lower() == key:
+                    owned = cat
+                    break
+            if owned is None:
+                self._sender.reply(ctx, f"你的图鉴里没有「{arg}」这只猫喵")
+                return
+            star = max(1, min(CatConfig.CAT_MAX_STAR, int(owned.get("star", 1))))
+            self._sender.reply(
+                ctx,
+                f"【分解喵 · 估价】\n"
+                f"{owned.get('name', arg)} ★{star} → {star} 鱼干\n"
+                f"（只是估价，猫猫不会被真的分解喵～）"
+            )
+            return
+
+        by_star = [0] * (CatConfig.CAT_MAX_STAR + 1)
+        total = 0
+        for cat in collection:
+            star = max(1, min(CatConfig.CAT_MAX_STAR, int(cat.get("star", 1))))
+            by_star[star] += 1
+            total += star
+
+        lines = ["【分解喵 · 估价】", f"当前共有 {len(collection)} 只猫猫"]
+        for star in range(1, CatConfig.CAT_MAX_STAR + 1):
+            if by_star[star]:
+                lines.append(f"★{star} × {by_star[star]} 只 → {star * by_star[star]} 鱼干")
+        lines.append(f"全部估价：{total} 鱼干")
+        lines.append("（只是估价，猫猫不会被真的分解喵～）")
+        self._sender.reply(ctx, "\n".join(lines))
+
+    def cmd_recharge(self, ctx: CommandContext) -> None:
+        """「喵充值」：只报汇率，不会真的充值"""
+        arg = ctx.get_args().strip().lower()
+        if arg in ("比例", "汇率", "价格", "汇率表", "充值比例"):
+            self._sender.reply(ctx, RECHARGE_RATES_TEXT)
+            return
+        if arg in ("更多", "更多作品", "继续", "更多汇率"):
+            self._sender.reply(ctx, RECHARGE_MORE_TEXT)
+            return
+        self._sender.reply(
+            ctx,
+            "喵充值 · 查询充值比例\n"
+            "用法：喵充值 比例 → 查看各世界货币的充值比例\n"
+            "　　　喵充值 更多 → 查看更多作品的报价\n"
+            "（友情提示：本喵只报汇率，不会真的充值喵～）"
+        )

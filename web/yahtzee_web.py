@@ -356,6 +356,28 @@ def create_room(qq: int, name: str):
         return code, None
 
 
+def rematch(code: str, qq: int):
+    """已结束的对局按原配置与玩家重开一局，返回 (新房号, 错误文案)"""
+    with _ROOMS_LOCK:
+        _reap_locked()
+        room = _ROOMS.get(code)
+        if room is None or room.phase != "finished":
+            return None, "只有已结束的对局才能再来一局喵"
+        if room._idx(qq) < 0:
+            return None, "你不是本局玩家喵"
+        exist = _in_other_room_locked(qq)
+        if exist:
+            return exist, None
+        order = sorted(room.players, key=lambda p: 0 if p["qq"] == qq else 1)
+        new_code = _new_code()
+        new_room = Room(new_code, order[0]["qq"], order[0]["name"])
+        _ROOMS[new_code] = new_room
+        for p in order[1:]:
+            new_room.join(p["qq"], p["name"])
+        new_room.start(new_room.players[0]["qq"])
+        return new_code, None
+
+
 def join_room(code: str, qq: int, name: str):
     with _ROOMS_LOCK:
         _reap_locked()

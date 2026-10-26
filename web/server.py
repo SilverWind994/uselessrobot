@@ -281,6 +281,17 @@ def farkle_cancel(payload: dict, cat_token: str = Cookie(default="")) -> JSONRes
     return JSONResponse({"ok": True})
 
 
+@app.post("/api/farkle/rematch")
+def farkle_rematch(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    code, err = farkle_web.rematch(str(payload.get("code", "")).strip(), qq)
+    if err:
+        return JSONResponse({"ok": False, "msg": err}, status_code=400)
+    return JSONResponse({"ok": True, "code": code})
+
+
 @app.get("/api/farkle/state")
 def farkle_state(code: str, cat_token: str = Cookie(default="")) -> JSONResponse:
     qq = _auth_qq(cat_token)
@@ -366,6 +377,17 @@ def yahtzee_cancel(payload: dict, cat_token: str = Cookie(default="")) -> JSONRe
     if err:
         return JSONResponse({"ok": False, "msg": err}, status_code=400)
     return JSONResponse({"ok": True})
+
+
+@app.post("/api/yahtzee/rematch")
+def yahtzee_rematch(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    code, err = yahtzee_web.rematch(str(payload.get("code", "")).strip(), qq)
+    if err:
+        return JSONResponse({"ok": False, "msg": err}, status_code=400)
+    return JSONResponse({"ok": True, "code": code})
 
 
 @app.get("/api/yahtzee/state")
@@ -455,6 +477,17 @@ def mahjong17_cancel(payload: dict, cat_token: str = Cookie(default="")) -> JSON
     return JSONResponse({"ok": True})
 
 
+@app.post("/api/mahjong17/rematch")
+def mahjong17_rematch(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    code, err = mahjong17_web.rematch(str(payload.get("code", "")).strip(), qq)
+    if err:
+        return JSONResponse({"ok": False, "msg": err}, status_code=400)
+    return JSONResponse({"ok": True, "code": code})
+
+
 @app.get("/api/mahjong17/state")
 def mahjong17_state(code: str, cat_token: str = Cookie(default="")) -> JSONResponse:
     qq = _auth_qq(cat_token)
@@ -473,9 +506,10 @@ def mahjong17_action(payload: dict, cat_token: str = Cookie(default="")) -> JSON
         return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
     code = str(payload.get("code", "")).strip()
     action = str(payload.get("action", "")).strip()
-    err, room = mahjong17_web.act(code, qq, action, payload)
+    err, room, need_confirm = mahjong17_web.act(code, qq, action, payload)
     if err:
-        return JSONResponse({"ok": False, "msg": err}, status_code=400)
+        return JSONResponse({"ok": False, "msg": err,
+                             "need_confirm": bool(need_confirm)}, status_code=400)
     return JSONResponse({"ok": True, "room": room})
 
 
@@ -540,6 +574,17 @@ def mahjong_gold_cancel(payload: dict, cat_token: str = Cookie(default="")) -> J
     if err:
         return JSONResponse({"ok": False, "msg": err}, status_code=400)
     return JSONResponse({"ok": True})
+
+
+@app.post("/api/mahjong_gold/rematch")
+def mahjong_gold_rematch(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    code, err = mahjong_gold_web.rematch(str(payload.get("code", "")).strip(), qq)
+    if err:
+        return JSONResponse({"ok": False, "msg": err}, status_code=400)
+    return JSONResponse({"ok": True, "code": code})
 
 
 @app.get("/api/mahjong_gold/state")

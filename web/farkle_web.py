@@ -619,6 +619,40 @@ def create_bot_room(qq: int, name: str, target, stones):
         return code, None
 
 
+def rematch(code: str, qq: int):
+    """已结束的对局按原配置与玩家重开一局，返回 (新房号, 错误文案)"""
+    with _ROOMS_LOCK:
+        _reap_locked()
+        room = _ROOMS.get(code)
+        if room is None or room.phase != "finished":
+            return None, "只有已结束的对局才能再来一局喵"
+        if room._idx(qq) < 0:
+            return None, "你不是本局玩家喵"
+        exist = _in_other_room_locked(qq)
+        if exist:
+            return exist, None
+        if room.stones > 0:
+            for p in room.players:
+                if p["qq"] == BOT_ID:
+                    continue
+                debt = _debt_of(p["qq"])
+                if debt > 0:
+                    return None, f"{p['name']} 有 {debt} 个猫眼石欠债，不能开猫眼石局喵"
+        if room.bot:
+            human = next((p for p in room.players if p["qq"] != BOT_ID), None)
+            if human is None:
+                return None, "本局没有可再来一局的玩家喵"
+            return create_bot_room(human["qq"], human["name"], room.target, room.stones)
+        order = sorted(room.players, key=lambda p: 0 if p["qq"] == qq else 1)
+        new_code = _new_code()
+        new_room = Room(new_code, order[0]["qq"], order[0]["name"],
+                        room.target, room.stones)
+        _ROOMS[new_code] = new_room
+        for p in order[1:]:
+            new_room.join(p["qq"], p["name"])
+        return new_code, None
+
+
 def bot_rank(qq: int) -> dict:
     """人机排行：胜率 + 猫眼石净收益（含机器人自己，与 QQ 端共用 bot_stats.json）"""
     rows = _bot_stats_rows()

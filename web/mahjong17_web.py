@@ -13,7 +13,7 @@ import threading
 import time
 
 from plugins.mahjong17 import (
-    Mahjong17Plugin, _score_hand,
+    Mahjong17Plugin, _score_hand, _is_tenpai,
     _RON_WORDS, _PASS_WORDS, _SUIT_BASE,
     LAST_TURN, PLAYER_NUM, STONES_PER_SCORE, MIN_WIN_SCORE, FALSE_WIN_PENALTY, IDLE_SECONDS,
 )
@@ -175,20 +175,23 @@ class Room:
 
     # ==================== 选牌 / 打牌 / 荣和 / 流局 ====================
 
-    def select(self, qq: int, text: str):
+    def select(self, qq: int, text: str, confirm: bool = False):
+        """选 13 张手牌，返回 (错误文案, 是否需要二次确认)"""
         g = self.g
         pid = self._pid(qq)
         if pid < 0:
-            return "你不是本局玩家喵"
+            return "你不是本局玩家喵", False
         if self.finished:
-            return "本局已经结束了喵"
+            return "本局已经结束了喵", False
         if g["turn"] != -1:
-            return "已经选好牌了，请等待对手选牌喵"
+            return "已经选好牌了，请等待对手选牌喵", False
         if g["hand_tiles"][pid][0] != -1:
-            return "已经选好牌了，请等待对手选牌喵"
+            return "已经选好牌了，请等待对手选牌喵", False
         select_tile, err = _parse_select(text or "", g["tiles"][pid])
         if err:
-            return err
+            return err, False
+        if not confirm and not _is_tenpai(select_tile, g["dora"]):
+            return "这套牌暂时听不了牌喵，确认要这样选的话请再点一次「确认手牌」", True
         for i in range(38):
             g["left_tiles"][pid][i] = g["tiles"][pid][i] - select_tile[i]
             g["hand_tiles"][pid][i] = select_tile[i]
@@ -198,7 +201,7 @@ class Room:
             g["player_turn"] = 0
             self._log(f"双方选牌完毕，{g['player_name'][0]} 先打牌")
         self._touch()
-        return None
+        return None, False
 
     def play(self, qq: int, text: str):
         g = self.g
@@ -513,6 +516,38 @@ def join_room(code: str, qq: int, name: str):
         return room.join(qq, name)
 
 
+def rematch(code: str, qq: int):
+    """已结束的对局按原配置与玩家重开一局，返回 (新房号, 错误文案)"""
+    with _ROOMS_LOCK:
+        _reap_locked()
+        room = _ROOMS.get(code)
+        if room is None or not room.finished:
+            return None, "只有已结束的对局才能再来一局喵"
+        if room._pid(qq) < 0:
+            return None, "你不是本局玩家喵"
+        exist = _in_other_room_locked(qq)
+        if exist:
+            return exist, None
+        if room.stones:
+            for pid in range(PLAYER_NUM):
+                uid = room.g["player_id"][pid]
+                debt = _debt_of(uid)
+                if debt > 0:
+                    return None, (f"{room.g['player_name'][pid]} 有 {debt} 个猫眼石欠债，"
+                                  "不能开猫眼石局喵")
+        order = sorted(range(PLAYER_NUM),
+                       key=lambda i: 0 if room.g["player_id"][i] == qq else 1)
+        first = order[0]
+        new_code = _new_code()
+        new_room = Room(new_code, room.g["player_id"][first],
+                        room.g["player_name"][first], room.stones)
+        _ROOMS[new_code] = new_room
+        second = order[1]
+        if room.g["player_id"][second] != 0:
+            new_room.join(room.g["player_id"][second], room.g["player_name"][second])
+        return new_code, None
+
+
 def cancel_room(code: str, qq: int):
     with _ROOMS_LOCK:
         room = _ROOMS.get(code)
@@ -545,15 +580,18 @@ def say(code: str, qq: int, text, name: str = ""):
 
 
 def act(code: str, qq: int, action: str, payload: dict):
-    """执行一步操作，返回 (错误文案, 房间视图)"""
+    """执行一步操作，返回 (错误文案, 房间视图, 是否需要二次确认)"""
     with _ROOMS_LOCK:
         room = _ROOMS.get(code)
         if room is None:
-            return "房间不存在或已结束喵", None
+            return "房间不存在或已结束喵", None, False
+        need_confirm = False
         if action == "select":
-            err = room.select(qq, str((payload or {}).get("text", "")))
+            payload = payload or {}
+            err, need_confirm = room.select(qq, str(payload.get("text", "")),
+                                            bool(payload.get("confirm")))
         elif action == "play":
             err = room.play(qq, str((payload or {}).get("text", "")))
         else:
             err = "未知操作喵"
-        return err, room.view(qq)
+        return err, room.view(qq), need_confirm

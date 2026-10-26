@@ -664,9 +664,12 @@ function renderResult(state) {
   const lines = [`🏆 ${winner ? winner.name : '?'} 获胜！`];
   state.players.forEach((p) => lines.push(`${p.name}：${p.total} 分`));
   (state.settle_lines || []).forEach((l) => lines.push(l));
-  document.getElementById('fk-result').innerHTML =
+  const box = document.getElementById('fk-result');
+  box.innerHTML =
     '<div class="panel-title">对局结束</div>'
-    + lines.map((l) => `<div class="line">${esc(l)}</div>`).join('');
+    + lines.map((l) => `<div class="line">${esc(l)}</div>`).join('')
+    + rematchButton('fk', state.is_player);
+  bindRematch(box, 'fk', rematchFk);
 }
 
 function renderLog(state) {
@@ -1031,9 +1034,12 @@ function renderYzTable(state) {
 
 function renderYzResult(state) {
   const lines = state.result_lines || [];
-  document.getElementById('yz-result').innerHTML =
+  const box = document.getElementById('yz-result');
+  box.innerHTML =
     '<div class="panel-title">对局结束</div>'
-    + lines.map((l) => `<div class="line">${esc(l)}</div>`).join('');
+    + lines.map((l) => `<div class="line">${esc(l)}</div>`).join('')
+    + rematchButton('yz', state.is_player);
+  bindRematch(box, 'yz', rematchYz);
 }
 
 function renderYzLog(state) {
@@ -1218,7 +1224,7 @@ async function cancelMjRoom() {
 }
 
 async function mjAct(action, extra) {
-  if (!mjCode) return;
+  if (!mjCode) return false;
   const body = Object.assign({ code: mjCode, action: action }, extra || {});
   const { status, data } = await api('/api/mahjong17/action', {
     method: 'POST',
@@ -1228,9 +1234,16 @@ async function mjAct(action, extra) {
   if (status === 200 && data.ok) {
     mjSig = mjSignature(data.room);
     renderMjRoom(data.room);
-  } else {
-    mjMsg(data.msg || '操作失败喵');
+    return true;
   }
+  if (data && data.need_confirm) {
+    if (window.confirm(data.msg || '这套牌暂时听不了牌喵，确定要这样选吗？')) {
+      return mjAct(action, Object.assign({}, extra || {}, { confirm: true }));
+    }
+    return false;
+  }
+  mjMsg(data.msg || '操作失败喵');
+  return false;
 }
 
 function mjSignature(r) {
@@ -1524,7 +1537,8 @@ function renderMjResult(state) {
         + '</div>');
     });
   }
-  document.getElementById('mj-result').innerHTML = html.join('');
+  document.getElementById('mj-result').innerHTML = html.join('') + rematchButton('mj', state.is_player);
+  bindRematch(document.getElementById('mj-result'), 'mj', rematchMj);
 }
 
 function renderMjLog(state) {
@@ -1891,7 +1905,9 @@ function renderGoldResult(state) {
   ranking.forEach((r, i) => {
     html += `<div class="line">${i + 1}. ${esc(r.name || '玩家')}：${r.score} 根</div>`;
   });
+  html += rematchButton('gold', state.is_player);
   box.innerHTML = html;
+  bindRematch(box, 'gold', rematchGold);
 }
 
 function renderGoldLog(state) {
@@ -2448,6 +2464,35 @@ document.getElementById('btn-ucml-fill').addEventListener('click', () => {
 document.getElementById('btn-ucml-preview').addEventListener('click', ucmlPreview);
 document.getElementById('btn-ucml-submit').addEventListener('click', ucmlSubmit);
 
+// ==================== 再来一局（沿用原配置与原班人马） ====================
+
+function rematchButton(game, visible) {
+  return visible
+    ? `<button class="btn btn-primary btn-sm rematch-btn" data-game="${game}" type="button">再来一局</button>`
+    : '';
+}
+
+function bindRematch(container, game, handler) {
+  const btn = container.querySelector(`.rematch-btn[data-game="${game}"]`);
+  if (btn) btn.addEventListener('click', handler);
+}
+
+async function rematchGame(endpoint, code, toast, enter) {
+  if (!code) return;
+  const { status, data } = await api(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code: code }),
+  });
+  if (status === 200 && data.ok) enter(data.code);
+  else toast(data.msg || '再来一局失败喵');
+}
+
+function rematchFk() { return rematchGame('/api/farkle/rematch', fkCode, fkMsg, enterRoom); }
+function rematchYz() { return rematchGame('/api/yahtzee/rematch', yzCode, yzMsg, enterYzRoom); }
+function rematchMj() { return rematchGame('/api/mahjong17/rematch', mjCode, mjMsg, enterMjRoom); }
+function rematchGold() { return rematchGame('/api/mahjong_gold/rematch', goldCode, goldMsg, enterGoldRoom); }
+
 // ==================== 房间发言（对局双方 + 观众） ====================
 
 const chatSigs = { fk: '', yz: '', mj: '', gold: '' };
@@ -2457,11 +2502,56 @@ function clearChatDom(prefix) {
   if (list) list.innerHTML = '';
 }
 
+function setupFloatChat(prefix) {
+  const card = document.getElementById(prefix + '-chat');
+  if (!card || card.dataset.floatReady) return;
+  card.dataset.floatReady = '1';
+  const head = card.querySelector('.panel-head');
+  if (!head) return;
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'btn btn-ghost btn-sm chat-collapse';
+  btn.textContent = '收起';
+  head.appendChild(btn);
+  btn.addEventListener('click', (event) => {
+    event.stopPropagation();
+    const collapsed = card.classList.toggle('collapsed');
+    btn.textContent = collapsed ? '展开' : '收起';
+  });
+
+  let drag = null;
+  head.addEventListener('pointerdown', (event) => {
+    if (event.target.closest('button')) return;
+    const rect = card.getBoundingClientRect();
+    drag = { x: event.clientX, y: event.clientY, left: rect.left, top: rect.top, w: rect.width };
+    head.setPointerCapture(event.pointerId);
+    event.preventDefault();
+  });
+  head.addEventListener('pointermove', (event) => {
+    if (!drag) return;
+    const w = Math.min(drag.w, window.innerWidth - 16);
+    const nx = Math.min(Math.max(8, drag.left + event.clientX - drag.x),
+                        window.innerWidth - w - 8);
+    const ny = Math.min(Math.max(8, drag.top + event.clientY - drag.y),
+                        window.innerHeight - 56);
+    card.style.left = nx + 'px';
+    card.style.top = ny + 'px';
+    card.style.right = 'auto';
+    card.style.bottom = 'auto';
+  });
+  const stopDrag = () => { drag = null; };
+  head.addEventListener('pointerup', stopDrag);
+  head.addEventListener('pointercancel', stopDrag);
+}
+
 function showChat(prefix) {
   chatSigs[prefix] = '';
   clearChatDom(prefix);   // 换房间时先清掉上一间的残留消息
   const card = document.getElementById(prefix + '-chat');
-  if (card) card.classList.remove('hidden');
+  if (card) {
+    setupFloatChat(prefix);
+    card.classList.remove('hidden');
+  }
 }
 
 function hideChat(prefix) {

@@ -263,9 +263,32 @@ code { background: #120f0d; border: 1px solid var(--line); border-radius: 6px; p
 .log div { color: var(--text-dim); }
 .log div:last-child { color: var(--text); }
 
-/* ---------- 房间发言 ---------- */
-.chat-card { margin-top: 16px; }
+/* ---------- 房间发言（悬浮窗，可拖动、可收起） ---------- */
+.chat-card {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  width: 340px;
+  max-width: calc(100vw - 24px);
+  margin: 0;
+  z-index: 90;
+  display: flex;
+  flex-direction: column;
+  border-color: var(--gold);
+  box-shadow: 0 18px 46px rgba(0, 0, 0, .55);
+}
+.chat-card .panel-head {
+  margin-bottom: 8px;
+  cursor: move;
+  touch-action: none;
+  user-select: none;
+  align-items: center;
+}
+.chat-card .panel-title { font-size: 16px; }
+.chat-card .panel-sub { font-size: 12px; }
+.chat-collapse { margin: 0; flex: none; }
 .chat-list {
+  min-height: 72px;
   max-height: 200px;
   overflow-y: auto;
   display: flex;
@@ -280,6 +303,14 @@ code { background: #120f0d; border: 1px solid var(--line); border-radius: 6px; p
 .chat-time { flex: none; margin-left: auto; color: var(--text-dim); font-size: 12px; }
 .chat-form { display: flex; gap: 10px; margin-top: 12px; }
 .chat-input { flex: 1; }
+.chat-card.collapsed { width: 220px; }
+.chat-card.collapsed .chat-list,
+.chat-card.collapsed .chat-form,
+.chat-card.collapsed .panel-sub { display: none; }
+
+@media (max-width: 640px) {
+  .chat-card { right: 10px; bottom: 10px; width: calc(100vw - 20px); }
+}
 
 .fk-result { border-color: var(--gold); }
 .fk-result .panel-title { color: var(--gold); }

@@ -541,6 +541,14 @@ def _score_hand(handtiles, cut, dora):
     return maxScore, maxFu, maxFan, maxFans
 
 
+def _is_tenpai(handtiles, dora) -> bool:
+    """13 张手牌是否能听牌（存在至少一张能成和的牌）"""
+    for t in range(38):
+        if _score_hand(handtiles, t, dora)[0] > 0:
+            return True
+    return False
+
+
 # ==================== 插件 ====================
 
 class Mahjong17Plugin:
@@ -808,6 +816,20 @@ class Mahjong17Plugin:
             if game["tiles"][pid][i] < select_tile[i]:
                 self._sender.reply(ctx, "选择了自己未拥有的牌")
                 return
+
+        # 听不了牌的选牌需要连续发送两次相同的选牌才生效
+        if not _is_tenpai(select_tile, game["dora"]):
+            pending = game.setdefault("select_pending", {})
+            key = str(pid)
+            if not (pending.get(key) and pending[key].get("tiles") == select_tile):
+                pending[key] = {"tiles": list(select_tile)}
+                self._save_game(gid, game)
+                self._sender.reply(
+                    ctx, "这套牌暂时听不了牌喵。确认要这样选的话，请再发送一次相同的选牌")
+                return
+            pending.pop(key, None)
+
+        for i in range(38):
             game["left_tiles"][pid][i] = game["tiles"][pid][i] - select_tile[i]
             game["hand_tiles"][pid][i] = select_tile[i]
 
@@ -1264,6 +1286,7 @@ class Mahjong17Plugin:
             "· 开局前反悔可发送「17步麻将 取消」解散对局；开局后必须打完整局\n"
             "· 开局后双方在【私聊】里操作（群聊只看牌桌）：\n"
             "   选牌：17步麻将 123m456p789s11z（共13张，红五写作0，如 0m）\n"
+            "     若这套牌听不了牌，需要再发送一次相同的选牌确认才会生效\n"
             "   打牌：17步麻将 5m（只能打「舍牌候补」里有的牌）\n"
             "   荣和：17步麻将 荣（对手刚打出的牌成和即可）\n"
             "· 双方各打17巡，最后一巡只能「荣」或「流局」\n"

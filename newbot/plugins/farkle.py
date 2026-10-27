@@ -1283,11 +1283,14 @@ class FarklePlugin:
 
         game["phase"] = "keep"
         self._save_game(gid, game)
+        # 只有手里真有恶魔骰的万能面时才提示可以顶替，避免其他骰组被误导
+        wild_hint = ("；点数不够的部分会自动用恶魔骰的万能面顶替"
+                     if any(_is_wild(d) for d in hand) else "")
         self._sender.reply(
             ctx, f"{player['name']} 掷出 {faces}。\n"
                  f"发送「farkle 留 <点数>」锁定至少一颗计分骰，例如「farkle 留 15」；"
-                 f"也可在点数后直接加 r（继续掷）或 b（入账），如「farkle 留 14445 b」；"
-                 f"点数不够的部分会自动用恶魔骰的万能面顶替")
+                 f"也可在点数后直接加 r（继续掷）或 b（入账），如「farkle 留 14445 b」"
+                 + wild_hint)
         self._send_board(ctx, game)
 
     def _cmd_roll(self, ctx: CommandContext) -> None:
@@ -1358,11 +1361,13 @@ class FarklePlugin:
         for face in sorted(counts, reverse=True):
             need = counts[face]
             if senbei_left > 0:
-                taken, hand, need = _take(
+                # 仙贝按份额取，不能让它的配额覆盖掉这个点数真正还缺的颗数
+                taken, hand, _ = _take(
                     lambda d, f=face: d.get("kind") == DICE_SENBEI and d["value"] == f,
                     min(senbei_left, need))
                 selected += taken
                 senbei_left -= len(taken)
+                need -= len(taken)
             if need:
                 # 赌怪骰留手会一直卡着不能入账，同点数时优先把它锁定掉
                 taken, hand, need = _take(

@@ -70,7 +70,8 @@ class Policy:
 
     def __init__(self, kinds, probs, score_counts, s_max, wild_kind=None, wild_value=1,
                  force_kinds=(), special_kind=None, special_bust_p=0.0,
-                 special_bonus_p=0.0, special_bonus_score=0):
+                 special_bonus_p=0.0, special_bonus_score=0,
+                 dynamic_kind=None, no_bank_kind=None):
         self._probs = {}
         for k in set(kinds):
             dist = tuple(probs[k])
@@ -88,6 +89,10 @@ class Policy:
         self.special_bust_p = float(special_bust_p)
         self.special_bonus_p = float(special_bonus_p)
         self.special_bonus_score = int(special_bonus_score)
+        # 概率随手牌数变化的骰型（如赌怪骰：出 1 的概率 = 1/手牌数）
+        self.dynamic_kind = dynamic_kind
+        # 该骰型还在手里时不允许入账（如赌怪骰必须一起锁定才能收分）
+        self.no_bank_kind = no_bank_kind
         self.step = STEP
         self.s_max = max(STEP, int(s_max) // STEP * STEP)
         self._score_cache = {}
@@ -99,7 +104,7 @@ class Policy:
         canon, seen = {}, {}
         for k in kinds:
             # 特殊结果骰型不能与同分布的普通骰合并：它有爆骰/大成功等额外语义
-            if k == wild_kind or k == special_kind:
+            if k == wild_kind or k == special_kind or k == dynamic_kind:
                 canon[k] = k
                 continue
             sig = tuple(round(p, 9) for p in probs[k])
@@ -152,7 +157,8 @@ class Policy:
     def _outcomes(self, state: tuple) -> list:
         """该状态下所有掷出结果：[(按骰型的每面颗数, 概率)]"""
         groups = sorted(Counter(state).items())
-        dists = [(kind, _multiset_dists(cnt, self._probs_of(kind))) for kind, cnt in groups]
+        dists = [(kind, _multiset_dists(cnt, self._probs_of(kind, len(state))))
+                 for kind, cnt in groups]
         out = []
 
         def rec(i, acc, p):
@@ -168,7 +174,17 @@ class Policy:
         rec(0, [], 1.0)
         return out
 
-    def _probs_of(self, kind):
+    def _probs_of(self, kind, n_total=None):
+        """骰型的分面概率；动态骰型按当前手牌数 n_total 计算。
+
+        赌怪骰：出 1 的概率为 1/n_total，其余 2~6 均分剩余概率；只剩它一颗
+        （n_total<=1）时必出 1。
+        """
+        if kind == self.dynamic_kind:
+            if not n_total or n_total <= 1:
+                return (1.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+            p1 = 1.0 / n_total
+            return (p1,) + ((1.0 - p1) / 5,) * 5
         return self._probs[kind]
 
     # ==================== 每个结果的锁定选项 ====================
@@ -260,6 +276,18 @@ class Policy:
 
     # ==================== 动态规划 ====================
 
+    def _bank_allowed_si(self, si: int) -> bool:
+        """该剩余骰型状态是否允许入账（赌怪骰还在手里时不允许）"""
+        if not self.no_bank_kind:
+            return True
+        return self.no_bank_kind not in self.states[si]
+
+    def _bank_allowed(self, kinds) -> bool:
+        """给定手牌骰型是否允许入账"""
+        if not self.no_bank_kind:
+            return True
+        return self.no_bank_kind not in [self.canon.get(k, k) for k in kinds]
+
     def _solve(self) -> None:
         n = self.s_max // STEP + 1
         self.n = n
@@ -280,7 +308,7 @@ class Policy:
                         if v > best:
                             best = v
                     expect += p * best
-                D[si][i] = s if s >= expect else expect
+                D[si][i] = s if (self._bank_allowed_si(si) and s >= expect) else expect
         self.D = D
 
     def turn_stats(self, r=None):
@@ -307,7 +335,8 @@ class Policy:
                 continue
             s = i * self.step
             for si, mass in layer.items():
-                if i >= cut or self.D[si][i] <= s + _EPS:
+                if ((i >= cut or self.D[si][i] <= s + _EPS)
+                        and self._bank_allowed_si(si)):
                     bank[s] += mass               # 入账（达标或策略主动收手）
                     continue
                 for p, opts in self.groups[si]:
@@ -323,9 +352,11 @@ class Policy:
                             best = (v, rem_i, sc)
                     gain = mass * p
                     j = i + best[2] // self.step
-                    if j >= n:
+                    if j >= n and (self._bank_allowed_si(best[1]) or i >= n - 1):
+                        # 到顶且锁定后允许入账（最后一步无法再往后放，直接按入账计）
                         bank[s + best[2]] += gain
                     else:
+                        j = min(j, n - 1)
                         layers[j][best[1]] = layers[j].get(best[1], 0.0) + gain
         self._turn_stats_cache[cut] = (dict(bank), dict(bust))
         return self._turn_stats_cache[cut]
@@ -341,6 +372,8 @@ class Policy:
 
     def should_bank(self, kinds, s: int, target_remaining=None) -> bool:
         """是否应当入账：达到本轮目标分或继续掷的期望不如现在收手"""
+        if not self._bank_allowed(kinds):
+            return False
         if target_remaining is not None and s >= target_remaining:
             return True
         if s >= self.s_max:
@@ -350,6 +383,8 @@ class Policy:
 
     def bank_line(self, kinds) -> int:
         """该剩余骰型的入账线：累计到多少分后收手最优（s_max 表示一直滚）"""
+        if not self._bank_allowed(kinds):
+            return self.s_max
         i = self.index[self._state_key(kinds)]
         row = self.D[i]
         for j, v in enumerate(row):
@@ -634,11 +669,15 @@ class WinTurn:
                     best = -1.0
                     for rem_i, sc in opts:
                         j = i + sc // self.step
-                        v = 1.0 if j >= n else W[rem_i][j]
+                        if j >= n:
+                            # 达到剩余分：锁定后若还能入账即视为赢；否则继续
+                            v = 1.0 if pol._bank_allowed_si(rem_i) else W[rem_i][n - 1]
+                        else:
+                            v = W[rem_i][j]
                         if v > best:
                             best = v
                     cont += p * best
-                if bank_v >= cont - _EPS:
+                if pol._bank_allowed_si(si) and bank_v >= cont - _EPS:
                     W[si][i] = bank_v
                     bank[si][i] = True
                 else:
@@ -647,13 +686,18 @@ class WinTurn:
         self._bank = bank
 
     def _lock_value(self, rem_kinds, s: int) -> float:
-        if s >= self.my_units * self.step:
-            return 1.0
         si = self.pol.index[self.pol._state_key(rem_kinds)]
+        if s >= self.my_units * self.step:
+            # 已够剩余分：只有能入账才算赢；赌怪骰还在手里还得继续
+            if self.pol._bank_allowed(rem_kinds):
+                return 1.0
+            return self.W[si][self.n - 1]
         return self.W[si][s // self.step]
 
     def should_bank(self, kinds, s: int) -> bool:
         """剩余骰型 kinds、本回合已累计 s 分时是否应当入账"""
+        if not self.pol._bank_allowed(kinds):
+            return False
         if s >= self.my_units * self.step:
             return True
         si = self.pol.index[self.pol._state_key(kinds)]
@@ -690,14 +734,18 @@ class WinTurn:
                     best_v, best_j, best_rem = -1.0, None, None
                     for rem_i, sc in opts:
                         j = i + sc // pol.step
-                        v = 1.0 if j >= n else self.W[rem_i][j]
+                        if j >= n:
+                            v = 1.0 if pol._bank_allowed_si(rem_i) else self.W[rem_i][n - 1]
+                        else:
+                            v = self.W[rem_i][j]
                         if v > best_v:
                             best_v, best_j, best_rem = v, j, rem_i
-                    if best_j >= n:               # 达到剩余分，直接入账
+                    if best_j >= n and (pol._bank_allowed_si(best_rem) or i >= n - 1):
                         bank[best_j * pol.step] += mass * p
                     else:
-                        layers[best_j][best_rem] = (layers[best_j].get(best_rem, 0.0)
-                                                    + mass * p)
+                        j = min(best_j, n - 1)
+                        layers[j][best_rem] = (layers[j].get(best_rem, 0.0)
+                                               + mass * p)
         return dict(bank), dict(bust)
 
 
@@ -734,7 +782,8 @@ def build_race(pol_me, pol_opp, target: int, rounds: int = 2) -> RaceMulti:
 
 def build_policy(kinds, probs, score_counts, s_max, wild_kind=None, wild_value=1,
                  force_kinds=(), special_kind=None, special_bust_p=0.0,
-                 special_bonus_p=0.0, special_bonus_score=0) -> Policy:
+                 special_bonus_p=0.0, special_bonus_score=0,
+                 dynamic_kind=None, no_bank_kind=None) -> Policy:
     """构造（并求解）一副骰组的最优策略。
 
     kinds        : 6 个骰型字符串
@@ -746,8 +795,10 @@ def build_policy(kinds, probs, score_counts, s_max, wild_kind=None, wild_value=1
     special_kind : 有爆骰/大成功等特殊结果的骰型（如 20 面骰）
     special_bust_p / special_bonus_p / special_bonus_score:
                    该骰型掷出爆骰的概率、大成功的概率与大成功奖励分
+    dynamic_kind : 概率随手牌数变化的骰型（如赌怪骰）
+    no_bank_kind : 该骰型还在手里时不允许入账的骰型（如赌怪骰）
     """
     pol = Policy(kinds, probs, score_counts, s_max, wild_kind, wild_value,
                  force_kinds, special_kind, special_bust_p, special_bonus_p,
-                 special_bonus_score)
+                 special_bonus_score, dynamic_kind, no_bank_kind)
     return pol

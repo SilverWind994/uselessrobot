@@ -12,9 +12,9 @@ import threading
 import time
 
 from plugins.farkle import (
-    DICE_NORMAL, DICE_KAIJI, DICE_NUM, PLAYER_NUM, DEFAULT_TARGET, MIN_TARGET,
-    MAX_TARGET, MAX_STONES, MAX_BOT_STONES, BID_STEP, BID_LIMIT, IDLE_SECONDS,
-    DICE_D20_BONUS,
+    DICE_NORMAL, DICE_GAMBLER, DICE_KAIJI, DICE_NUM, PLAYER_NUM, DEFAULT_TARGET,
+    MIN_TARGET, MAX_TARGET, MAX_STONES, MAX_BOT_STONES, BID_STEP, BID_LIMIT,
+    IDLE_SECONDS, DICE_D20_BONUS,
     BOT_ID, BOT_NAME, _bot_best_lock, _bot_should_bank, _bot_fair_bid,
     _bot_stats_rows, _record_bot_stats, _load_bot_stats,
     _roll_dice_hand, _is_wild, _new_die, _faces_text, _dice_set_desc,
@@ -379,6 +379,8 @@ class Room:
             return err
         if self.phase != "decide":
             return "要先锁定至少一颗计分骰才能入账喵"
+        if any(d.get("kind") == DICE_GAMBLER for d in self.hand):
+            return "赌怪骰还留在桌上，本回合不能入账喵；必须先把它一起锁定"
         gained = self.turn_score
         p["total"] += gained
         self._log(f"{p['name']} 入账 +{gained} 分，总分 {p['total']} 分")
@@ -488,6 +490,8 @@ class Room:
             "hand": [_die_view(d) for d in self.hand],
             "locked": [_die_view(d) for d in self.locked],
             "turn_score": self.turn_score,
+            "can_bank": (self.phase == "decide"
+                         and not any(d.get("kind") == DICE_GAMBLER for d in self.hand)),
             "winner": self.winner,
             "settle_lines": self.settle_lines,
             "log": self.log[-30:],

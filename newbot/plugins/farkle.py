@@ -96,6 +96,10 @@ DICE_BANCHOU = "banchou"  # 班长骰：只能出 4/5/6
 DICE_SENBEI = "senbei"    # 仙贝骰：与普通骰完全相同（无特效），仅颜色为粉色
 DICE_FIN = "fin"          # fin 骰：点数分布与普通骰相同，掷出 2、2、3 可组合计 223 分
 DICE_D20 = "d20"          # 20面骰：掷出 1 爆骰，掷出 20 得奖励分并整副取回，其余模 6+1
+DICE_ANTIOCH = "antioch"  # 圣安提阿克斯骰：只会掷出 3
+DICE_ADV = "adv"          # 优势骰：掷两颗取较大的一颗
+DICE_D4 = "d4"            # 四面骰：只会掷出 1~4
+DICE_GAMBLER = "gambler"  # 赌怪骰：出 1 的概率为手牌数分之一；在桌上时不能入账
 
 DICE_D20_BUST = 1         # 20 面骰的爆骰面
 DICE_D20_JACKPOT = 20     # 20 面骰的大成功面
@@ -125,6 +129,12 @@ _DIE_DIST = {
     DICE_FIN: (1 / 6,) * 6,
     # 20 面骰只列出 2~19 面的映射结果（1 点爆骰、20 点大成功另行处理）
     DICE_D20: (1 / 6,) * 6,
+    DICE_ANTIOCH: (0.0, 0.0, 1.0, 0.0, 0.0, 0.0),
+    # 优势骰：掷两颗取较大者，P(点数=k) = (2k-1)/36
+    DICE_ADV: (1 / 36, 3 / 36, 5 / 36, 7 / 36, 9 / 36, 11 / 36),
+    DICE_D4: (0.25, 0.25, 0.25, 0.25, 0.0, 0.0),
+    # 赌怪骰的概率随手牌数变化，这里只占位（实际由 _roll_die/_probs_of 动态计算）
+    DICE_GAMBLER: (1 / 6,) * 6,
 }
 
 _DIE_NAMES = {
@@ -132,6 +142,8 @@ _DIE_NAMES = {
     DICE_DEVIL: "恶魔", DICE_LOADED: "灌铅", DICE_GROZAV: "格罗扎夫",
     DICE_TRICKY: "骗子", DICE_KAIJI: "开司", DICE_BANCHOU: "班长",
     DICE_SENBEI: "仙贝", DICE_FIN: "fin", DICE_D20: "二十面",
+    DICE_ANTIOCH: "圣安提", DICE_ADV: "优势", DICE_D4: "四面",
+    DICE_GAMBLER: "赌怪",
 }
 
 # 特制骰子的效果说明（公告与图例用）
@@ -147,11 +159,17 @@ DICE_INFO = {
     DICE_FIN: "fin骰掷出2、2、3可作组合计223分",
     DICE_D20: f"20面骰掷出1直接爆骰，掷出20得{DICE_D20_BONUS}分并拿回全部骰子，"
               "其余点数按 模6+1 当 1~6 点计分",
+    DICE_ANTIOCH: "圣安提阿克斯骰只会掷出3",
+    DICE_ADV: "优势骰掷两颗取较大的那一颗",
+    DICE_D4: "四面骰只会掷出1~4",
+    DICE_GAMBLER: "赌怪骰出1的概率为当前手牌数分之一（只剩它时必出1），"
+                  "它在桌上时本回合不能入账",
 }
 
 # 骰组构成里各骰子的展示顺序
-_LOADOUT_ORDER = (DICE_D20, DICE_DEVIL, DICE_LOADED, DICE_GROZAV, DICE_TRICKY, DICE_KAIJI,
-                  DICE_BANCHOU, DICE_ODD, DICE_EVEN, DICE_SENBEI, DICE_FIN,
+_LOADOUT_ORDER = (DICE_D20, DICE_GAMBLER, DICE_DEVIL, DICE_LOADED, DICE_GROZAV,
+                  DICE_TRICKY, DICE_KAIJI, DICE_BANCHOU, DICE_ANTIOCH, DICE_ADV,
+                  DICE_D4, DICE_ODD, DICE_EVEN, DICE_SENBEI, DICE_FIN,
                   DICE_NORMAL)
 
 # 骰组池：先手位/后手位各从这里等概率抽一组（含全普通）
@@ -167,6 +185,10 @@ DICE_LOADOUTS = {
     "fin6":    [DICE_FIN] * 6,                                     # 6fin（223组合）
     "kaiji1":  [DICE_KAIJI] + [DICE_NORMAL] * 5,                   # 1开司+5普通
     "d20_1":   [DICE_D20] + [DICE_NORMAL] * 5,                     # 1二十面+5普通
+    "antioch2": [DICE_ANTIOCH] * 2 + [DICE_NORMAL] * 4,            # 2圣安提+4普通
+    "adv6":    [DICE_ADV] * 6,                                     # 6优势
+    "d4x6":    [DICE_D4] * 6,                                      # 6四面
+    "gambler1": [DICE_GAMBLER] + [DICE_NORMAL] * 5,                # 1赌怪+5普通
 }
 
 # 渲染配色（棋盘上按骰子类型着色）
@@ -183,6 +205,10 @@ _DIE_COLORS = {
     DICE_SENBEI:  {"fill": (255, 198, 214), "outline": (228, 82, 130)},
     DICE_FIN:     {"fill": (72, 209, 204), "outline": (35, 150, 146)},
     DICE_D20:     {"fill": (255, 224, 178), "outline": (230, 140, 40)},
+    DICE_ANTIOCH: {"fill": (242, 228, 196), "outline": (172, 138, 62)},
+    DICE_ADV:     {"fill": (206, 240, 226), "outline": (70, 160, 130)},
+    DICE_D4:      {"fill": (222, 230, 238), "outline": (100, 125, 150)},
+    DICE_GAMBLER: {"fill": (238, 208, 244), "outline": (150, 70, 180)},
 }
 
 
@@ -269,13 +295,24 @@ def _faces_text(dice) -> str:
     return " ".join(parts)
 
 
-def _roll_die(kind: str) -> int:
+def _roll_die(kind: str, hand_size: int = 1) -> int:
     """按骰子类型掷出点数（概率表见 _DIE_DIST）。
 
-    20 面骰返回原始的 1~20；其余骰型返回 1~6。
+    20 面骰返回原始的 1~20；赌怪骰按当前手牌数动态计算概率；其余骰型返回 1~6。
     """
     if kind == DICE_D20:
         return random.randint(1, DICE_D20_JACKPOT)
+    if kind == DICE_GAMBLER:
+        # 出 1 的概率为手牌数分之一；只剩它一颗时必出 1
+        n = max(1, int(hand_size))
+        if n <= 1:
+            return 1
+        p1 = 1.0 / n
+        r = random.random()
+        if r < p1:
+            return 1
+        rest = (r - p1) / (1.0 - p1)          # 0~1，均分给 2~6
+        return min(6, 2 + int(rest * 5))
     dist = _DIE_DIST.get(kind, _DIE_DIST[DICE_NORMAL])
     r = random.random()
     acc = 0.0
@@ -292,8 +329,9 @@ def _roll_dice_hand(dice) -> tuple:
     20 面骰掷出 1 直接爆骰、掷出 20 大成功（+奖励分并整副取回），其余点数
     按 (点数 % 6) + 1 当 1~6 点计分；原始点数记在 raw 里供展示。
     """
+    hand_size = len(dice)
     for die in dice:
-        raw = _roll_die(die.get("kind"))
+        raw = _roll_die(die.get("kind"), hand_size)
         if die.get("kind") == DICE_D20:
             die["raw"] = raw
             die["value"] = (0 if raw in (DICE_D20_BUST, DICE_D20_JACKPOT)
@@ -522,12 +560,15 @@ def _bot_policy(dice, target: int):
         score_fn = _subset_score_counts_fin if DICE_FIN in kinds else _subset_score_counts
         force_kinds = (DICE_KAIJI,) if DICE_KAIJI in kinds else ()
         d20 = DICE_D20 in kinds
+        gambler = DICE_GAMBLER in kinds
         pol = build_policy(kinds, _DIE_DIST, score_fn, s_max,
                            wild_kind=DICE_DEVIL, force_kinds=force_kinds,
                            special_kind=DICE_D20 if d20 else None,
                            special_bust_p=DICE_D20_BUST_P,
                            special_bonus_p=DICE_D20_BONUS_P,
-                           special_bonus_score=DICE_D20_BONUS)
+                           special_bonus_score=DICE_D20_BONUS,
+                           dynamic_kind=DICE_GAMBLER if gambler else None,
+                           no_bank_kind=DICE_GAMBLER if gambler else None)
         _BOT_POLICY_CACHE[key] = pol
     return pol
 
@@ -614,6 +655,9 @@ def _bot_best_lock(hand, turn_score: int, my_total: int, target: int,
 def _bot_should_bank(my_total: int, target: int, my_dice, opp_dice, opp_total: int,
                      hand, turn_score: int) -> bool:
     """是否入账：本轮累计分已达剩余分，或继续掷的胜率不如现在收手"""
+    # 赌怪骰还在桌上时不能入账（网页与 QQ 端的机器人共用这条判断）
+    if any(d.get("kind") == DICE_GAMBLER for d in (hand or [])):
+        return False
     win = _bot_win_turn(my_total, target, my_dice, opp_dice, opp_total)
     # 与 _bot_best_lock 一样先归一化骰型：仙贝骰不在策略表的状态里
     return win.should_bank([_kind_key(d["kind"]) for d in hand], turn_score)
@@ -1306,6 +1350,12 @@ class FarklePlugin:
                 counts[face])
             selected += taken
             if lack:
+                # 赌怪骰留手会一直卡着不能入账，同点数时优先把它锁定掉
+                taken, hand, lack = _take(
+                    lambda d, f=face: d.get("kind") == DICE_GAMBLER and d["value"] == f,
+                    lack)
+                selected += taken
+            if lack:
                 taken, hand, lack = _take(
                     lambda d, f=face: not _is_wild(d) and d["value"] == f, lack)
                 selected += taken
@@ -1388,6 +1438,10 @@ class FarklePlugin:
             return
         if game["phase"] != "decide":
             self._sender.reply(ctx, "要先锁定至少一颗计分骰才能入账喵")
+            return
+        if any(d.get("kind") == DICE_GAMBLER for d in game["hand"]):
+            self._sender.reply(ctx, "赌怪骰还留在桌上，本回合不能入账喵；"
+                                     "必须把它一起锁定后才能收分")
             return
 
         player = game["players"][game["turn"]]
@@ -1743,7 +1797,9 @@ class FarklePlugin:
 
         hint = {
             "keep": "「farkle 留 <点数>」锁定，末尾可加 r/b（如 留 15 b）",
-            "decide": "「farkle 掷」继续博分，或「farkle 入账」收分",
+            "decide": ("赌怪骰还在桌上，本轮不能入账｜「farkle 掷」继续"
+                       if any(d.get("kind") == DICE_GAMBLER for d in game["hand"])
+                       else "「farkle 掷」继续博分，或「farkle 入账」收分"),
         }.get(game["phase"], "")
         _center_text(draw, (0, height - 42, width, height - 14), hint, _font(22), (150, 140, 128))
 
@@ -1780,15 +1836,21 @@ class FarklePlugin:
             "· fin 骰：点数分布同普通骰，掷出的 2、2、3 可作组合计 223 分\n"
             f"· 20面骰：掷出 1 直接爆骰；掷出 20 得 {DICE_D20_BONUS} 分并拿回全部骰子"
             "（热骰）；其余点数按 模6+1 当 1~6 点计分\n"
+            "· 圣安提阿克斯骰：只会掷出 3\n"
+            "· 优势骰：掷两颗取较大的那一颗\n"
+            "· 四面骰：只会掷出 1~4\n"
+            "· 赌怪骰：出 1 的概率为当前手牌数分之一（只剩它一颗时必出 1）；"
+            "它还在桌上时本回合不能入账，必须先把它一起锁定\n"
             "· 仙贝骰：与普通骰完全相同（无特效），仅颜色为粉色；"
             "抽到普通骰组时会随机有 1~6 颗变成仙贝骰\n"
             "· 锁定时优先消耗普通骰子，其次特制骰的非万能面，最后才动用万能面\n"
-            "· 现有骰组（各 1/11 概率）：\n"
+            "· 现有骰组（各 1/15 概率）：\n"
             "  6普通 / 6偶数 / 1灌铅+5普通 / 1恶魔+5普通 / 2奇数+4普通 /\n"
             "  5格罗扎夫+1普通 / 3普通+3骗子 / 2普通+4班长 / 6fin / 1开司+5普通 /\n"
-            "  1二十面+5普通\n"
+            "  1二十面+5普通 / 2圣安提+4普通 / 6优势 / 6四面 / 1赌怪+5普通\n"
             "· 棋盘图按骰子类型着色：白=普通 蓝=奇数 绿=偶数 红=恶魔 金=灌铅 "
-            "紫=格罗扎夫 粉=骗子 灰=班长 玫粉=仙贝 青绿=fin 浅蓝=开司 橙=20面\n"
+            "紫=格罗扎夫 粉=骗子 灰=班长 玫粉=仙贝 青绿=fin 浅蓝=开司 橙=20面 "
+            "沙金=圣安提 薄荷=优势 石板=四面 紫红=赌怪\n"
             "【先手拍卖】（正式掷骰前，骰组公告后进行）\n"
             f"· 由后加入的人先出价；出价必须是 {BID_STEP} 的倍数，可为 0 或负数，"
             f"范围 ±{BID_LIMIT}\n"

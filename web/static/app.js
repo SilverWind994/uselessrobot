@@ -645,17 +645,20 @@ function renderTable(state) {
 
   const isKeep = state.phase === 'keep';
   const isDecide = state.phase === 'decide';
+  const canBank = isDecide && state.can_bank !== false;
   const lockBtn = document.getElementById('fk-lock');
   const rollBtn = document.getElementById('fk-roll');
   const bankBtn = document.getElementById('fk-bank');
   lockBtn.classList.toggle('hidden', !isKeep);
   rollBtn.classList.toggle('hidden', !isDecide);
-  bankBtn.classList.toggle('hidden', !isDecide);
+  bankBtn.classList.toggle('hidden', !canBank);
   lockBtn.disabled = !myTurn || !fkSelected.size;
   rollBtn.disabled = !myTurn;
-  bankBtn.disabled = !myTurn;
+  bankBtn.disabled = !myTurn || !canBank;
   document.getElementById('fk-table-hint').textContent = myTurn
-    ? (isKeep ? '选中后点「锁定选中」' : '掷有爆骰风险，入账则收下本回合分')
+    ? (isKeep ? '选中后点「锁定选中」'
+      : (isDecide && !canBank ? '赌怪骰还在桌上，必须先锁定它才能入账'
+        : '掷有爆骰风险，入账则收下本回合分'))
     : '等待对方行动……';
 }
 

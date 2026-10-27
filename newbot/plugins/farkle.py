@@ -93,13 +93,16 @@ DICE_GROZAV = "grozav"    # 格罗扎夫骰：2/3 概率出 2，其余 1/3 均�
 DICE_TRICKY = "tricky"    # 骗子的骰：1/5 各 24%，2/4/6 各 14%，3 只有 10%
 DICE_KAIJI = "kaiji"      # 开司骰：只能出 1
 DICE_BANCHOU = "banchou"  # 班长骰：只能出 4/5/6
-DICE_SENBEI = "senbei"    # 仙贝骰：与普通骰完全相同（无特效），仅颜色为粉色
+DICE_SENBEI = "senbei"    # 仙贝骰：粉色，本次计分里每颗仙贝为每颗非仙贝骰加分
 DICE_FIN = "fin"          # fin 骰：点数分布与普通骰相同，掷出 2、2、3 可组合计 223 分
 DICE_D20 = "d20"          # 20面骰：掷出 1 爆骰，掷出 20 得奖励分并整副取回，其余模 6+1
 DICE_ANTIOCH = "antioch"  # 圣安提阿克斯骰：只会掷出 3
 DICE_ADV = "adv"          # 优势骰：掷两颗取较大的一颗
 DICE_D4 = "d4"            # 四面骰：只会掷出 1~4
 DICE_GAMBLER = "gambler"  # 赌怪骰：出 1 的概率为手牌数分之一；在桌上时不能入账
+
+# 仙贝骰：本次计分中，每颗仙贝为每颗非仙贝骰额外 +50 分（草莓奶油味）
+SENBEI_BONUS = 50
 
 DICE_D20_BUST = 1         # 20 面骰的爆骰面
 DICE_D20_JACKPOT = 20     # 20 面骰的大成功面
@@ -164,6 +167,8 @@ DICE_INFO = {
     DICE_D4: "四面骰只会掷出1~4",
     DICE_GAMBLER: "赌怪骰出1的概率为当前手牌数分之一（只剩它时必出1），"
                   "它在桌上时本回合不能入账",
+    DICE_SENBEI: f"仙贝骰：本次计分中每颗仙贝骰为每颗非仙贝骰额外 +{SENBEI_BONUS} 分"
+                  f"（仙贝数 × 其他骰数 × {SENBEI_BONUS}，草莓奶油味）",
 }
 
 # 骰组构成里各骰子的展示顺序
@@ -189,6 +194,7 @@ DICE_LOADOUTS = {
     "adv6":    [DICE_ADV] * 6,                                     # 6优势
     "d4x6":    [DICE_D4] * 6,                                      # 6四面
     "gambler1": [DICE_GAMBLER] + [DICE_NORMAL] * 5,                # 1赌怪+5普通
+    "senbei3": [DICE_SENBEI] * 3 + [DICE_NORMAL] * 3,              # 3仙贝+3普通
 }
 
 # 渲染配色（棋盘上按骰子类型着色）
@@ -366,26 +372,24 @@ def _loadout_summary(dice) -> str:
 
 def _dice_set_desc(dice) -> str:
     """骰组完整描述：构成 + 特制骰效果说明"""
-    # 仙贝骰无特效，视作普通骰的粉色外观变体
     if all(k in (DICE_NORMAL, DICE_SENBEI) for k in dice):
-        n = dice.count(DICE_SENBEI)
-        if n == 0:
+        if all(k == DICE_NORMAL for k in dice):
             return "普通骰组（6普通）"
-        return f"普通骰组（6普通，其中 {n} 颗为仙贝骰，无特效、仅颜色不同）"
+        return (f"{_loadout_summary(dice)}｜每颗仙贝为每颗非仙贝骰 "
+                f"+{SENBEI_BONUS} 分（草莓奶油味）")
     specials = [k for k in _LOADOUT_ORDER
                 if k not in (DICE_NORMAL, DICE_SENBEI) and k in dice]
     explain = "；".join(DICE_INFO[k] for k in specials)
+    n_senbei = dice.count(DICE_SENBEI)
+    if n_senbei:
+        explain = (explain + "；" if explain else "") + (
+            f"{n_senbei}颗仙贝（每颗为每颗非仙贝骰+{SENBEI_BONUS}分）")
     return f"{_loadout_summary(dice)}｜{explain}"
 
 
 def _random_dice_set() -> list:
-    """随机分配一人的骰子：从骰组池里等概率抽一组（含全普通骰组）；
-    抽到普通骰组时随机把 1~6 颗换成仙贝骰（无特效，仅外观不同）"""
-    dice = list(random.choice(list(DICE_LOADOUTS.values())))
-    if all(k == DICE_NORMAL for k in dice):
-        for i in random.sample(range(len(dice)), random.randint(1, DICE_NUM)):
-            dice[i] = DICE_SENBEI
-    return dice
+    """随机分配一人的骰子：从骰组池里等概率抽一组（含全普通骰组）"""
+    return list(random.choice(list(DICE_LOADOUTS.values())))
 
 
 # ==================== 计分 ====================
@@ -453,25 +457,31 @@ def _score_dice(selected) -> int:
     """按骰子对象计算一组锁定骰子的得分；不可计分返回 None。
 
     恶魔骰的万能面必须参与组合（三张同点或顺子），不能单独当 1/5 散点；
-    fin 骰的 2、2、3 组合按 223 分计。
+    fin 骰的 2、2、3 组合按 223 分计；每颗仙贝骰为每颗非仙贝骰额外加分。
     """
     wilds = [d for d in selected if _is_wild(d)]
     reals = Counter(d["value"] for d in selected if not _is_wild(d))
     fins = Counter(d["value"] for d in selected
                    if not _is_wild(d) and d.get("kind") == DICE_FIN)
     if not wilds:
-        return _score_selection(reals, fins)
-    best = None
-    for combo in itertools.combinations_with_replacement(range(1, 7), len(wilds)):
-        assign = Counter(combo)
-        merged = Counter(reals)
-        merged.update(assign)
-        score = _score_selection(merged, fins)
-        if score is None:
-            continue
-        if all(merged[f] >= 3 or len(merged) >= 5 for f in assign):
-            if best is None or score > best:
-                best = score
+        best = _score_selection(reals, fins)
+    else:
+        best = None
+        for combo in itertools.combinations_with_replacement(range(1, 7), len(wilds)):
+            assign = Counter(combo)
+            merged = Counter(reals)
+            merged.update(assign)
+            score = _score_selection(merged, fins)
+            if score is None:
+                continue
+            if all(merged[f] >= 3 or len(merged) >= 5 for f in assign):
+                if best is None or score > best:
+                    best = score
+    if best is None:
+        return None
+    # 仙贝骰：每颗仙贝为本次计分里的每颗非仙贝骰额外 +SENBEI_BONUS 分
+    n_senbei = sum(1 for d in selected if d.get("kind") == DICE_SENBEI)
+    best += SENBEI_BONUS * n_senbei * (len(selected) - n_senbei)
     return best
 
 
@@ -513,11 +523,6 @@ def _roll_has_score(dice) -> bool:
 _BOT_POLICY_CACHE = {}
 
 
-def _kind_key(kind: str) -> str:
-    """仙贝骰与普通骰完全同分布，合并成同一种以复用策略表"""
-    return DICE_NORMAL if kind == DICE_SENBEI else kind
-
-
 def _subset_score_counts(counts, wilds):
     """按「每面颗数 + 万能面数量」计算一组锁定骰子的得分；无解返回 None。
 
@@ -550,7 +555,7 @@ def _subset_score_counts_fin(counts, wilds):
 
 def _bot_policy(dice, target: int):
     """取（并缓存）某副骰组在指定目标分下的最优策略表"""
-    kinds = tuple(sorted(_kind_key(k) for k in (dice or [DICE_NORMAL] * DICE_NUM)))
+    kinds = tuple(sorted(dice or [DICE_NORMAL] * DICE_NUM))
     # 竞价最多让先手从 -目标分 起步，策略表要覆盖到「目标分 × 2」
     t = min(MAX_TARGET, max(MIN_TARGET, int(target)))
     s_max = -(-(t * 2) // BID_STEP) * BID_STEP
@@ -561,6 +566,7 @@ def _bot_policy(dice, target: int):
         force_kinds = (DICE_KAIJI,) if DICE_KAIJI in kinds else ()
         d20 = DICE_D20 in kinds
         gambler = DICE_GAMBLER in kinds
+        senbei = DICE_SENBEI in kinds
         pol = build_policy(kinds, _DIE_DIST, score_fn, s_max,
                            wild_kind=DICE_DEVIL, force_kinds=force_kinds,
                            special_kind=DICE_D20 if d20 else None,
@@ -568,7 +574,9 @@ def _bot_policy(dice, target: int):
                            special_bonus_p=DICE_D20_BONUS_P,
                            special_bonus_score=DICE_D20_BONUS,
                            dynamic_kind=DICE_GAMBLER if gambler else None,
-                           no_bank_kind=DICE_GAMBLER if gambler else None)
+                           no_bank_kind=DICE_GAMBLER if gambler else None,
+                           bonus_kind=DICE_SENBEI if senbei else None,
+                           bonus_per_die=SENBEI_BONUS)
         _BOT_POLICY_CACHE[key] = pol
     return pol
 
@@ -585,7 +593,7 @@ _BOT_WIN_TURN_CACHE = {}
 
 def _dice_key(dice) -> tuple:
     kinds = dice or [DICE_NORMAL] * DICE_NUM
-    return tuple(sorted(_kind_key(k) for k in kinds))
+    return tuple(sorted(kinds))
 
 
 def _bot_race(my_dice, opp_dice, target: int):
@@ -647,7 +655,7 @@ def _bot_best_lock(hand, turn_score: int, my_total: int, target: int,
                    my_dice, opp_dice, opp_total: int):
     """按胜率最优策略选择本把锁定的骰子；返回 (得分, 下标列表)，爆骰返回 None"""
     win = _bot_win_turn(my_total, target, my_dice, opp_dice, opp_total)
-    pairs = [(_kind_key(d["kind"]), d["value"]) for d in hand]
+    pairs = [(d["kind"], d["value"]) for d in hand]
     # 开司骰由策略表的 force_kinds 强制计分，best_lock 返回的下标必然包含它
     return win.best_lock(pairs, turn_score)
 
@@ -659,8 +667,8 @@ def _bot_should_bank(my_total: int, target: int, my_dice, opp_dice, opp_total: i
     if any(d.get("kind") == DICE_GAMBLER for d in (hand or [])):
         return False
     win = _bot_win_turn(my_total, target, my_dice, opp_dice, opp_total)
-    # 与 _bot_best_lock 一样先归一化骰型：仙贝骰不在策略表的状态里
-    return win.should_bank([_kind_key(d["kind"]) for d in hand], turn_score)
+    # 与 _bot_best_lock 一样按实际骰型判断：仙贝骰在策略表里是独立骰型
+    return win.should_bank([d["kind"] for d in hand], turn_score)
 
 
 _BOT_STATS_SCHEMA = 2
@@ -1327,7 +1335,9 @@ class FarklePlugin:
             self._sender.reply(ctx, perr)
             return
 
-        # 从手中挑选骰子：优先消耗普通骰，其次作弊骰的非万能面，最后才用万能面顶替；
+        # 从手中挑选骰子：仙贝加成是「仙贝数 × 非仙贝数」，因此同面时最多取
+        # 一半仙贝（收益最大），其余优先赌怪骰（不然不能入账）、普通骰，
+        # 再次作弊骰的非万能面，最后才用万能面顶替；
         # 未被指定的万能面留在手中（下一轮重掷）
         hand = list(game["hand"])
 
@@ -1344,23 +1354,32 @@ class FarklePlugin:
 
         selected = []
         wild_faces = []   # 万能面顶替到的点数（用于组合校验）
+        senbei_left = sum(counts.values()) // 2   # 本次锁定最多取这么多仙贝收益最高
         for face in sorted(counts, reverse=True):
-            taken, hand, lack = _take(
-                lambda d, f=face: d.get("kind") == DICE_NORMAL and d["value"] == f,
-                counts[face])
-            selected += taken
-            if lack:
+            need = counts[face]
+            if senbei_left > 0:
+                taken, hand, need = _take(
+                    lambda d, f=face: d.get("kind") == DICE_SENBEI and d["value"] == f,
+                    min(senbei_left, need))
+                selected += taken
+                senbei_left -= len(taken)
+            if need:
                 # 赌怪骰留手会一直卡着不能入账，同点数时优先把它锁定掉
-                taken, hand, lack = _take(
+                taken, hand, need = _take(
                     lambda d, f=face: d.get("kind") == DICE_GAMBLER and d["value"] == f,
-                    lack)
+                    need)
                 selected += taken
-            if lack:
-                taken, hand, lack = _take(
-                    lambda d, f=face: not _is_wild(d) and d["value"] == f, lack)
+            if need:
+                taken, hand, need = _take(
+                    lambda d, f=face: d.get("kind") == DICE_NORMAL and d["value"] == f,
+                    need)
                 selected += taken
-            if lack:
-                taken, hand, lack = _take(_is_wild, lack)
+            if need:
+                taken, hand, need = _take(
+                    lambda d, f=face: not _is_wild(d) and d["value"] == f, need)
+                selected += taken
+            if need:
+                taken, hand, lack = _take(_is_wild, need)
                 if lack:
                     self._sender.reply(
                         ctx, f"掷出的骰子（含万能面）凑不出 {counts[face]} 个 {face} 点喵"
@@ -1384,6 +1403,10 @@ class FarklePlugin:
                     ctx, f"恶魔骰的万能面必须用于组合（三张同点/顺子），"
                          f"不能单独顶替 {face} 点当散分喵")
                 return
+
+        # 仙贝骰：每颗仙贝为本次计分里的每颗非仙贝骰额外 +SENBEI_BONUS 分
+        n_senbei = sum(1 for d in selected if d.get("kind") == DICE_SENBEI)
+        score += SENBEI_BONUS * n_senbei * (len(selected) - n_senbei)
 
         # 开司骰每次掷出都必须计分：玩家没锁它时自动补选并重新计分；
         # 若已锁了普通 1，则让它让位给开司骰，保持锁定点数不变
@@ -1841,13 +1864,15 @@ class FarklePlugin:
             "· 四面骰：只会掷出 1~4\n"
             "· 赌怪骰：出 1 的概率为当前手牌数分之一（只剩它一颗时必出 1）；"
             "它还在桌上时本回合不能入账，必须先把它一起锁定\n"
-            "· 仙贝骰：与普通骰完全相同（无特效），仅颜色为粉色；"
-            "抽到普通骰组时会随机有 1~6 颗变成仙贝骰\n"
-            "· 锁定时优先消耗普通骰子，其次特制骰的非万能面，最后才动用万能面\n"
-            "· 现有骰组（各 1/15 概率）：\n"
+            f"· 仙贝骰：本次计分里每颗仙贝为每颗非仙贝骰额外 +{SENBEI_BONUS} 分"
+            f"（仙贝数 × 其他骰数 × {SENBEI_BONUS}）\n"
+            "· 锁定时同点数最多取一半仙贝（收益最大），其余优先赌怪骰、普通骰，"
+            "最后才动用万能面\n"
+            "· 现有骰组（各 1/16 概率）：\n"
             "  6普通 / 6偶数 / 1灌铅+5普通 / 1恶魔+5普通 / 2奇数+4普通 /\n"
             "  5格罗扎夫+1普通 / 3普通+3骗子 / 2普通+4班长 / 6fin / 1开司+5普通 /\n"
-            "  1二十面+5普通 / 2圣安提+4普通 / 6优势 / 6四面 / 1赌怪+5普通\n"
+            "  1二十面+5普通 / 2圣安提+4普通 / 6优势 / 6四面 / 1赌怪+5普通 /\n"
+            "  3仙贝+3普通\n"
             "· 棋盘图按骰子类型着色：白=普通 蓝=奇数 绿=偶数 红=恶魔 金=灌铅 "
             "紫=格罗扎夫 粉=骗子 灰=班长 玫粉=仙贝 青绿=fin 浅蓝=开司 橙=20面 "
             "沙金=圣安提 薄荷=优势 石板=四面 紫红=赌怪\n"

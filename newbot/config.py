@@ -33,6 +33,7 @@ class Config:
         "tale_answer": os.path.join(ASSETS_DIR, "taleanswer"),
         "output": os.path.join(ASSETS_DIR, "output"),
         "vt": os.path.join(ASSETS_DIR, "vt"),
+        "ai_memory": os.path.join(ASSETS_DIR, "ai_memory.json"),
     }
 
     # 硅基流动 API 配置（密钥从 config_local.py 读取，请勿在此填写）
@@ -50,6 +51,9 @@ class Config:
     ADMIN_USER_IDS = [3187638890, 2544910201]
 
     SPECIAL_GROUPS = []
+
+    # 机器人自身 QQ 号：留 0 表示用 OneBot 事件里的 self_id 判断是否被 @
+    BOT_QQ = 1557499062
 
     # Steam API Key (用于 dsc/dsc2 命令，从 config_local.py 读取)
     STEAM_API_KEY = ""

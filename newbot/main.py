@@ -1,5 +1,6 @@
 import os
 import random
+import re
 import sys
 import time
 import uvicorn
@@ -14,7 +15,7 @@ from core.database import Database, JSONRepository
 from core.qq_file_manager import QQNumberFileManager
 from core.image_cleanup import cleanup_old_images
 from plugins.simple_functions import SimpleFunctionsPlugin
-from plugins.ai_functions import AIFunctionsPlugin
+from plugins.ai_functions import AIFunctionsPlugin, AI_SELF_NAME
 from plugins.cat_expedition import CatExpeditionPlugin
 from plugins.avalon_quiz import AvalonQuizPlugin
 from plugins.yahtzee import YahtzeePlugin
@@ -186,20 +187,32 @@ class Bot:
 
         return False
 
+    def _is_at_bot(self, data) -> bool:
+        """判断这条消息是否 @ 了机器人本人"""
+        raw = data.get("raw_message", "")
+        bot_qq = data.get("self_id") or Config.BOT_QQ
+        if bot_qq and f"[CQ:at,qq={bot_qq}" in raw:
+            return True
+        return f"@{AI_SELF_NAME}" in raw
+
     def _handle_group_chat(self, ctx: CommandContext) -> None:
         target = Target.from_data(ctx.raw_data)
         instruction = ctx.raw_message
+        at_me = self._is_at_bot(ctx.raw_data)
 
         # --- 特殊群：缓存最近5条 + 自动回复概率触发 ---
-        if target.group_id in Config.SPECIAL_GROUPS and "[CQ:" not in instruction:
+        # 被 @ 时不受 CQ 码过滤与概率限制，尽可能回复
+        if target.group_id in Config.SPECIAL_GROUPS and (at_me or "[CQ:" not in instruction):
             chat_list = self._group_chat2.get(target.group_id)
             if chat_list is not None:
-                chat_list.append(f"{ctx.sender_nickname}:{instruction}")
+                # 去掉 CQ 码再进上下文，避免模型看到 [CQ:at,qq=...] 这种裸代码
+                clean = re.sub(r"\[CQ:[^\]]+\]", "", instruction).strip()
+                chat_list.append(f"{ctx.sender_nickname}:{clean}")
                 while len(chat_list) > 5:
                     del chat_list[0]
 
-                # 自动回复概率触发
-                self._ai_plugin.auto_reply(ctx, chat_list)
+                # 自动回复概率触发（@ 机器人时强制触发）
+                self._ai_plugin.auto_reply(ctx, chat_list, force=at_me)
 
                 # 选图回复（低概率：约1%）
                 if random.randint(0, 10000) >= 9900:

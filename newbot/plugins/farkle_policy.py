@@ -71,7 +71,8 @@ class Policy:
     def __init__(self, kinds, probs, score_counts, s_max, wild_kind=None, wild_value=1,
                  force_kinds=(), special_kind=None, special_bust_p=0.0,
                  special_bonus_p=0.0, special_bonus_score=0,
-                 dynamic_kind=None, no_bank_kind=None):
+                 dynamic_kind=None, no_bank_kind=None,
+                 bonus_kind=None, bonus_per_die=0):
         self._probs = {}
         for k in set(kinds):
             dist = tuple(probs[k])
@@ -93,18 +94,23 @@ class Policy:
         self.dynamic_kind = dynamic_kind
         # 该骰型还在手里时不允许入账（如赌怪骰必须一起锁定才能收分）
         self.no_bank_kind = no_bank_kind
+        # 加分骰型（如仙贝骰）：本次锁定里每颗该骰型为每颗其他骰额外加分
+        self.bonus_kind = bonus_kind
+        self.bonus_per_die = int(bonus_per_die)
         self.step = STEP
         self.s_max = max(STEP, int(s_max) // STEP * STEP)
         self._score_cache = {}
         self._turn_stats_cache = {}
 
-        # 同分布的骰型合并（例如仙贝骰与普通骰完全一致），压缩状态空间。
+        # 同分布的骰型合并（例如点数分布完全一致的两种普通类骰子），压缩状态空间。
         # 带万能面的骰型不参与合并：概率分布虽然可能相同，但掷出万能面时的计分
         # 规则不同，合并后会把手里的普通 1 也当成万能面，凭空多出顺子/三张。
         canon, seen = {}, {}
         for k in kinds:
-            # 特殊结果骰型不能与同分布的普通骰合并：它有爆骰/大成功等额外语义
-            if k == wild_kind or k == special_kind or k == dynamic_kind:
+            # 特殊结果骰型不能与同分布的普通骰合并：它有爆骰/大成功等额外语义；
+            # 动态骰型与加分骰型同理（计分规则与普通骰不同）
+            if (k == wild_kind or k == special_kind or k == dynamic_kind
+                    or k == bonus_kind):
                 canon[k] = k
                 continue
             sig = tuple(round(p, 9) for p in probs[k])
@@ -212,6 +218,9 @@ class Policy:
                 sc = self._score(tuple(sel_faces), state["wilds"])
                 if sc is None:
                     return
+                if self.bonus_kind:
+                    n_bonus = sel_kinds.get(self.bonus_kind, 0)
+                    sc += self.bonus_per_die * n_bonus * (state["total"] - n_bonus)
                 rem = []
                 for kind, cnt in state_counts.items():
                     rem.extend([kind] * (cnt - sel_kinds[kind]))
@@ -431,6 +440,9 @@ class Policy:
                 sc = self._score(tuple(sel_faces), st["wilds"])
                 if sc is None:
                     return
+                if self.bonus_kind:
+                    n_bonus = sel_kinds.get(self.bonus_kind, 0)
+                    sc += self.bonus_per_die * n_bonus * (st["total"] - n_bonus)
                 rem = []
                 for kind, cnt in hand_counts.items():
                     rem.extend([kind] * (cnt - sel_kinds[kind]))
@@ -783,7 +795,8 @@ def build_race(pol_me, pol_opp, target: int, rounds: int = 2) -> RaceMulti:
 def build_policy(kinds, probs, score_counts, s_max, wild_kind=None, wild_value=1,
                  force_kinds=(), special_kind=None, special_bust_p=0.0,
                  special_bonus_p=0.0, special_bonus_score=0,
-                 dynamic_kind=None, no_bank_kind=None) -> Policy:
+                 dynamic_kind=None, no_bank_kind=None,
+                 bonus_kind=None, bonus_per_die=0) -> Policy:
     """构造（并求解）一副骰组的最优策略。
 
     kinds        : 6 个骰型字符串
@@ -797,8 +810,11 @@ def build_policy(kinds, probs, score_counts, s_max, wild_kind=None, wild_value=1
                    该骰型掷出爆骰的概率、大成功的概率与大成功奖励分
     dynamic_kind : 概率随手牌数变化的骰型（如赌怪骰）
     no_bank_kind : 该骰型还在手里时不允许入账的骰型（如赌怪骰）
+    bonus_kind / bonus_per_die : 本次锁定里每颗该骰型为每颗其他骰额外加
+                                 bonus_per_die 分（如仙贝骰）
     """
     pol = Policy(kinds, probs, score_counts, s_max, wild_kind, wild_value,
                  force_kinds, special_kind, special_bust_p, special_bonus_p,
-                 special_bonus_score, dynamic_kind, no_bank_kind)
+                 special_bonus_score, dynamic_kind, no_bank_kind,
+                 bonus_kind, bonus_per_die)
     return pol

@@ -1,7 +1,10 @@
+import json
 import os
 import random
 import re
 import threading
+import time
+
 import requests
 from typing import Dict, List
 
@@ -20,6 +23,26 @@ DEFAULT_CHAT_SYSTEM = (
 
 # 自动回复概率上限（万分比），防止自己回复自己无限循环
 MAX_AUTO_REPLY_PROB = 2000
+
+# 机器人在群里的 QQ 昵称（写进提示词，让它知道自己叫什么）
+AI_SELF_NAME = "更有甚者"
+
+# 长期记忆：每累计这么多次自动回复，就在后台整理一次群体记忆（不阻塞回复）
+MEMORY_EVOLVE_EVERY = 20
+# 注入提示词时最多带上几位群友的档案，控制 prompt 长度以免拖慢首字延迟
+MEMORY_INJECT_USERS = 8
+
+
+def _extract_json(text: str):
+    """从模型输出里抠出第一个 JSON 对象（模型常带解释或代码块）"""
+    match = re.search(r"\{[\s\S]*\}", text or "")
+    if not match:
+        return None
+    try:
+        data = json.loads(match.group())
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) else None
 
 
 class AIFunctionsPlugin:
@@ -44,6 +67,13 @@ class AIFunctionsPlugin:
 
         # 语音合成音色描述词
         self._voice_persona: str = Config.AI_VOICE[0]
+
+        # 长期记忆：{群号: {persona, users, notes}}，落盘到 assets/ai_memory.json
+        self._memory_path = self._assets.get("ai_memory", "")
+        self._memory_lock = threading.Lock()
+        self._memory = self._load_memory()
+        # 各群自动回复计数，用于决定何时触发后台记忆整理
+        self._reply_counts: Dict[int, int] = {}
 
         # QQ 消息单条上限
         self._max_reply_len = 3000
@@ -295,10 +325,158 @@ class AIFunctionsPlugin:
         target = Target.from_data(ctx.raw_data)
         self._sender.send_text(target, "这个功能暂时不可用喵~")
 
+    # ==================== 长期记忆 ====================
+
+    def _load_memory(self) -> dict:
+        """读取长期记忆存档；文件缺失或损坏时按空记忆处理"""
+        path = self._memory_path
+        if not path or not os.path.exists(path):
+            return {"groups": {}}
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError) as e:
+            print(f"[AI memory] load error: {e}")
+            return {"groups": {}}
+        if not isinstance(data, dict) or not isinstance(data.get("groups"), dict):
+            return {"groups": {}}
+        return data
+
+    def _save_memory(self) -> None:
+        """原子写入长期记忆，避免写一半被读到"""
+        path = self._memory_path
+        if not path:
+            return
+        with self._memory_lock:
+            try:
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                tmp = path + ".tmp"
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump(self._memory, f, ensure_ascii=False, indent=1)
+                os.replace(tmp, path)
+            except OSError as e:
+                print(f"[AI memory] save error: {e}")
+
+    def _group_memory(self, group_id: int) -> dict:
+        """取出（必要时初始化）某个群的记忆节点"""
+        mem = self._memory.setdefault("groups", {}).setdefault(str(group_id), {})
+        mem.setdefault("persona", "")
+        mem.setdefault("users", {})
+        mem.setdefault("notes", [])
+        return mem
+
+    def _memory_hint(self, group_id: int) -> str:
+        """把长期记忆压缩成一小段提示词注入 system，长度受控"""
+        mem = self._group_memory(group_id)
+        parts = []
+        if mem["persona"]:
+            # 只当作补充的说话习惯，不能盖过管理员用「ai设置」写的性格词
+            parts.append(f"你在长期聊天中逐渐养成的说话习惯：{mem['persona']}")
+
+        users = sorted(mem["users"].items(),
+                       key=lambda kv: kv[1].get("last_seen", 0), reverse=True)
+        lines = []
+        for name, info in users[:MEMORY_INJECT_USERS]:
+            facts = [f for f in info.get("facts", []) if f][-3:]
+            if facts:
+                lines.append(f"- {name}：{'；'.join(facts)}")
+        if lines:
+            parts.append("你记得的群友：\n" + "\n".join(lines))
+
+        if mem["notes"]:
+            parts.append("你自己说过、之后可能还会提起的话：\n"
+                         + "\n".join(f"- {n}" for n in mem["notes"][-5:]))
+        return "\n".join(parts)
+
+    def _maybe_evolve_memory(self, group_id: int, chat_history: List[str],
+                             my_reply: str) -> None:
+        """累计到阈值后，在后台把近期对话整理进长期记忆（不占用回复耗时）"""
+        with self._memory_lock:
+            n = self._reply_counts.get(group_id, 0) + 1
+            self._reply_counts[group_id] = n
+        if n % MEMORY_EVOLVE_EVERY != 0:
+            return
+        threading.Thread(
+            target=self._evolve_memory,
+            args=(group_id, list(chat_history), my_reply),
+            daemon=True,
+        ).start()
+
+    def _evolve_memory(self, group_id: int, chat_history: List[str], my_reply: str) -> None:
+        """让模型把「已有记忆 + 近期对话 + 自己刚说的话」合并成新的记忆"""
+        mem = self._group_memory(group_id)
+        old = {
+            "persona": mem["persona"],
+            "users": {k: v.get("facts", []) for k, v in mem["users"].items()},
+            "notes": mem["notes"][-8:],
+        }
+        prompt = (
+            "你在维护一个群聊机器人的长期记忆。请根据已有记忆和最近对话，输出更新后的记忆，"
+            "只输出 JSON，不要任何解释。\n"
+            '格式：{"persona": "一句话描述机器人在群里逐渐养成的说话习惯（只描述语气与表达方式，'
+            '不要改写它的身份与性格设定）", '
+            '"users": {"群友昵称": ["关于他的稳定事实", "最多3条"]}, '
+            '"notes": ["机器人自己说过的、以后还会提起的观点或梗", "最多5条"]}\n'
+            "要求：persona 不超过 60 字；只保留稳定、可复用的信息，不要记录一次性闲聊；"
+            "不要编造对话里没有的内容。\n\n"
+            f"已有记忆：{json.dumps(old, ensure_ascii=False)}\n\n"
+            f"最近对话：\n" + "\n".join(chat_history) + "\n\n"
+            f"机器人刚才的回复：{my_reply}"
+        )
+        try:
+            raw = self._call_ai(
+                Config.AI_MODEL["summarise"],
+                [{"role": "user", "content": prompt}],
+                temperature=0.3,
+                max_tokens=600,
+            )
+            data = _extract_json(raw)
+            if data:
+                self._merge_memory(group_id, data)
+        except Exception as e:
+            print(f"[AI memory] evolve error: {e}")
+
+    def _merge_memory(self, group_id: int, data: dict) -> None:
+        """把模型整理出的记忆合并进存档（去重、截断、保留最近若干条）"""
+        mem = self._group_memory(group_id)
+
+        persona = data.get("persona")
+        if isinstance(persona, str) and persona.strip():
+            mem["persona"] = persona.strip()[:120]
+
+        users = data.get("users")
+        if isinstance(users, dict):
+            now = int(time.time())
+            for name, facts in users.items():
+                if not isinstance(name, str) or not isinstance(facts, list):
+                    continue
+                key = name.strip()[:32]
+                if not key:
+                    continue
+                info = mem["users"].setdefault(key, {"name": key, "facts": []})
+                merged = []
+                for f in list(info["facts"]) + [str(x).strip() for x in facts]:
+                    if f and f not in merged:
+                        merged.append(f[:60])
+                info["facts"] = merged[-3:]
+                info["last_seen"] = now
+
+        notes = data.get("notes")
+        if isinstance(notes, list):
+            merged = list(mem["notes"])
+            for n in notes:
+                n = str(n).strip()
+                if n and n not in merged:
+                    merged.append(n[:80])
+            mem["notes"] = merged[-6:]
+
+        self._save_memory()
+
     # ==================== 被动触发方法（供 main.py 调用） ====================
 
-    def auto_reply(self, ctx: CommandContext, chat_history: List[str]) -> None:
-        """群自动回复：按概率触发，AI回一句"""
+    def auto_reply(self, ctx: CommandContext, chat_history: List[str],
+                   force: bool = False) -> None:
+        """群自动回复：按概率触发，AI回一句；force=True（被 @ 时）几乎必回"""
         target = Target.from_data(ctx.raw_data)
         group_id = target.group_id
 
@@ -306,24 +484,35 @@ class AIFunctionsPlugin:
         if config is None:
             return
 
-        # 上下文太少不触发
-        if len(chat_history) < 3:
-            return
+        if not force:
+            # 上下文太少不触发
+            if len(chat_history) < 3:
+                return
 
-        if random.randint(0, 10000) >= config["f"]:
-            return
+            if random.randint(0, 10000) >= config["f"]:
+                return
 
-        chat_text = "\n".join(chat_history[-5:])
+        chat_text = "\n".join(chat_history)
+        speaker = getattr(ctx, "sender_nickname", "") or "群友"
 
-        # ✅ 优化：system 放身份，user 放对话内容
+        # system 放身份 + 长期记忆（群友档案 / 自己说过的话 / 逐渐养成的说话习惯）
+        # 管理员用「ai设置」写的性格词始终最优先，记忆只能作为补充
+        system = config["s"] + f"\n\n你在群里的QQ昵称是「{AI_SELF_NAME}」。"
+        mem_hint = self._memory_hint(group_id)
+        if mem_hint:
+            system += ("\n\n下面是你长期积累的记忆，用来让回复更自然；"
+                       "如果与上面的性格设定或身份冲突，一律以上面的设定为准。\n"
+                       + mem_hint)
+
         messages = [
-            {"role": "system", "content": config["s"]},
+            {"role": "system", "content": system},
             {"role": "user", "content": (
                 f"下面是群里的最近聊天记录：\n{chat_text}\n\n"
-                f"请你作为上面的身份，对对话中最后一句进行简短回复。"
-                f"要求：通常20字以内，最多不超过100字。直接输出回复内容即可，"
-                f"不要包含思考过程或解释你为什么这么回复。"
-            )}
+                f"现在说话的是「{speaker}」。请以你一贯的性格，像真正的群友一样自然地接一句："
+                f"可以接梗、吐槽、顺着话题聊，也可以在合适的时候提到你记得的群友或你之前的观点。"
+                f"长短随心情，不要每句都套同一个模板，不要解释你为什么这么回复。"
+                f"（最多不超过100字）"
+            )},
         ]
 
         def _do():
@@ -332,11 +521,13 @@ class AIFunctionsPlugin:
                     Config.AI_MODEL["reply"],
                     messages,
                     temperature=0.9,
+                    max_tokens=300,
                 )
                 reply = self._truncate(reply)
                 if "silverwind" in reply.lower() or "银风" in reply:
                     return
                 self._sender.send_text(target, reply.strip())
+                self._maybe_evolve_memory(group_id, chat_history, reply.strip())
             except Exception as e:
                 print(f"[AI auto_reply] error: {e}")
 
@@ -407,6 +598,7 @@ class AIFunctionsPlugin:
         messages: List[dict],
         temperature: float = 0.7,
         max_retries: int = 2,
+        max_tokens: int = 0,
     ) -> str:
         """调用硅基流动 API（OpenAI 兼容格式）"""
         api_key = Config.SILICONFLOW_API_KEY
@@ -425,6 +617,8 @@ class AIFunctionsPlugin:
             "stream": False,
             "temperature": temperature,
         }
+        if max_tokens > 0:
+            payload["max_tokens"] = max_tokens
 
         # ✅ 简单重试
         last_error = None

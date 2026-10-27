@@ -13,13 +13,16 @@ from core.message_sender import MessageSender, Target
 from core.command_router import CommandRouter, CommandContext
 from core.tts import design_voice
 
-# 默认系统提示词：AI对话时的身份设定
-DEFAULT_CHAT_SYSTEM = (
-    "你是一个活泼有趣的QQ群聊机器人，名叫「工位划水」。"
+# 所有 AI 回复（ai 提问、@ 聊天、随机自动回复）共用的统一性格
+AI_PERSONA = (
+    "你是一个活泼有趣的QQ群聊机器人，名叫「更有甚者」。"
     "说话风格：轻松幽默，偶尔带点毒舌，喜欢用颜文字(=w=)、喵~ 等口语化表达。"
     "你可以回答问题、闲聊、吐槽，但不要假装自己是人类，自我介绍时说自己是群里的机器人就好。"
-    "回答尽量简洁，除非用户明确要求详细解释。"
 )
+# 三种使用场景的补充说明（性格统一，只是任务不同）
+AI_QA_HINT = "\n\n现在有人直接向你提问，请认真、简洁地回答；除非对方明确要求，不要长篇大论。"
+AI_AT_HINT = "\n\n现在有人在群里 @ 你聊天，像真正的群友一样自然地回一句。"
+AI_AUTO_HINT = "\n\n现在没人点你的名，顺手接一句群聊就好，别抢戏。"
 
 # 自动回复概率上限（万分比），防止自己回复自己无限循环
 MAX_AUTO_REPLY_PROB = 2000
@@ -56,13 +59,12 @@ class AIFunctionsPlugin:
         self._ai_contexts: Dict[str, List[dict]] = {}
         self._max_context_len = 50
 
-        # 每个群/私聊的 AI 对话 system prompt 覆盖（空则用 DEFAULT_CHAT_SYSTEM）
-        self._chat_prompts: Dict[str, str] = {}
+        # 所有 AI 回复共用的统一性格（ai设置 可以整体改掉）
+        self._persona: str = AI_PERSONA
 
-        # 自动回复配置: {group_id: {"f": 概率万分比, "s": 性格词}}
+        # 自动回复配置: {group_id: {"f": 概率万分比}}
         self._ai_response: Dict[int, dict] = {
-            gid: {"f": 100, "s": "你是一个群聊回复机器人。"}
-            for gid in Config.SPECIAL_GROUPS
+            gid: {"f": 100} for gid in Config.SPECIAL_GROUPS
         }
 
         # 语音合成音色描述词
@@ -91,11 +93,6 @@ class AIFunctionsPlugin:
             ["ai清空", "aiclear", ".aiclear", "/aiclear"],
             self.cmd_ai_clear,
             description="清空AI对话上下文"
-        )
-        router.register(
-            ["ai提示", "aiprompt", ".aiprompt", "/aiprompt"],
-            self.cmd_ai_set_prompt,
-            description="设置AI对话的人格提示词"
         )
         router.register(
             ["ai设置", "aisetup", ".aisetup", "/aisetup"],
@@ -168,9 +165,8 @@ class AIFunctionsPlugin:
         key = f"group_{target.group_id}" if target.is_group else f"user_{target.user_id}"
 
         if key not in self._ai_contexts:
-            system_prompt = self._chat_prompts.get(key, DEFAULT_CHAT_SYSTEM)
             self._ai_contexts[key] = [
-                {"role": "system", "content": system_prompt}
+                {"role": "system", "content": self._persona + AI_QA_HINT}
             ]
 
         self._ai_contexts[key].append({"role": "user", "content": args})
@@ -191,36 +187,6 @@ class AIFunctionsPlugin:
             del self._ai_contexts[key]
         self._sender.send_text(target, "对话上下文已清空喵~")
 
-    def cmd_ai_set_prompt(self, ctx: CommandContext) -> None:
-        """设置当前群/私聊的AI对话人格提示词"""
-        target = Target.from_data(ctx.raw_data)
-        key = f"group_{target.group_id}" if target.is_group else f"user_{target.user_id}"
-        args = ctx.get_args()
-
-        if not args:
-            current = self._chat_prompts.get(key, DEFAULT_CHAT_SYSTEM)
-            self._sender.send_text(
-                target,
-                f"当前AI提示词:\n{current}\n\n"
-                f"设置新提示词: ai提示 <内容>\n"
-                f"恢复默认: ai提示 reset"
-            )
-            return
-
-        if args.strip().lower() == "reset":
-            self._chat_prompts.pop(key, None)
-            # 同步更新已有上下文里的 system 消息
-            if key in self._ai_contexts and self._ai_contexts[key]:
-                self._ai_contexts[key][0]["content"] = DEFAULT_CHAT_SYSTEM
-            self._sender.send_text(target, "已恢复默认提示词喵~")
-            return
-
-        self._chat_prompts[key] = args.strip()
-        # 同步更新已有上下文里的 system 消息
-        if key in self._ai_contexts and self._ai_contexts[key]:
-            self._ai_contexts[key][0]["content"] = args.strip()
-        self._sender.send_text(target, f"AI提示词已更新喵~\n新提示词: {args.strip()}")
-
     def _do_ai_chat(self, ctx: CommandContext, key: str) -> None:
         target = Target.from_data(ctx.raw_data)
         try:
@@ -237,7 +203,7 @@ class AIFunctionsPlugin:
             self._sender.send_text(target, f"AI出错了: {e}")
 
     def cmd_ai_setup(self, ctx: CommandContext) -> None:
-        """设置群AI自动回复概率和性格词"""
+        """设置群AI自动回复概率；性格词是所有人共用的统一性格"""
         target = Target.from_data(ctx.raw_data)
         args = ctx.get_args()
 
@@ -245,17 +211,19 @@ class AIFunctionsPlugin:
             self._sender.send_text(target, "只能在群里设置喵")
             return
         if target.group_id not in self._ai_response:
-            self._sender.send_text(target, "这个群不在AI自动回复列表里")
-            return
+            # 允许新群通过 ai设置 自行开启，默认不随机接话
+            self._ai_response[target.group_id] = {"f": 0}
 
         parts = args.split(" ", 1)
         if len(parts) < 2:
             cfg = self._ai_response[target.group_id]
             self._sender.send_text(
                 target,
-                f"当前配置: 概率万分之{cfg['f']} (上限{MAX_AUTO_REPLY_PROB}), 性格: {cfg['s']}\n"
+                f"当前配置: 概率万分之{cfg['f']} (上限{MAX_AUTO_REPLY_PROB})\n"
+                f"统一性格: {self._persona}\n"
                 f"设置格式: ai设置 <概率(万分比)> <性格词>\n"
-                f"示例: ai设置 50 你是个毒舌的群友"
+                f"示例: ai设置 50 你是个毒舌的群友\n"
+                f"性格词对所有人、所有群和三种回复方式统一生效"
             )
             return
 
@@ -268,10 +236,10 @@ class AIFunctionsPlugin:
 
         persona = parts[1].strip()
         self._ai_response[target.group_id]["f"] = prob
-        self._ai_response[target.group_id]["s"] = persona
+        self._persona = persona
         self._sender.send_text(
             target,
-            f"AI自动回复概率设为万分之{prob}，性格词: {persona}"
+            f"AI自动回复概率设为万分之{prob}，统一性格更新为: {persona}"
         )
 
     def cmd_ai_set_voice(self, ctx: CommandContext) -> None:
@@ -370,7 +338,7 @@ class AIFunctionsPlugin:
         mem = self._group_memory(group_id)
         parts = []
         if mem["persona"]:
-            # 只当作补充的说话习惯，不能盖过管理员用「ai设置」写的性格词
+            # 只当作补充的说话习惯，不能盖过统一性格
             parts.append(f"你在长期聊天中逐渐养成的说话习惯：{mem['persona']}")
 
         users = sorted(mem["users"].items(),
@@ -482,7 +450,10 @@ class AIFunctionsPlugin:
 
         config = self._ai_response.get(group_id)
         if config is None:
-            return
+            # 不在特殊群列表里：@ 机器人时仍回复一句，但默认不参与随机接话
+            if not force:
+                return
+            config = self._ai_response.setdefault(group_id, {"f": 0})
 
         if not force:
             # 上下文太少不触发
@@ -495,9 +466,9 @@ class AIFunctionsPlugin:
         chat_text = "\n".join(chat_history)
         speaker = getattr(ctx, "sender_nickname", "") or "群友"
 
-        # system 放身份 + 长期记忆（群友档案 / 自己说过的话 / 逐渐养成的说话习惯）
-        # 管理员用「ai设置」写的性格词始终最优先，记忆只能作为补充
-        system = config["s"] + f"\n\n你在群里的QQ昵称是「{AI_SELF_NAME}」。"
+        # system 放统一性格 + 身份 + 长期记忆（记忆只补充语气，不覆盖性格）
+        system = (self._persona + f"\n\n你在群里的QQ昵称是「{AI_SELF_NAME}」。"
+                  + (AI_AT_HINT if force else AI_AUTO_HINT))
         mem_hint = self._memory_hint(group_id)
         if mem_hint:
             system += ("\n\n下面是你长期积累的记忆，用来让回复更自然；"
@@ -508,8 +479,9 @@ class AIFunctionsPlugin:
             {"role": "system", "content": system},
             {"role": "user", "content": (
                 f"下面是群里的最近聊天记录：\n{chat_text}\n\n"
-                f"现在说话的是「{speaker}」。请以你一贯的性格，像真正的群友一样自然地接一句："
-                f"可以接梗、吐槽、顺着话题聊，也可以在合适的时候提到你记得的群友或你之前的观点。"
+                f"现在说话的是「{speaker}」。"
+                f"请按上面的性格自然地接一句：可以接梗、吐槽、顺着话题聊，"
+                f"也可以在合适的时候提到你记得的群友或你之前的观点。"
                 f"长短随心情，不要每句都套同一个模板，不要解释你为什么这么回复。"
                 f"（最多不超过100字）"
             )},

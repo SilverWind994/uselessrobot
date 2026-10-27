@@ -189,10 +189,17 @@ class Bot:
 
     def _is_at_bot(self, data) -> bool:
         """判断这条消息是否 @ 了机器人本人"""
-        raw = data.get("raw_message", "")
-        bot_qq = data.get("self_id") or Config.BOT_QQ
+        raw = data.get("raw_message") or ""
+        bot_qq = str(data.get("self_id") or Config.BOT_QQ or "")
         if bot_qq and f"[CQ:at,qq={bot_qq}" in raw:
             return True
+        # 有些 OneBot 实现只给 message 段数组，不保证 raw_message 里有 CQ 码
+        message = data.get("message")
+        if isinstance(message, list):
+            for seg in message:
+                if (isinstance(seg, dict) and seg.get("type") == "at"
+                        and str((seg.get("data") or {}).get("qq", "")) == bot_qq):
+                    return True
         return f"@{AI_SELF_NAME}" in raw
 
     def _handle_group_chat(self, ctx: CommandContext) -> None:
@@ -200,23 +207,30 @@ class Bot:
         instruction = ctx.raw_message
         at_me = self._is_at_bot(ctx.raw_data)
 
+        if not target.is_group:
+            return
+
         # --- 特殊群：缓存最近5条 + 自动回复概率触发 ---
-        # 被 @ 时不受 CQ 码过滤与概率限制，尽可能回复
-        if target.group_id in Config.SPECIAL_GROUPS and (at_me or "[CQ:" not in instruction):
-            chat_list = self._group_chat2.get(target.group_id)
-            if chat_list is not None:
-                # 去掉 CQ 码再进上下文，避免模型看到 [CQ:at,qq=...] 这种裸代码
-                clean = re.sub(r"\[CQ:[^\]]+\]", "", instruction).strip()
-                chat_list.append(f"{ctx.sender_nickname}:{clean}")
-                while len(chat_list) > 5:
-                    del chat_list[0]
+        # 被 @ 时不受群白名单、CQ 码过滤与概率限制，任何已连接群都尽可能回复
+        special = target.group_id in Config.SPECIAL_GROUPS
+        if not (at_me or (special and "[CQ:" not in instruction)):
+            return
 
-                # 自动回复概率触发（@ 机器人时强制触发）
-                self._ai_plugin.auto_reply(ctx, chat_list, force=at_me)
+        # 非特殊群第一次被 @ 时也建立聊天上下文
+        chat_list = self._group_chat2.setdefault(target.group_id, [])
 
-                # 选图回复（低概率：约1%）
-                if random.randint(0, 10000) >= 9900:
-                    self._ai_plugin.choose_image(ctx, chat_list)
+        # 去掉 CQ 码再进上下文，避免模型看到 [CQ:at,qq=...] 这种裸代码
+        clean = re.sub(r"\[CQ:[^\]]+\]", "", instruction).strip()
+        chat_list.append(f"{ctx.sender_nickname}:{clean}")
+        while len(chat_list) > 5:
+            del chat_list[0]
+
+        # 自动回复概率触发（@ 机器人时强制触发）
+        self._ai_plugin.auto_reply(ctx, chat_list, force=at_me)
+
+        # 选图回复（低概率：约1%）
+        if random.randint(0, 10000) >= 9900:
+            self._ai_plugin.choose_image(ctx, chat_list)
 
     def run(self, host: str = None, port: int = None) -> None:
         if not host:

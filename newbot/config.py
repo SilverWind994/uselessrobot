@@ -34,6 +34,7 @@ class Config:
         "output": os.path.join(ASSETS_DIR, "output"),
         "vt": os.path.join(ASSETS_DIR, "vt"),
         "ai_memory": os.path.join(ASSETS_DIR, "ai_memory.json"),
+        "ai_settings": os.path.join(ASSETS_DIR, "ai_settings.json"),
     }
 
     # 硅基流动 API 配置（密钥从 config_local.py 读取，请勿在此填写）

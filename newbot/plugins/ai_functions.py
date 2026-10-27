@@ -30,11 +30,6 @@ MAX_AUTO_REPLY_PROB = 2000
 # 机器人在群里的 QQ 昵称（写进提示词，让它知道自己叫什么）
 AI_SELF_NAME = "更有甚者"
 
-# 对面也是一个机器人：对它说的话保持高概率接话（万分之 5000，即 50%），
-# 不受群白名单、最少上下文条数与各群自动回复概率限制
-AI_BOT_FRIEND_QQ = 1064485226
-AI_BOT_FRIEND_PROB = 5000
-
 # 长期记忆：每累计这么多次自动回复，就在后台整理一次群体记忆（不阻塞回复）
 MEMORY_EVOLVE_EVERY = 20
 # 注入提示词时最多带上几位群友的档案，控制 prompt 长度以免拖慢首字延迟
@@ -74,6 +69,11 @@ class AIFunctionsPlugin:
 
         # 语音合成音色描述词
         self._voice_persona: str = Config.AI_VOICE[0]
+
+        # 设置存档：统一性格 / 各群自动回复概率 / 音色，落盘到 assets/ai_settings.json
+        self._settings_path = self._assets.get("ai_settings", "")
+        self._settings_lock = threading.Lock()
+        self._load_settings()
 
         # 长期记忆：{群号: {persona, users, notes}}，落盘到 assets/ai_memory.json
         self._memory_path = self._assets.get("ai_memory", "")
@@ -242,6 +242,7 @@ class AIFunctionsPlugin:
         persona = parts[1].strip()
         self._ai_response[target.group_id]["f"] = prob
         self._persona = persona
+        self._save_settings()
         self._sender.send_text(
             target,
             f"AI自动回复概率设为万分之{prob}，统一性格更新为: {persona}"
@@ -263,6 +264,7 @@ class AIFunctionsPlugin:
             return
 
         self._voice_persona = args.strip()
+        self._save_settings()
         self._sender.send_text(target, f"AI音色设为: {self._voice_persona}")
 
     def cmd_ai_voice(self, ctx: CommandContext) -> None:
@@ -299,6 +301,60 @@ class AIFunctionsPlugin:
         self._sender.send_text(target, "这个功能暂时不可用喵~")
 
     # ==================== 长期记忆 ====================
+
+    def _load_settings(self) -> None:
+        """读取设置存档（统一性格 / 各群概率 / 音色），文件缺失或损坏时用默认值"""
+        path = self._settings_path
+        if not path or not os.path.exists(path):
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError) as e:
+            print(f"[AI settings] load error: {e}")
+            return
+        if not isinstance(data, dict):
+            return
+
+        persona = data.get("persona")
+        if isinstance(persona, str) and persona.strip():
+            self._persona = persona
+        voice = data.get("voice")
+        if isinstance(voice, str) and voice.strip():
+            self._voice_persona = voice
+
+        groups = data.get("groups")
+        if isinstance(groups, dict):
+            for gid, cfg in groups.items():
+                try:
+                    gid = int(gid)
+                except (TypeError, ValueError):
+                    continue
+                prob = (cfg or {}).get("f") if isinstance(cfg, dict) else None
+                if isinstance(prob, int):
+                    self._ai_response[gid] = {
+                        "f": max(0, min(prob, MAX_AUTO_REPLY_PROB))}
+
+    def _save_settings(self) -> None:
+        """原子写入设置存档，避免重启后性格与概率被重置"""
+        path = self._settings_path
+        if not path:
+            return
+        data = {
+            "persona": self._persona,
+            "voice": self._voice_persona,
+            "groups": {str(gid): {"f": cfg.get("f", 0)}
+                       for gid, cfg in self._ai_response.items()},
+        }
+        with self._settings_lock:
+            try:
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                tmp = path + ".tmp"
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump(data, f, ensure_ascii=False, indent=1)
+                os.replace(tmp, path)
+            except OSError as e:
+                print(f"[AI settings] save error: {e}")
 
     def _load_memory(self) -> dict:
         """读取长期记忆存档；文件缺失或损坏时按空记忆处理"""
@@ -452,23 +508,20 @@ class AIFunctionsPlugin:
         """群自动回复：按概率触发，AI回一句；force=True（被 @ 时）几乎必回"""
         target = Target.from_data(ctx.raw_data)
         group_id = target.group_id
-        # 对面那个也是机器人：它的每句话都按固定高概率接，避免两个机器人互相沉默
-        bot_friend = str(getattr(ctx, "user_id", "") or "") == str(AI_BOT_FRIEND_QQ)
 
         config = self._ai_response.get(group_id)
         if config is None:
             # 不在特殊群列表里：@ 机器人时仍回复一句，但默认不参与随机接话
-            if not force and not bot_friend:
+            if not force:
                 return
             config = self._ai_response.setdefault(group_id, {"f": 0})
 
         if not force:
-            # 上下文太少不触发（对面机器人说的话不受这条限制）
-            if not bot_friend and len(chat_history) < 3:
+            # 上下文太少不触发
+            if len(chat_history) < 3:
                 return
 
-            prob = AI_BOT_FRIEND_PROB if bot_friend else config["f"]
-            if random.randint(0, 10000) >= prob:
+            if random.randint(0, 10000) >= config["f"]:
                 return
 
         chat_text = "\n".join(chat_history)

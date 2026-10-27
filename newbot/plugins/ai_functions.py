@@ -30,6 +30,11 @@ MAX_AUTO_REPLY_PROB = 2000
 # 机器人在群里的 QQ 昵称（写进提示词，让它知道自己叫什么）
 AI_SELF_NAME = "更有甚者"
 
+# 对面也是一个机器人：对它说的话保持高概率接话（万分之 5000，即 50%），
+# 不受群白名单、最少上下文条数与各群自动回复概率限制
+AI_BOT_FRIEND_QQ = 1064485266
+AI_BOT_FRIEND_PROB = 5000
+
 # 长期记忆：每累计这么多次自动回复，就在后台整理一次群体记忆（不阻塞回复）
 MEMORY_EVOLVE_EVERY = 20
 # 注入提示词时最多带上几位群友的档案，控制 prompt 长度以免拖慢首字延迟
@@ -447,20 +452,23 @@ class AIFunctionsPlugin:
         """群自动回复：按概率触发，AI回一句；force=True（被 @ 时）几乎必回"""
         target = Target.from_data(ctx.raw_data)
         group_id = target.group_id
+        # 对面那个也是机器人：它的每句话都按固定高概率接，避免两个机器人互相沉默
+        bot_friend = str(getattr(ctx, "user_id", "") or "") == str(AI_BOT_FRIEND_QQ)
 
         config = self._ai_response.get(group_id)
         if config is None:
             # 不在特殊群列表里：@ 机器人时仍回复一句，但默认不参与随机接话
-            if not force:
+            if not force and not bot_friend:
                 return
             config = self._ai_response.setdefault(group_id, {"f": 0})
 
         if not force:
-            # 上下文太少不触发
-            if len(chat_history) < 3:
+            # 上下文太少不触发（对面机器人说的话不受这条限制）
+            if not bot_friend and len(chat_history) < 3:
                 return
 
-            if random.randint(0, 10000) >= config["f"]:
+            prob = AI_BOT_FRIEND_PROB if bot_friend else config["f"]
+            if random.randint(0, 10000) >= prob:
                 return
 
         chat_text = "\n".join(chat_history)

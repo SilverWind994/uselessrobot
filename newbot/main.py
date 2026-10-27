@@ -15,7 +15,7 @@ from core.database import Database, JSONRepository
 from core.qq_file_manager import QQNumberFileManager
 from core.image_cleanup import cleanup_old_images
 from plugins.simple_functions import SimpleFunctionsPlugin
-from plugins.ai_functions import AIFunctionsPlugin, AI_SELF_NAME
+from plugins.ai_functions import AIFunctionsPlugin, AI_SELF_NAME, AI_BOT_FRIEND_QQ
 from plugins.cat_expedition import CatExpeditionPlugin
 from plugins.avalon_quiz import AvalonQuizPlugin
 from plugins.yahtzee import YahtzeePlugin
@@ -213,7 +213,9 @@ class Bot:
         # --- 特殊群：缓存最近5条 + 自动回复概率触发 ---
         # 被 @ 时不受群白名单、CQ 码过滤与概率限制，任何已连接群都尽可能回复
         special = target.group_id in Config.SPECIAL_GROUPS
-        if not (at_me or (special and "[CQ:" not in instruction)):
+        # 对面那个机器人无论说什么都要进上下文，交给 auto_reply 按 50% 接话
+        bot_friend = str(ctx.user_id) == str(AI_BOT_FRIEND_QQ)
+        if not (at_me or bot_friend or (special and "[CQ:" not in instruction)):
             return
 
         # 非特殊群第一次被 @ 时也建立聊天上下文

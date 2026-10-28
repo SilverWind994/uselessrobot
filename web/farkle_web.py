@@ -632,12 +632,14 @@ def create_room(qq: int, name: str, target, stones):
 
 def create_bot_room(qq: int, name: str, target, stones, dumb: bool = False):
     """人机局：直接建房并把机器人拉进来，返回 (code, 错误文案)。可下注猫眼石。
-    dumb=True 时对手是笨笨机器人（每一步有 5% 概率不走最优）。"""
+    dumb=True 时对手是笨笨机器人（每一步有 5% 概率不走最优），固定 4000 分且不能下猫眼石。"""
     with _ROOMS_LOCK:
         _reap_locked()
         exist = _in_other_room_locked(qq)
         if exist:
             return None, f"你已经在一个房间（{exist}）里了喵"
+        if dumb:
+            target, stones = DEFAULT_TARGET, 0
         try:
             target = int(target) if target not in (None, "") else DEFAULT_TARGET
         except (TypeError, ValueError):

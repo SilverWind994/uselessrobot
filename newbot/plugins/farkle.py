@@ -1045,12 +1045,17 @@ class FarklePlugin:
         tokens = rest.split()
         target = DEFAULT_TARGET
         stones = 0
-        if tokens:
+        if dumb:
+            if tokens:
+                self._sender.reply(
+                    ctx, f"和 {BOT_DUMB_NAME} 打固定 {DEFAULT_TARGET} 分、不能下猫眼石喵")
+                return
+        elif tokens:
             if not tokens[0].isdigit():
                 self._sender.reply(ctx, "分数目标要是数字喵，例如「farkle 人机 5000」")
                 return
             target = int(tokens[0])
-        if len(tokens) > 1:
+        if not dumb and len(tokens) > 1:
             if not tokens[1].isdigit():
                 self._sender.reply(
                     ctx, f"猫眼石数目要是数字喵，例如「farkle 人机 5000 5」")
@@ -2119,8 +2124,9 @@ class FarklePlugin:
             "· 机器人一样参与先手拍卖（由它先出价）\n"
             "· 「farkle 胜率」：人机排行（胜率 + 猫眼石净收益，机器人自己也上榜）\n"
             "【笨笨机器人】\n"
-            f"· 「farkle 笨蛋 [目标分] [猫眼石]」：向 {BOT_DUMB_NAME} 挑战，"
-            f"它每做一个决定有 {BOT_DUMB_MISTAKE_P * 100:g}% 概率不走最优\n"
+            f"· 「farkle 笨蛋」：向 {BOT_DUMB_NAME} 挑战，固定 {DEFAULT_TARGET} 分、"
+            "不能下猫眼石\n"
+            f"· 它每做一个决定有 {BOT_DUMB_MISTAKE_P * 100:g}% 概率不走最优\n"
             f"· 本周与它打满 {BOT_WEEKLY_MIN_GAMES} 局即可进周榜（周三 00:00 刷新），"
             "按胜率排名发鱼干\n"
             f"· 周榜奖励：第1名{BOT_WEEKLY_REWARDS[0]}鱼干，逐名-100，"

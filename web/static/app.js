@@ -303,8 +303,8 @@ async function createRoom() {
 
 async function startBotGame(dumb = false) {
   const msg = document.getElementById(dumb ? 'fk-dumb-msg' : 'fk-bot-msg');
-  const target = document.getElementById(dumb ? 'fk-dumb-target' : 'fk-bot-target').value;
-  const stones = document.getElementById(dumb ? 'fk-dumb-stones' : 'fk-bot-stones').value;
+  const target = dumb ? 4000 : document.getElementById('fk-bot-target').value;
+  const stones = dumb ? 0 : document.getElementById('fk-bot-stones').value;
   msg.textContent = '';
   const { status, data } = await api('/api/farkle/bot', {
     method: 'POST',
@@ -354,7 +354,7 @@ async function loadDumbWeek() {
   if (status === 401) { fkPanel.classList.add('hidden'); showLogin(); return; }
   if (status !== 200 || !data.ok) return;
   document.getElementById('fk-dumb-week-sub').textContent =
-    `本周（${data.week}）· 周三 00:00 刷新 · 满 ${data.min_games} 局才上榜 · 与 QQ 端共用同一份周榜`;
+    `本周（${data.week}）· 周三 00:00 刷新 · 满 ${data.min_games} 局才上榜`;
   const rows = data.rows.map((r, i) => `
     <div class="rank-row">
       <span class="rank-no">${i + 1}</span>

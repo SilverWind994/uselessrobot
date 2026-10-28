@@ -142,6 +142,7 @@ let fkCode = null;
 let fkState = null;
 let fkSig = null;
 let fkHandSig = null;
+let fkLastPhase = null;
 let fkSelected = new Set();
 let fkLobbyTimer = null;
 let fkRoomTimer = null;
@@ -232,6 +233,7 @@ async function enterFarkle() {
   if (status === 200 && data.ok && data.code) { enterRoom(data.code); return; }
   await refreshRooms();
   loadBotRank();
+  loadDumbWeek();
   clearInterval(fkRoomTimer);
   fkLobbyTimer = setInterval(refreshRooms, 2500);
 }
@@ -240,6 +242,7 @@ function backToLobby() {
   clearInterval(fkRoomTimer);
   fkRoomTimer = null;
   fkCode = null;
+  fkLastPhase = null;
   hideChat('fk');
   fkRoom.classList.add('hidden');
   fkLobby.classList.remove('hidden');
@@ -592,6 +595,8 @@ function renderRoom(state) {
   if (isAuction) renderAuction(state);
   if (isPlay) renderTable(state);
   if (isOver) renderResult(state);
+  if (isOver && fkLastPhase !== 'finished') loadDumbWeek();
+  fkLastPhase = state.phase;
   renderLog(state);
 }
 

@@ -112,7 +112,7 @@ DICE_ADV = "adv"          # 优势骰：掷两颗取较大的一颗
 DICE_D4 = "d4"            # 四面骰：只会掷出 1~4
 DICE_GAMBLER = "gambler"  # 赌怪骰：出 1 的概率为手牌数分之一；在桌上时不能入账
 
-# 仙贝骰：本次计分中，每颗仙贝为每颗非仙贝骰额外 +50 分
+# 仙贝骰：本次计分中，每颗仙贝为每颗非仙贝骰额外 +50 分（草莓奶油味）
 SENBEI_BONUS = 50
 
 DICE_D20_BUST = 1         # 20 面骰的爆骰面
@@ -179,7 +179,7 @@ DICE_INFO = {
     DICE_GAMBLER: "赌怪骰出1的概率为当前手牌数分之一（只剩它时必出1），"
                   "它在桌上时本回合不能入账",
     DICE_SENBEI: f"仙贝骰：本次计分中每颗仙贝骰为每颗非仙贝骰额外 +{SENBEI_BONUS} 分"
-                  f"（仙贝数 × 其他骰数 × {SENBEI_BONUS}）",
+                  f"（仙贝数 × 其他骰数 × {SENBEI_BONUS}，草莓奶油味）",
 }
 
 # 骰组构成里各骰子的展示顺序
@@ -387,7 +387,7 @@ def _dice_set_desc(dice) -> str:
         if all(k == DICE_NORMAL for k in dice):
             return "普通骰组（6普通）"
         return (f"{_loadout_summary(dice)}｜每颗仙贝为每颗非仙贝骰 "
-                f"+{SENBEI_BONUS} 分")
+                f"+{SENBEI_BONUS} 分（草莓奶油味）")
     specials = [k for k in _LOADOUT_ORDER
                 if k not in (DICE_NORMAL, DICE_SENBEI) and k in dice]
     explain = "；".join(DICE_INFO[k] for k in specials)

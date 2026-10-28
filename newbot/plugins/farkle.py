@@ -19,6 +19,7 @@ import random
 import re
 import time
 from collections import Counter
+from datetime import date, timedelta
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -65,6 +66,7 @@ _SUB_ALIASES = {
     "入账": "bank", "收": "bank", "收分": "bank", "停": "bank", "bank": "bank",
     "状态": "status", "查看": "status", "status": "status",
     "人机": "bot", "机器人": "bot", "bot": "bot",
+    "笨蛋": "dumb", "笨笨": "dumb", "笨笨机器人": "dumb", "dumb": "dumb",
     "胜率": "rank", "排行": "rank", "战绩": "rank", "rank": "rank",
     "帮助": "help", "help": "help",
 }
@@ -78,7 +80,16 @@ _KEEP_FOLLOWUP = {
 # 人机对战：机器人用负数哨兵 QQ 号，不与真实玩家冲突
 BOT_ID = -1                      # 机器人哨兵 QQ 号
 BOT_NAME = "喵喵机器人"           # 机器人展示名
+BOT_DUMB_ID = -2                 # 笨笨机器人哨兵 QQ 号
+BOT_DUMB_NAME = "笨笨机器人"      # 笨笨机器人展示名
+BOT_DUMB_MISTAKE_P = 0.05        # 笨笨机器人每一步走错的概率
+BOT_IDS = (BOT_ID, BOT_DUMB_ID)
 _BOT_STATS_PATH = os.path.join(FARKLE_DIR, "bot_stats.json")   # 人机战绩（按 QQ 存 wins/losses）
+
+# 笨笨机器人周榜：以周三 00:00 为分界，每周刷新；满 10 局才进榜，按胜率排名发鱼干
+_BOT_WEEKLY_PATH = os.path.join(FARKLE_DIR, "bot_weekly.json")
+BOT_WEEKLY_MIN_GAMES = 10
+BOT_WEEKLY_REWARDS = [1000 - 100 * i for i in range(10)]
 
 # ==================== 骰子与骰组 ====================
 # 新增骰子类型：在 _roll_die 加分支、_DIE_NAMES/_DICE_INFO/_DIE_COLORS 各补一条即可；
@@ -610,10 +621,10 @@ def _bot_race(my_dice, opp_dice, target: int):
             # 小目标分：逐剩余分迭代，先手权的细微差距会被放大，必须算准
             race = build_race(my_pol, opp_pol, t)
         else:
-            # 目标分越大，赛跑表的分数格越粗，避免建表阻塞太久
-            step = BID_STEP if t <= 4000 else (100 if t <= 6500 else 200)
+            # 全分数范围都按 50 分一格建表（覆盖先手出价可能的 -目标分 起步），
+            # 不做粗化——粗化会让临近目标时的胜率判断出现系统性偏差
             race = RaceModel(my_pol.turn_stats(t), opp_pol.turn_stats(t),
-                             _rem_units(t, -t) * BID_STEP, step)
+                             _rem_units(t, -t) * BID_STEP, BID_STEP)
         _BOT_RACE_CACHE[key] = race
     return race
 
@@ -741,6 +752,117 @@ def _bot_stats_rows() -> list:
     return rows
 
 
+def _farkle_week_key() -> str:
+    """本周起始日：以周三 00:00 为分界，形如 2026-10-28"""
+    today = date.today()
+    return (today - timedelta(days=(today.weekday() - 2) % 7)).isoformat()
+
+
+def _bot_week_rows(weekly: dict) -> list:
+    """笨笨机器人周榜行：只有本周对战满 10 局的玩家参与排名"""
+    rows = []
+    for qq, rec in (weekly.get("players") or {}).items():
+        if not isinstance(rec, dict):
+            continue
+        wins = int(rec.get("wins", 0))
+        losses = int(rec.get("losses", 0))
+        games = wins + losses
+        if games < BOT_WEEKLY_MIN_GAMES:
+            continue
+        rows.append({"qq": qq, "name": rec.get("name") or qq, "wins": wins,
+                     "losses": losses, "games": games, "rate": wins / games})
+    rows.sort(key=lambda r: (-r["rate"], -r["games"], -r["wins"]))
+    return rows
+
+
+def _valid_locks(hand) -> list:
+    """枚举手牌里所有能计分的锁定组合：[(得分, 下标列表)]"""
+    out = []
+    n = len(hand)
+    for mask in range(1, 1 << n):
+        idx = [i for i in range(n) if mask >> i & 1]
+        score = _score_dice([hand[i] for i in idx])
+        if score is not None:
+            out.append((score, idx))
+    return out
+
+
+# ---- 笨笨机器人的「走错」决策（QQ 端与网页端共用，保证两端行为一致）----
+
+def _bot_mistake() -> bool:
+    """笨笨机器人这一步是否走错"""
+    return random.random() < BOT_DUMB_MISTAKE_P
+
+
+def _dumb_lock(hand, pick):
+    """锁骰走错：随机换一个合法但不是最优的组合；没有别的合法组合时保持原样"""
+    alt = [c for c in _valid_locks(hand) if set(c[1]) != set(pick[1])]
+    return random.choice(alt) if alt else pick
+
+
+def _dumb_bank(bank: bool, would_win: bool, hand) -> bool:
+    """入账走错：把结论反过来；够分直接赢或赌怪骰在桌上时保持原结论"""
+    if bank:
+        return would_win
+    if any(d.get("kind") == DICE_GAMBLER for d in (hand or [])):
+        return False
+    return True
+
+
+def _dumb_bid(target: int, current_bid):
+    """拍卖走错：在当前出价之上随便喊一个合法价；没空间时返回 None（交回常规逻辑）"""
+    t = min(MAX_TARGET, max(MIN_TARGET, int(target)))
+    hi = t // BID_STEP * BID_STEP
+    lo = -hi
+    floor = lo if current_bid is None else max(lo, current_bid + BID_STEP)
+    if floor > hi:
+        return None
+    return random.choice(range(floor, hi + 1, BID_STEP))
+
+
+def _dumb_week_ensure(add_fish=None) -> dict:
+    """取本周周榜存档；跨周（周三 00:00）时先结算上一周再重置"""
+    weekly = _load_json(_BOT_WEEKLY_PATH)
+    week = _farkle_week_key()
+    if weekly.get("week") == week:
+        return weekly
+    _dumb_week_settle(weekly, add_fish)
+    weekly["week"] = week
+    weekly["players"] = {}
+    _save_json(_BOT_WEEKLY_PATH, weekly)
+    return weekly
+
+
+def _dumb_week_settle(weekly: dict, add_fish=None) -> None:
+    """按上一周胜率排名发放鱼干奖励（同一周只结算一次）"""
+    prev = weekly.get("week")
+    if not prev:
+        return
+    settled = weekly.setdefault("settled", [])
+    if prev in settled:
+        return
+    rows = _bot_week_rows(weekly)[:len(BOT_WEEKLY_REWARDS)]
+    if add_fish is not None:
+        for i, row in enumerate(rows):
+            try:
+                add_fish(int(row["qq"]), BOT_WEEKLY_REWARDS[i])
+            except Exception:
+                pass
+    settled.append(prev)
+    weekly["settled"] = settled[-8:]
+
+
+def _dumb_week_record(uid: int, name: str, human_won: bool, add_fish=None) -> None:
+    """记录一局与笨笨机器人的对战（本周周榜用）"""
+    weekly = _dumb_week_ensure(add_fish)
+    rec = (weekly.setdefault("players", {})
+                .setdefault(str(uid), {"name": name, "wins": 0, "losses": 0}))
+    rec["name"] = name
+    key = "wins" if human_won else "losses"
+    rec[key] = int(rec.get(key, 0)) + 1
+    _save_json(_BOT_WEEKLY_PATH, weekly)
+
+
 # ==================== 插件 ====================
 
 class FarklePlugin:
@@ -803,7 +925,7 @@ class FarklePlugin:
         router.register(
             ["farkle", "骰子对决", ".farkle", "/farkle"],
             self.cmd_entry,
-            description="Farkle骰子·群里两人对战（子指令：开局/加入/出价/接受/掷/留/入账/人机/胜率/投降）"
+            description="Farkle骰子·群里两人对战（子指令：开局/加入/出价/接受/掷/留/入账/人机/笨蛋/胜率/投降）"
         )
 
     def cmd_entry(self, ctx: CommandContext) -> None:
@@ -826,7 +948,7 @@ class FarklePlugin:
             self._sender.reply(ctx, "指令有误喵，发送「farkle 帮助」查看玩法")
             return
 
-        if action in ("create", "join", "bot") and self._tournament_active(ctx.group_id):
+        if action in ("create", "join", "bot", "dumb") and self._tournament_active(ctx.group_id):
             self._sender.reply(
                 ctx, "本群锦标赛进行中喵，先打完锦标赛再开普通 Farkle 局")
             return
@@ -853,6 +975,8 @@ class FarklePlugin:
             self._cmd_bank(ctx)
         elif action == "bot":
             self._cmd_bot(ctx, rest)
+        elif action == "dumb":
+            self._cmd_bot(ctx, rest, dumb=True)
         elif action == "rank":
             self._cmd_bot_rank(ctx)
         elif action == "status":
@@ -904,8 +1028,9 @@ class FarklePlugin:
             ctx, f"已创建 Farkle 对局：目标 {target} 分，{match_text}。\n"
                  f"另一位玩家发送「farkle 加入」即可开局")
 
-    def _cmd_bot(self, ctx: CommandContext, rest: str) -> None:
-        """与机器人开局：单人创建，机器人自动对局（最优决策），可下注猫眼石"""
+    def _cmd_bot(self, ctx: CommandContext, rest: str, dumb: bool = False) -> None:
+        """与机器人开局：单人创建，机器人自动对局，可下注猫眼石；
+        dumb=True 时为笨笨机器人（每一步有 5% 概率不走最优）"""
         gid = ctx.group_id
         game = self._load_game(gid)
         if game is not None:
@@ -915,6 +1040,8 @@ class FarklePlugin:
             self._sender.reply(ctx, "你已经在另一局 Farkle 中喵")
             return
 
+        bot_id, bot_name = ((BOT_DUMB_ID, BOT_DUMB_NAME) if dumb
+                            else (BOT_ID, BOT_NAME))
         tokens = rest.split()
         target = DEFAULT_TARGET
         stones = 0
@@ -944,7 +1071,7 @@ class FarklePlugin:
 
         game = self._new_game(target, stones)
         game["players"].append(self._new_player(ctx.user_id, ctx.user_name))
-        game["players"].append(self._new_player(BOT_ID, BOT_NAME))
+        game["players"].append(self._new_player(bot_id, bot_name))
         game["started"] = True
         self._assign_dice(game)
         self._reset_turn(game)
@@ -953,39 +1080,72 @@ class FarklePlugin:
         game["auction"] = {"bid": None, "holder": None, "turn": 1}
         self._save_game(gid, game)
         match_text = (f"猫眼石局（{stones} 猫眼石）" if stones > 0 else "普通局")
+        style = (f"{bot_name} 每一步有 {BOT_DUMB_MISTAKE_P * 100:g}% 概率走错一步"
+                 if dumb else f"{bot_name} 用最优决策自动对局")
         self._sender.reply(
-            ctx, f"🎲 你向 {BOT_NAME} 发起 Farkle 挑战：目标 {target} 分，{match_text}。\n"
+            ctx, f"🎲 你向 {bot_name} 发起 Farkle 挑战：目标 {target} 分，{match_text}。\n"
                  f"{self._dice_announce(game)}\n"
-                 f"{BOT_NAME} 用最优决策自动对局，由它先出价。")
+                 f"{style}，由它先出价。"
+                 + (f"\n本周对战满 {BOT_WEEKLY_MIN_GAMES} 局可进「farkle 胜率」周榜"
+                    if dumb else ""))
         self._bot_auction(ctx, gid, game)
 
     def _cmd_bot_rank(self, ctx: CommandContext) -> None:
-        """人机排行：胜率 + 猫眼石净收益（机器人自己也上榜）"""
+        """人机排行：胜率 + 猫眼石净收益（机器人自己也上榜），附笨笨机器人周榜"""
+        lines = []
         rows = _bot_stats_rows()
-        if not rows:
-            self._sender.reply(
-                ctx, f"还没有人对战过 {BOT_NAME} 喵，发送「farkle 人机」来挑战吧")
-            return
-        lines = [f"🏆 Farkle 人机排行（对战 {BOT_NAME}）"]
-        shown = rows[:10]
-        bot_row = next((r for r in rows if r["bot"]), None)
-        if bot_row is not None and bot_row not in shown:
-            shown.append(bot_row)   # 机器人即使掉出前 10 也固定展示
-        for i, r in enumerate(shown, 1):
-            tag = "（机器人）" if r["bot"] else ""
-            lines.append(
-                f"{i}. {r['name']}{tag}：{r['wins']} 胜 {r['losses']} 负"
-                f"（胜率 {r['rate'] * 100:.1f}%）· 净 {r['net']:+d} 猫眼石")
-        mine = _load_bot_stats().get(str(ctx.user_id))
-        if mine is not None:
-            wins = int(mine.get("wins", 0))
-            losses = int(mine.get("losses", 0))
+        if rows:
+            lines.append(f"🏆 Farkle 人机排行（对战 {BOT_NAME}）")
+            shown = rows[:10]
+            bot_row = next((r for r in rows if r["bot"]), None)
+            if bot_row is not None and bot_row not in shown:
+                shown.append(bot_row)   # 机器人即使掉出前 10 也固定展示
+            for i, r in enumerate(shown, 1):
+                tag = "（机器人）" if r["bot"] else ""
+                lines.append(
+                    f"{i}. {r['name']}{tag}：{r['wins']} 胜 {r['losses']} 负"
+                    f"（胜率 {r['rate'] * 100:.1f}%）· 净 {r['net']:+d} 猫眼石")
+            mine = _load_bot_stats().get(str(ctx.user_id))
+            if mine is not None:
+                wins = int(mine.get("wins", 0))
+                losses = int(mine.get("losses", 0))
+                games = wins + losses
+                rate = (wins / games * 100) if games else 0.0
+                lines.append(f"你的战绩：{wins} 胜 {losses} 负（胜率 {rate:.1f}%）"
+                             f"· 净 {int(mine.get('net', 0)):+d} 猫眼石")
+            else:
+                lines.append(f"你还没有对战记录，发送「farkle 人机」来挑战吧")
+
+        # 笨笨机器人周榜（周三 00:00 刷新）
+        weekly = self._ensure_bot_week()
+        week_rows = _bot_week_rows(weekly)
+        if lines:
+            lines.append("")
+        lines.append(f"🏅 {BOT_DUMB_NAME}周榜（本周 {weekly.get('week', '')}，"
+                     f"周三 00:00 刷新，本周满 {BOT_WEEKLY_MIN_GAMES} 局才上榜）")
+        if week_rows:
+            for i, r in enumerate(week_rows[:len(BOT_WEEKLY_REWARDS)]):
+                lines.append(
+                    f"{i + 1}. {r['name']}：{r['wins']} 胜 {r['losses']} 负"
+                    f"（胜率 {r['rate'] * 100:.1f}%，{r['games']} 局）"
+                    f"· 奖励 {BOT_WEEKLY_REWARDS[i]} 鱼干")
+        else:
+            lines.append(f"本周还没有人打满 {BOT_WEEKLY_MIN_GAMES} 局，"
+                         f"发送「farkle 笨蛋」去挑战吧")
+        rec = (weekly.get("players") or {}).get(str(ctx.user_id))
+        if isinstance(rec, dict):
+            wins = int(rec.get("wins", 0))
+            losses = int(rec.get("losses", 0))
             games = wins + losses
             rate = (wins / games * 100) if games else 0.0
-            lines.append(f"你的战绩：{wins} 胜 {losses} 负（胜率 {rate:.1f}%）"
-                         f"· 净 {int(mine.get('net', 0)):+d} 猫眼石")
+            left = max(0, BOT_WEEKLY_MIN_GAMES - games)
+            tail = (f"，还差 {left} 局上榜" if left else "")
+            lines.append(f"你对{BOT_DUMB_NAME}：{wins} 胜 {losses} 负"
+                         f"（胜率 {rate:.1f}%，{games} 局{tail}）")
         else:
-            lines.append("你还没有对战记录，发送「farkle 人机」来挑战吧")
+            lines.append(f"你本周还没和{BOT_DUMB_NAME}对战过")
+        lines.append(f"每周按胜率排名发鱼干：第1名{BOT_WEEKLY_REWARDS[0]}，"
+                     f"逐名-100，发到第10名{BOT_WEEKLY_REWARDS[-1]}")
         self._sender.reply(ctx, "\n".join(lines))
 
     def _cmd_join(self, ctx: CommandContext) -> None:
@@ -1198,8 +1358,19 @@ class FarklePlugin:
         au = game.get("auction")
         if au is None:
             return
-        if game["players"][au["turn"]]["id"] != BOT_ID:
+        if game["players"][au["turn"]]["id"] not in BOT_IDS:
             return
+        if game["players"][au["turn"]]["id"] == BOT_DUMB_ID and _bot_mistake():
+            # 笨笨机器人走错：不按公允价，随便喊一个合法价（仍须高于当前出价）
+            value = _dumb_bid(game["target"], au["bid"])
+            if value is not None:
+                cur = self._apply_bid(game, value)
+                self._save_game(gid, game)
+                self._sender.reply(
+                    ctx, f"{cur['name']} 出价 {au['bid']} 分"
+                         f"（先手以 {self._fmt_open_score(au['bid'])} 分开局）。\n"
+                         + self._auction_prompt(game))
+                return
         fair = _bot_fair_bid(game.get("seat_dice"), game["target"])
         if au["bid"] is None or au["bid"] < fair:
             # 对手已经出价但还没到公允价时，只加一个最小加价档，
@@ -1252,7 +1423,7 @@ class FarklePlugin:
     def _do_roll(self, ctx: CommandContext, gid: int, game: dict) -> None:
         """掷手中剩余的骰子；爆骰则作废并换手（换手后自动进行新回合的首掷）"""
         player = game["players"][game["turn"]]
-        if player["id"] == BOT_ID:
+        if player["id"] in BOT_IDS:
             # 轮到机器人：由机器人自动走完一整轮，不等待玩家指令
             self._bot_play_turn(ctx, gid, game)
             return
@@ -1521,10 +1692,7 @@ class FarklePlugin:
                     ctx, f"{player['name']} 掷出 {faces}，20面大成功！"
                          f"+{DICE_D20_BONUS} 分并拿回全部骰子，"
                          f"本回合累计 {game['turn_score']} 分")
-                opp = game["players"][1 - game["turn"]]
-                if _bot_should_bank(player["total"], game["target"],
-                                    player.get("dice"), opp.get("dice"), opp["total"],
-                                    game["hand"], game["turn_score"]):
+                if self._bot_wants_bank(player, game):
                     player["total"] += game["turn_score"]
                     self._sender.reply(
                         ctx, f"{player['name']} 入账 +{game['turn_score']} 分，"
@@ -1550,6 +1718,9 @@ class FarklePlugin:
             opp = game["players"][1 - game["turn"]]
             pick = _bot_best_lock(hand, game["turn_score"], player["total"], game["target"],
                                   player.get("dice"), opp.get("dice"), opp["total"])
+            if (pick is not None and player["id"] == BOT_DUMB_ID and _bot_mistake()):
+                # 笨笨机器人走错：换一个合法但不是最优的锁定组合
+                pick = _dumb_lock(hand, pick)
             if pick is None:     # 兜底：无任何可计分组合时按爆骰处理，避免死循环
                 lost = game["turn_score"]
                 self._sender.reply(
@@ -1577,9 +1748,7 @@ class FarklePlugin:
                      f"（剩余可掷 {len(game['hand'])} 颗）"
                      + ("\n热骰！骰子全部计分用完，拿回全部骰子，可继续或入账" if hot else ""))
 
-            if _bot_should_bank(player["total"], game["target"],
-                                player.get("dice"), opp.get("dice"), opp["total"],
-                                game["hand"], game["turn_score"]):
+            if self._bot_wants_bank(player, game):
                 player["total"] += game["turn_score"]
                 self._sender.reply(
                     ctx, f"{player['name']} 入账 +{game['turn_score']} 分，"
@@ -1590,6 +1759,17 @@ class FarklePlugin:
                 self._end_turn(ctx, gid, game)
                 return
             self._save_game(gid, game)
+
+    def _bot_wants_bank(self, player: dict, game: dict) -> bool:
+        """机器人是否入账；笨笨机器人有 5% 概率把结论反过来（不合法时保持原结论）"""
+        opp = game["players"][1 - game["turn"]]
+        bank = _bot_should_bank(player["total"], game["target"], player.get("dice"),
+                                opp.get("dice"), opp["total"],
+                                game["hand"], game["turn_score"])
+        if player["id"] != BOT_DUMB_ID or not _bot_mistake():
+            return bank
+        return _dumb_bank(bank, player["total"] + game["turn_score"] >= game["target"],
+                          game["hand"])
 
     def _finish(self, ctx: CommandContext, game: dict, winner: dict,
                 headline: str = None, reason: str = "达成目标分") -> None:
@@ -1617,14 +1797,15 @@ class FarklePlugin:
         if self._cat is None:
             return ["（猫眼石结算失败：猫眼石系统不可用）"], 0
 
-        if any(p["id"] == BOT_ID for p in game["players"]):
+        bot_player = next((p for p in game["players"] if p["id"] in BOT_IDS), None)
+        if bot_player is not None:
             # 人机局：机器人没有猫眼石账户，只结算玩家一侧，机器人盈亏记在战绩里
-            human = next(p for p in game["players"] if p["id"] != BOT_ID)
+            human = next(p for p in game["players"] if p["id"] not in BOT_IDS)
             delta = stones if human["id"] == winner["id"] else -stones
             before = self._cat.get_eye_stones(human["id"])
             after = self._cat.add_eye_stones(human["id"], delta)
-            payer, payee = ((BOT_NAME, human["name"]) if delta > 0
-                            else (human["name"], BOT_NAME))
+            payer, payee = ((bot_player["name"], human["name"]) if delta > 0
+                            else (human["name"], bot_player["name"]))
             lines = [f"{payer} 支付 {stones} 猫眼石给 {payee}"
                      f"（{human['name']} 余额 {before} → {after}）"]
             if after < 0:
@@ -1653,15 +1834,40 @@ class FarklePlugin:
         balance = self._cat.get_eye_stones(user_id)
         return -balance if balance < 0 else 0
 
-    @staticmethod
-    def _record_bot_result(game: dict, winner: dict, stones: int = 0) -> None:
-        """人机对局结束时记录玩家胜负与猫眼石净收益（非人机局不记录）"""
-        if not any(p["id"] == BOT_ID for p in game["players"]):
+    def _record_bot_result(self, game: dict, winner: dict, stones: int = 0) -> None:
+        """人机对局结束时记录玩家战绩：喵喵机器人记总战绩，笨笨机器人只记本周周榜"""
+        bot = next((p for p in game["players"] if p["id"] in BOT_IDS), None)
+        if bot is None:
             return
-        human = next((p for p in game["players"] if p["id"] != BOT_ID), None)
+        human = next((p for p in game["players"] if p["id"] not in BOT_IDS), None)
         if human is None:
             return
-        _record_bot_stats(human["id"], human["name"], human["id"] == winner["id"], stones)
+        human_won = human["id"] == winner["id"]
+        if bot["id"] == BOT_DUMB_ID:
+            self._record_dumb_week(human["id"], human["name"], human_won)
+        else:
+            _record_bot_stats(human["id"], human["name"], human_won, stones)
+
+    def _add_fish(self, qq: int, amount: int) -> None:
+        """发放鱼干奖励（猫猫系统不可用时静默跳过）"""
+        if self._cat is None:
+            return
+        try:
+            self._cat.add_fish(qq, amount)
+        except Exception:
+            pass
+
+    def _ensure_bot_week(self) -> dict:
+        """跨周（周三 00:00）时结算上一周笨笨机器人周榜并重置本周"""
+        return _dumb_week_ensure(self._add_fish)
+
+    def _settle_bot_week(self, weekly: dict) -> None:
+        """按上一周胜率排名发放鱼干奖励（同一周只结算一次）"""
+        _dumb_week_settle(weekly, self._add_fish)
+
+    def _record_dumb_week(self, uid: int, name: str, human_won: bool) -> None:
+        """记录一局与笨笨机器人的对战（本周周榜用）"""
+        _dumb_week_record(uid, name, human_won, self._add_fish)
 
     # ==================== 内部逻辑 ====================
 
@@ -1912,6 +2118,13 @@ class FarklePlugin:
             "盈亏计入人机排行榜\n"
             "· 机器人一样参与先手拍卖（由它先出价）\n"
             "· 「farkle 胜率」：人机排行（胜率 + 猫眼石净收益，机器人自己也上榜）\n"
+            "【笨笨机器人】\n"
+            f"· 「farkle 笨蛋 [目标分] [猫眼石]」：向 {BOT_DUMB_NAME} 挑战，"
+            f"它每做一个决定有 {BOT_DUMB_MISTAKE_P * 100:g}% 概率不走最优\n"
+            f"· 本周与它打满 {BOT_WEEKLY_MIN_GAMES} 局即可进周榜（周三 00:00 刷新），"
+            "按胜率排名发鱼干\n"
+            f"· 周榜奖励：第1名{BOT_WEEKLY_REWARDS[0]}鱼干，逐名-100，"
+            f"发到第{BOT_WEEKLY_MIN_GAMES}名{BOT_WEEKLY_REWARDS[-1]}鱼干\n"
             "【结算与作废】\n"
             "· 先达到目标分者获胜；有猫眼石时由输家支付给赢家相应数量\n"
             "· 输家猫眼石不足则余额记成负数（欠债），还清前不能参与猫眼石局\n"

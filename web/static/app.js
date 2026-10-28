@@ -245,6 +245,7 @@ function backToLobby() {
   fkLobby.classList.remove('hidden');
   refreshRooms();
   loadBotRank();
+  loadDumbWeek();
   clearInterval(fkLobbyTimer);
   fkLobbyTimer = setInterval(refreshRooms, 2500);
 }
@@ -268,7 +269,7 @@ async function refreshRooms() {
     const meta = document.createElement('div');
     meta.className = 'room-meta';
     meta.innerHTML = (ongoing ? '<span class="room-stone">对局中</span> · ' : '')
-      + (r.bot ? '人机局 · ' : '')
+      + (r.bot ? `${esc(r.bot_name || '人机局')} · ` : '')
       + `目标 ${r.target} 分 · `
       + (r.stones > 0 ? `<span class="room-stone">猫眼石 ${r.stones}</span>` : '普通局')
       + ` · 房间号 ${esc(r.code)}`;
@@ -300,15 +301,15 @@ async function createRoom() {
   else fkLobbyMsg.textContent = data.msg || '创建失败喵';
 }
 
-async function startBotGame() {
-  const msg = document.getElementById('fk-bot-msg');
-  const target = document.getElementById('fk-bot-target').value;
-  const stones = document.getElementById('fk-bot-stones').value;
+async function startBotGame(dumb = false) {
+  const msg = document.getElementById(dumb ? 'fk-dumb-msg' : 'fk-bot-msg');
+  const target = document.getElementById(dumb ? 'fk-dumb-target' : 'fk-bot-target').value;
+  const stones = document.getElementById(dumb ? 'fk-dumb-stones' : 'fk-bot-stones').value;
   msg.textContent = '';
   const { status, data } = await api('/api/farkle/bot', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ target: target, stones: stones }),
+    body: JSON.stringify({ target: target, stones: stones, dumb: dumb }),
   });
   if (status === 200 && data.ok) enterRoom(data.code);
   else msg.textContent = data.msg || '开局失败喵';
@@ -347,8 +348,34 @@ async function loadBotRank() {
   box.innerHTML = (rows || '<p class="room-empty">还没有人对战过机器人喵</p>') + mine;
 }
 
-document.getElementById('btn-fk-bot').addEventListener('click', startBotGame);
+async function loadDumbWeek() {
+  const box = document.getElementById('fk-dumb-week');
+  const { status, data } = await api('/api/farkle/dumb_week');
+  if (status === 401) { fkPanel.classList.add('hidden'); showLogin(); return; }
+  if (status !== 200 || !data.ok) return;
+  document.getElementById('fk-dumb-week-sub').textContent =
+    `本周（${data.week}）· 周三 00:00 刷新 · 满 ${data.min_games} 局才上榜 · 与 QQ 端共用同一份周榜`;
+  const rows = data.rows.map((r, i) => `
+    <div class="rank-row">
+      <span class="rank-no">${i + 1}</span>
+      <span class="rank-name">${esc(r.name)}</span>
+      <span class="rank-val">${r.wins} 胜 ${r.losses} 负（${r.games} 局）· 胜率 ${(r.rate * 100).toFixed(1)}%</span>
+      <span class="rank-reward">奖励 ${r.reward} 鱼干</span>
+    </div>`).join('');
+  const mine = data.mine
+    ? `<p class="hint">你对${data.name}：${data.mine.wins} 胜 ${data.mine.losses} 负（${data.mine.games} 局）`
+      + `${data.mine.left > 0 ? `，还差 ${data.mine.left} 局上榜` : '，已上榜'}</p>`
+    : `<p class="hint">你本周还没和${data.name}对战过，挑战一次吧</p>`;
+  const note = `<p class="hint">每周按胜率排名发鱼干：第1名 ${data.rewards[0]}，逐名 -100，`
+    + `发到第 ${data.rewards.length} 名 ${data.rewards[data.rewards.length - 1]}</p>`;
+  const empty = `<p class="room-empty">本周还没有人打满 ${data.min_games} 局，去挑战吧</p>`;
+  box.innerHTML = (rows || empty) + mine + note;
+}
+
+document.getElementById('btn-fk-bot').addEventListener('click', () => startBotGame(false));
+document.getElementById('btn-fk-dumb').addEventListener('click', () => startBotGame(true));
 document.getElementById('btn-fk-bot-rank').addEventListener('click', loadBotRank);
+document.getElementById('btn-fk-dumb-week').addEventListener('click', loadDumbWeek);
 
 async function joinRoom(code) {
   fkLobbyMsg.textContent = '';
@@ -3243,7 +3270,7 @@ async function loadWeekly() {
   const { status, data } = await api('/api/yahtzee/weekly');
   if (status === 401) { yzPanel.classList.add('hidden'); showLogin(); return; }
   if (status !== 200 || !data.ok) return;
-  weeklySub.textContent = `本周（${data.week}）只记你「本周第一次」的分数，换周后按排名发鱼干`;
+  weeklySub.textContent = `本周（${data.week}）按前 ${data.max_games} 局的平均分排名，换周后按排名发鱼干`;
   if (!data.ranks.length) {
     weeklyRanks.innerHTML = '<p class="room-empty">本周还没有人完成对局喵，去开一局吧</p>';
     return;
@@ -3252,7 +3279,7 @@ async function loadWeekly() {
     <div class="rank-row">
       <span class="rank-no">${i + 1}</span>
       <span class="rank-name">${esc(r.name)}</span>
-      <span class="rank-val">${r.score} 分</span>
+      <span class="rank-val">平均 ${r.score} 分（${r.played}/${data.max_games} 局）</span>
       <span class="rank-reward">奖励 ${r.reward} 鱼干</span>
     </div>`).join('');
 }

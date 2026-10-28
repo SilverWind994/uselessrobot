@@ -28,7 +28,8 @@ for _p in (_NEWBOT_DIR, _WEB_DIR):
 from config import Config                                            # noqa: E402
 from plugins.cat_config import CatConfig                             # noqa: E402
 from plugins.yahtzee import (YahtzeePlugin, _WEEKLY_PATH,            # noqa: E402
-                             WEEKLY_REWARDS, _save_json)
+                             WEEKLY_REWARDS, WEEKLY_MAX_SCORES,
+                             _save_json, _entry_scores, _entry_avg)
 from core.web_auth import (make_token, parse_token, verify_password,           # noqa: E402
                           check_password_text, hash_password, make_salt)
 import cat_web                                                       # noqa: E402
@@ -232,12 +233,13 @@ def farkle_create(payload: dict, cat_token: str = Cookie(default="")) -> JSONRes
 
 @app.post("/api/farkle/bot")
 def farkle_bot(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
-    """人机对战：直接开一局玩家 vs 喵喵机器人（可下注猫眼石）"""
+    """人机对战：直接开一局玩家 vs 机器人（可下注猫眼石；dumb=true 为笨笨机器人）"""
     qq = _auth_qq(cat_token)
     if qq is None:
         return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
     code, err = farkle_web.create_bot_room(qq, _nick_of(qq), payload.get("target"),
-                                           payload.get("stones"))
+                                           payload.get("stones"),
+                                           dumb=bool(payload.get("dumb")))
     if err:
         return JSONResponse({"ok": False, "msg": err}, status_code=400)
     return JSONResponse({"ok": True, "code": code})
@@ -249,6 +251,15 @@ def farkle_bot_rank(cat_token: str = Cookie(default="")) -> JSONResponse:
     if qq is None:
         return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
     return JSONResponse({"ok": True, **farkle_web.bot_rank(qq)})
+
+
+@app.get("/api/farkle/dumb_week")
+def farkle_dumb_week(cat_token: str = Cookie(default="")) -> JSONResponse:
+    """笨笨机器人周榜（周三 00:00 刷新，本周满 10 局才上榜）"""
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    return JSONResponse({"ok": True, **farkle_web.dumb_week(qq)})
 
 
 @app.get("/api/farkle/loadouts")
@@ -977,14 +988,22 @@ _yz_plugin = YahtzeePlugin(cat_web._plugin._sender, cat_plugin=cat_web._plugin)
 
 
 def _record_weekly(entries: list) -> None:
-    """网页端对局结束后：记录各玩家本周的首次分数（同周已有则不覆盖）"""
+    """网页端对局结束后：把分数计入本周（每人最多计前 3 局）"""
     weekly = _yz_plugin._ensure_week()
     scores = weekly.setdefault("scores", {})
     changed = False
     for item in entries:
         key = str(item["qq"])
-        if key not in scores:
-            scores[key] = {"name": item["name"], "score": item["score"]}
+        rec = scores.get(key)
+        if rec is None:
+            rec = {"name": item["name"], "scores": []}
+            scores[key] = rec
+        rec["name"] = item["name"]
+        if "scores" not in rec:      # 兼容旧存档：单局 score 转成列表
+            rec["scores"] = _entry_scores(rec)
+            rec.pop("score", None)
+        if len(rec["scores"]) < WEEKLY_MAX_SCORES:
+            rec["scores"].append(int(item["score"]))
             changed = True
     if changed:
         _save_json(_WEEKLY_PATH, weekly)
@@ -995,18 +1014,20 @@ yahtzee_web.set_weekly_recorder(_record_weekly)
 
 @app.get("/api/yahtzee/weekly")
 def yahtzee_weekly(cat_token: str = Cookie(default="")) -> JSONResponse:
-    """快艇骰子本周排行榜（每位玩家只计本周首次分数）"""
+    """快艇骰子本周排行榜（按本周前 3 局平均分排名）"""
     if _auth_qq(cat_token) is None:
         return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
     weekly = _yz_plugin._ensure_week()
     scores = weekly.get("scores") or {}
-    ranked = sorted(scores.items(), key=lambda kv: kv[1]["score"], reverse=True)
+    ranked = sorted(scores.items(), key=lambda kv: _entry_avg(kv[1]), reverse=True)
     ranks = [{
         "name": info["name"],
-        "score": info["score"],
+        "score": round(_entry_avg(info), 1),
+        "played": len(_entry_scores(info)),
         "reward": WEEKLY_REWARDS[i] if i < len(WEEKLY_REWARDS) else 0,
     } for i, (_, info) in enumerate(ranked)]
-    return JSONResponse({"ok": True, "week": weekly.get("week", ""), "ranks": ranks})
+    return JSONResponse({"ok": True, "week": weekly.get("week", ""),
+                         "max_games": WEEKLY_MAX_SCORES, "ranks": ranks})
 
 
 # ==================== 个人中心 / 管理员 ====================

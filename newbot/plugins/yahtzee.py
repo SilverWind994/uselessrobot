@@ -1,7 +1,7 @@
 """快艇骰子（Yahtzee）—— 移植自 archive/mybot/yahtzee.py。
 
 玩法：群里 1~4 人，每人 12 个计分格，掷 5 颗骰子、最多重投 2 次，选一格计分。
-每周记录每位玩家「本周第一次」的分数，跨周结算时按分数排名发放鱼干奖励。
+每周记录每位玩家「本周前 3 局」的平均分，跨周结算时按平均分排名发放鱼干奖励。
 中途可以「放弃」：放弃者退出本局并锁定当前分数，其余人继续；
 所有人打完 12 格、或无人能行动时本局结束（不再依赖强制结束的 stop）。
 """
@@ -29,6 +29,7 @@ MAX_ROLL = 3          # 每回合最多投掷次数（含首投，即可重投 2
 CATEGORY_COUNT = 12   # 每人可计分的格子数
 # 每周首次得分排行奖励：第1名1000鱼干、第2名900……依次递减，最多发到第10名100
 WEEKLY_REWARDS = [1000 - 100 * i for i in range(10)]
+WEEKLY_MAX_SCORES = 3   # 周榜按本周前 3 局的平均分排名
 IDLE_SECONDS = 6 * 60 * 60   # 对局闲置超过该时长自动作废，避免卡住之后的开局
 
 # 计分表格行（与 score 数组下标的映射见 _cell_text）
@@ -89,6 +90,22 @@ def _current_week() -> str:
     """当前 ISO 周，形如 2026-W42"""
     y, w, _ = date.today().isocalendar()
     return f"{y}-W{w:02d}"
+
+
+def _entry_scores(info: dict) -> list:
+    """本周记录里的各局分数（兼容旧存档的单局 score 字段）"""
+    scores = info.get("scores")
+    if isinstance(scores, list):
+        return [int(s) for s in scores]
+    if "score" in info:
+        return [int(info["score"])]
+    return []
+
+
+def _entry_avg(info: dict) -> float:
+    """本周排行用的分数：本周前三局的平均分"""
+    scores = _entry_scores(info)
+    return (sum(scores) / len(scores)) if scores else 0.0
 
 
 def _score_of(index: int, dice: list) -> int:
@@ -245,12 +262,15 @@ class YahtzeePlugin:
         if not scores:
             self._sender.reply(ctx, f"本周（{week}）还没有人完成快艇骰子喵，快去开一局吧")
             return
-        ranked = sorted(scores.items(), key=lambda kv: kv[1]["score"], reverse=True)
+        ranked = sorted(scores.items(), key=lambda kv: _entry_avg(kv[1]), reverse=True)
         lines = [f"快艇骰子本周排行榜（{week}）",
-                 "每位玩家只计本周第一次的分数，换周后按这份分数排名发鱼干", ""]
+                 f"按本周前 {WEEKLY_MAX_SCORES} 局的平均分排名，换周后发鱼干", ""]
         for i, (_, info) in enumerate(ranked[:10]):
+            avg = _entry_avg(info)
+            played = len(_entry_scores(info))
             reward = WEEKLY_REWARDS[i] if i < len(WEEKLY_REWARDS) else 0
-            lines.append(f"{i + 1}. {info['name']} — {info['score']}分（奖励{reward}鱼干）")
+            lines.append(f"{i + 1}. {info['name']} — 平均 {avg:.1f}分"
+                         f"（{played}/{WEEKLY_MAX_SCORES} 局，奖励{reward}鱼干）")
         self._sender.reply(ctx, "\n".join(lines))
 
     # ==================== 子指令实现 ====================
@@ -497,7 +517,7 @@ class YahtzeePlugin:
         return max(sum(1 for v in p["score"] if v >= 0) for p in active)
 
     def _finalize(self, ctx: CommandContext, game: dict, reason: str) -> None:
-        """结算本局：记录各玩家本周首次分数、公布总分、清除对局"""
+        """结算本局：记录各玩家本周前 3 局分数、公布总分、清除对局"""
         weekly = self._ensure_week()
         lines = [reason, ""]
         totals = []
@@ -506,11 +526,21 @@ class YahtzeePlugin:
             totals.append((p, total))
             tag = "（已放弃）" if p.get("given_up") else ""
             key = str(p["id"])
-            if key not in weekly["scores"]:
-                weekly["scores"][key] = {"name": p["name"], "score": total}
-                note = "（计入本周首次分数）"
+            rec = weekly["scores"].get(key)
+            if rec is None:
+                rec = {"name": p["name"], "scores": []}
+                weekly["scores"][key] = rec
+            rec["name"] = p["name"]
+            if "scores" not in rec:      # 兼容旧存档：把单局 score 转成列表
+                rec["scores"] = _entry_scores(rec)
+                rec.pop("score", None)
+            scores = rec["scores"]
+            if len(scores) < WEEKLY_MAX_SCORES:
+                scores.append(total)
+                note = (f"（计入本周第 {len(scores)}/{WEEKLY_MAX_SCORES} 局，"
+                        f"当前平均 {sum(scores) / len(scores):.1f} 分）")
             else:
-                note = "（本周已有首次分数，不重复计）"
+                note = f"（本周前 {WEEKLY_MAX_SCORES} 局已满，不再计入）"
             lines.append(f"{p['name']}{tag}：{total}分 {note}")
         _save_json(_WEEKLY_PATH, weekly)
         best = max(t for _, t in totals)
@@ -560,7 +590,7 @@ class YahtzeePlugin:
         return weekly
 
     def _settle_week(self, weekly: dict) -> None:
-        """按上一周首次得分排名发放鱼干奖励（只结算一次）"""
+        """按上一周前 3 局平均分排名发放鱼干奖励（只结算一次）"""
         prev = weekly.get("week")
         scores = weekly.get("scores") or {}
         if not prev or not scores:
@@ -568,7 +598,7 @@ class YahtzeePlugin:
         settled = weekly.setdefault("settled", [])
         if prev in settled:
             return
-        ranked = sorted(scores.items(), key=lambda kv: kv[1]["score"], reverse=True)
+        ranked = sorted(scores.items(), key=lambda kv: _entry_avg(kv[1]), reverse=True)
         for i, (qq, _info) in enumerate(ranked[:len(WEEKLY_REWARDS)]):
             if self._cat is not None:
                 try:
@@ -607,8 +637,10 @@ class YahtzeePlugin:
             "· 所有人填满 12 格自动结束；有人放弃时其余人继续，直到没人能行动才结束\n"
             f"· 对局闲置超过 {IDLE_SECONDS // 3600} 小时会自动作废（作废不计分）\n"
             "【排行与奖励】\n"
-            "· 每周只记录你「本周第一次」的分数（正常打完或放弃都算），同周再玩不刷新\n"
-            f"· 换周后按这份分数从高到低排名发鱼干：第1名{WEEKLY_REWARDS[0]}，"
+            f"· 每周记录你本周前 {WEEKLY_MAX_SCORES} 局的分数（正常打完或放弃都算），"
+            "按这 3 局的平均分排名\n"
+            "· 同周超过 3 局的部分不计入；换周后重新从第 1 局开始计\n"
+            f"· 换周后按平均分从高到低排名发鱼干：第1名{WEEKLY_REWARDS[0]}，"
             f"逐名-100，发到第10名{WEEKLY_REWARDS[-1]}，第10名之后没有奖励\n"
             "· 奖励在换周后第一次用到快艇骰子时自动发放"
         )

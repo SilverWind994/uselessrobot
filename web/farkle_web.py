@@ -15,7 +15,11 @@ from plugins.farkle import (
     DICE_NORMAL, DICE_GAMBLER, DICE_KAIJI, DICE_NUM, PLAYER_NUM, DEFAULT_TARGET,
     MIN_TARGET, MAX_TARGET, MAX_STONES, MAX_BOT_STONES, BID_STEP, BID_LIMIT,
     IDLE_SECONDS, DICE_D20_BONUS,
-    BOT_ID, BOT_NAME, _bot_best_lock, _bot_should_bank, _bot_fair_bid,
+    BOT_ID, BOT_NAME, BOT_DUMB_ID, BOT_DUMB_NAME, BOT_DUMB_MISTAKE_P,
+    _bot_best_lock, _bot_should_bank, _bot_fair_bid,
+    _bot_mistake, _dumb_lock, _dumb_bank, _dumb_bid,
+    _bot_week_rows, _dumb_week_ensure, _dumb_week_record,
+    BOT_WEEKLY_MIN_GAMES, BOT_WEEKLY_REWARDS,
     _bot_stats_rows, _record_bot_stats, _load_bot_stats,
     _roll_dice_hand, _is_wild, _new_die, _faces_text, _dice_set_desc,
     _random_dice_set, _score_dice, _DIE_NAMES, _DIE_COLORS,
@@ -73,11 +77,14 @@ class Room:
     """一局 Farkle 的完整状态。所有公开方法返回错误文案（None 表示成功）。"""
 
     def __init__(self, code: str, host_qq: int, host_name: str, target: int, stones: int,
-                 bot: bool = False):
+                 bot: bool = False, bot_dumb: bool = False):
         self.code = code
         self.target = target
         self.stones = stones
         self.bot = bot              # 人机局：第二位玩家是机器人，只结算玩家一侧猫眼石
+        self.bot_dumb = bool(bot_dumb)   # 笨笨机器人：每一步有 5% 概率不走最优
+        self.bot_id = BOT_DUMB_ID if self.bot_dumb else BOT_ID
+        self.bot_name = BOT_DUMB_NAME if self.bot_dumb else BOT_NAME
         self.phase = "waiting"        # waiting / auction / keep / decide / finished
         self.players = [self._new_player(host_qq, host_name)]
         self.seat_dice = []
@@ -201,11 +208,13 @@ class Room:
 
     def start_as_bot(self) -> None:
         """把机器人作为第二位玩家加入并直接进入先手拍卖（机器人先出价）"""
-        self.players.append(self._new_player(BOT_ID, BOT_NAME))
+        self.players.append(self._new_player(self.bot_id, self.bot_name))
         self.seat_dice = [_random_dice_set(), _random_dice_set()]
         self.phase = "auction"
         self.auction = {"bid": None, "holder": None, "turn": 1}
-        self._log(f"{self.players[0]['name']} 向 {BOT_NAME} 发起挑战")
+        style = (f"（每一步有 {BOT_DUMB_MISTAKE_P * 100:g}% 概率不走最优）"
+                 if self.bot_dumb else "")
+        self._log(f"{self.players[0]['name']} 向 {self.bot_name}{style} 发起挑战")
         self._log(self.seat_text())
         self._touch()
         self._run_bot()
@@ -218,28 +227,36 @@ class Room:
         """
         if not self.bot or self.phase == "finished":
             return
+        bot_id = self.bot_id
         for _ in range(400):        # 防死循环兜底
             if self.phase == "finished":
                 return
             if self.phase == "auction":
                 au = self.auction
-                if au is None or self.players[au["turn"]]["qq"] != BOT_ID:
+                if au is None or self.players[au["turn"]]["qq"] != bot_id:
                     return
+                if self.bot_dumb and _bot_mistake():
+                    value = _dumb_bid(self.target, au["bid"])
+                    if value is not None:
+                        self.bid(bot_id, value)
+                        continue
                 fair = _bot_fair_bid(self.seat_dice, self.target)
                 if au["bid"] is not None and au["bid"] >= fair:
-                    self.accept(BOT_ID)             # 对手已出到公允价，让先手给对方
+                    self.accept(bot_id)             # 对手已出到公允价，让先手给对方
                 else:
                     # 未到公允价时只加一个最小加价档，避免直接跳到心理价位多付
                     val = fair if au["bid"] is None else min(fair, au["bid"] + BID_STEP)
-                    self.bid(BOT_ID, val)           # 加价抢下先手位
+                    self.bid(bot_id, val)           # 加价抢下先手位
                 continue
-            if self.players[self.turn]["qq"] != BOT_ID:
+            if self.players[self.turn]["qq"] != bot_id:
                 return
             if self.phase == "keep":
                 p = self.players[self.turn]
                 opp = self.players[1 - self.turn]
                 pick = _bot_best_lock(self.hand, self.turn_score, p["total"], self.target,
                                       p["dice"], opp["dice"], opp["total"])
+                if pick is not None and self.bot_dumb and _bot_mistake():
+                    pick = _dumb_lock(self.hand, pick)
                 if pick is None:    # 兜底：无任何可计分组合时按爆骰处理
                     self._log(f"{p['name']} 掷出 {_faces_text(self.hand)}，无法计分——爆骰！"
                               "本回合没有得分")
@@ -247,17 +264,21 @@ class Room:
                     self._start_turn()
                     continue
                 gained, idx = pick
-                if self.lock(BOT_ID, idx):
+                if self.lock(bot_id, idx):
                     return          # 理论不会发生；出错就交回玩家，避免卡死
                 continue
             if self.phase == "decide":
                 p = self.players[self.turn]
                 opp = self.players[1 - self.turn]
-                if _bot_should_bank(p["total"], self.target, p["dice"], opp["dice"],
-                                    opp["total"], self.hand, self.turn_score):
-                    self.bank(BOT_ID)
+                bank = _bot_should_bank(p["total"], self.target, p["dice"], opp["dice"],
+                                        opp["total"], self.hand, self.turn_score)
+                if self.bot_dumb and _bot_mistake():
+                    bank = _dumb_bank(bank, p["total"] + self.turn_score >= self.target,
+                                      self.hand)
+                if bank:
+                    self.bank(bot_id)
                 else:
-                    self.roll(BOT_ID)
+                    self.roll(bot_id)
                 # 入账/爆骰后可能又轮回到机器人（玩家首掷即爆骰），所以继续判定
                 continue
             return
@@ -427,12 +448,12 @@ class Room:
             cat = _cat()
             if self.bot:
                 # 机器人没有猫眼石账户，只结算玩家一侧，机器人盈亏记在战绩里
-                human = next(p for p in self.players if p["qq"] != BOT_ID)
+                human = next(p for p in self.players if p["qq"] != self.bot_id)
                 delta = self.stones if human["qq"] == winner["qq"] else -self.stones
                 before = cat.get_eye_stones(human["qq"])
                 after = cat.add_eye_stones(human["qq"], delta)
-                payer, payee = ((BOT_NAME, human["name"]) if delta > 0
-                                else (human["name"], BOT_NAME))
+                payer, payee = ((self.bot_name, human["name"]) if delta > 0
+                                else (human["name"], self.bot_name))
                 lines = [f"{payer} 支付 {self.stones} 猫眼石给 {payee}"
                          f"（{human['name']} {before}→{after}）"]
                 if after < 0:
@@ -476,6 +497,8 @@ class Room:
             "target": self.target,
             "stones": self.stones,
             "bot": self.bot,
+            "bot_dumb": self.bot_dumb,
+            "bot_name": self.bot_name if self.bot else "",
             "turn": self.turn,
             "my_index": mine,
             "is_player": mine >= 0,
@@ -501,12 +524,24 @@ class Room:
 
 # ==================== 房间管理 ====================
 
+def _add_fish(qq: int, amount: int) -> None:
+    """发放鱼干奖励（猫猫系统不可用时静默跳过）"""
+    try:
+        _cat().add_fish(qq, amount)
+    except Exception:
+        pass
+
+
 def _record_bot_result(room: Room, winner: dict, stones: int = 0) -> None:
-    """人机局结束时记录玩家胜负与猫眼石净收益（与 QQ 端共用同一份战绩文件）"""
-    human = next((p for p in room.players if p["qq"] != BOT_ID), None)
+    """人机局结束时记录战绩：喵喵机器人记总战绩，笨笨机器人只记本周周榜"""
+    human = next((p for p in room.players if p["qq"] != room.bot_id), None)
     if human is None:
         return
-    _record_bot_stats(human["qq"], human["name"], human["qq"] == winner["qq"], stones)
+    won = human["qq"] == winner["qq"]
+    if room.bot_dumb:
+        _dumb_week_record(human["qq"], human["name"], won, _add_fish)
+    else:
+        _record_bot_stats(human["qq"], human["name"], won, stones)
 
 
 def _new_code() -> str:
@@ -553,6 +588,8 @@ def list_rooms() -> list:
                 "target": r.target,
                 "stones": r.stones,
                 "bot": r.bot,
+                "bot_name": r.bot_name if r.bot else "",
+                "bot_dumb": r.bot_dumb,
                 "phase": r.phase,
                 "players": [p["name"] for p in r.players],
             })
@@ -593,8 +630,9 @@ def create_room(qq: int, name: str, target, stones):
         return code, None
 
 
-def create_bot_room(qq: int, name: str, target, stones):
-    """人机局：直接建房并把机器人拉进来，返回 (code, 错误文案)。可下注猫眼石。"""
+def create_bot_room(qq: int, name: str, target, stones, dumb: bool = False):
+    """人机局：直接建房并把机器人拉进来，返回 (code, 错误文案)。可下注猫眼石。
+    dumb=True 时对手是笨笨机器人（每一步有 5% 概率不走最优）。"""
     with _ROOMS_LOCK:
         _reap_locked()
         exist = _in_other_room_locked(qq)
@@ -617,7 +655,7 @@ def create_bot_room(qq: int, name: str, target, stones):
             if debt > 0:
                 return None, f"你有 {debt} 个猫眼石欠债，不能开猫眼石局喵"
         code = _new_code()
-        room = Room(code, qq, name, target, stones, bot=True)
+        room = Room(code, qq, name, target, stones, bot=True, bot_dumb=dumb)
         _ROOMS[code] = room
         room.start_as_bot()
         return code, None
@@ -637,16 +675,17 @@ def rematch(code: str, qq: int):
             return exist, None
         if room.stones > 0:
             for p in room.players:
-                if p["qq"] == BOT_ID:
+                if p["qq"] == room.bot_id:
                     continue
                 debt = _debt_of(p["qq"])
                 if debt > 0:
                     return None, f"{p['name']} 有 {debt} 个猫眼石欠债，不能开猫眼石局喵"
         if room.bot:
-            human = next((p for p in room.players if p["qq"] != BOT_ID), None)
+            human = next((p for p in room.players if p["qq"] != room.bot_id), None)
             if human is None:
                 return None, "本局没有可再来一局的玩家喵"
-            return create_bot_room(human["qq"], human["name"], room.target, room.stones)
+            return create_bot_room(human["qq"], human["name"], room.target, room.stones,
+                                   dumb=room.bot_dumb)
         order = sorted(room.players, key=lambda p: 0 if p["qq"] == qq else 1)
         new_code = _new_code()
         new_room = Room(new_code, order[0]["qq"], order[0]["name"],
@@ -670,6 +709,34 @@ def bot_rank(qq: int) -> dict:
                   "rate": (wins / games) if games else 0.0,
                   "net": int(mine.get("net", 0))}
     return {"name": BOT_NAME, "rows": rows, "mine": my_row}
+
+
+def dumb_week(qq: int) -> dict:
+    """笨笨机器人周榜：本周满 10 局的玩家按胜率排名（与 QQ 端共用 bot_weekly.json）"""
+    weekly = _dumb_week_ensure(_add_fish)
+    rows = _bot_week_rows(weekly)
+    rec = (weekly.get("players") or {}).get(str(qq))
+    mine = None
+    if isinstance(rec, dict):
+        wins = int(rec.get("wins", 0))
+        losses = int(rec.get("losses", 0))
+        games = wins + losses
+        mine = {"wins": wins, "losses": losses, "games": games,
+                "rate": (wins / games) if games else 0.0,
+                "left": max(0, BOT_WEEKLY_MIN_GAMES - games)}
+    return {
+        "name": BOT_DUMB_NAME,
+        "week": weekly.get("week", ""),
+        "min_games": BOT_WEEKLY_MIN_GAMES,
+        "mistake_p": BOT_DUMB_MISTAKE_P,
+        "rows": [{"name": r["name"], "wins": r["wins"], "losses": r["losses"],
+                  "games": r["games"], "rate": r["rate"],
+                  "reward": (BOT_WEEKLY_REWARDS[i]
+                             if i < len(BOT_WEEKLY_REWARDS) else 0)}
+                 for i, r in enumerate(rows[:len(BOT_WEEKLY_REWARDS)])],
+        "mine": mine,
+        "rewards": BOT_WEEKLY_REWARDS,
+    }
 
 
 def loadouts_info() -> list:

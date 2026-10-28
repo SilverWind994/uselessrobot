@@ -519,6 +519,19 @@
             <button id="btn-fk-bot" class="btn btn-primary" type="button">挑战机器人</button>
             <span id="fk-bot-msg" class="msg"></span>
           </div>
+          <div class="create-row" style="margin-top: 10px;">
+            <label class="field inline">
+              <span>目标分</span>
+              <input id="fk-dumb-target" type="number" value="4000" min="500" max="10000" step="1000">
+            </label>
+            <label class="field inline">
+              <span>猫眼石</span>
+              <input id="fk-dumb-stones" type="number" value="0" min="0" max="10" step="1">
+            </label>
+            <button id="btn-fk-dumb" class="btn btn-ghost" type="button">挑战笨笨机器人</button>
+            <span id="fk-dumb-msg" class="msg"></span>
+          </div>
+          <p class="hint">笨笨机器人每一步有 5% 概率不走最优；本周与它打满 10 局即可进周榜（周三 00:00 刷新）。</p>
         </div>
 
         <h2 class="section-title">进行中的房间</h2>
@@ -537,6 +550,20 @@
           </div>
           <div id="fk-bot-rank" class="rank-list">
             <p class="room-empty">还没有人对战过机器人喵</p>
+          </div>
+        </div>
+
+        <h2 class="section-title">笨笨机器人周榜</h2>
+        <div class="card">
+          <div class="panel-head">
+            <div>
+              <div class="panel-title">对战笨笨机器人</div>
+              <div class="panel-sub" id="fk-dumb-week-sub">周三 00:00 刷新 · 本周满 10 局才上榜 · 与 QQ 端共用同一份周榜</div>
+            </div>
+            <button id="btn-fk-dumb-week" class="btn btn-ghost btn-sm" type="button">刷新</button>
+          </div>
+          <div id="fk-dumb-week" class="rank-list">
+            <p class="room-empty">本周还没有人打满 10 局，去挑战吧</p>
           </div>
         </div>
 

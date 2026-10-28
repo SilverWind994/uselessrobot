@@ -18,7 +18,7 @@ from plugins.farkle import (
     BOT_ID, BOT_NAME, BOT_DUMB_ID, BOT_DUMB_NAME, BOT_DUMB_MISTAKE_P,
     _bot_best_lock, _bot_should_bank, _bot_fair_bid,
     _bot_mistake, _dumb_lock, _dumb_bank, _dumb_bid,
-    _bot_week_rows, _dumb_week_ensure, _dumb_week_record,
+    _bot_week_all_rows, _rank_rewards, _dumb_week_ensure, _dumb_week_record,
     BOT_WEEKLY_MIN_GAMES, BOT_WEEKLY_REWARDS,
     _bot_stats_rows, _record_bot_stats, _load_bot_stats,
     _roll_dice_hand, _is_wild, _new_die, _faces_text, _dice_set_desc,
@@ -714,9 +714,12 @@ def bot_rank(qq: int) -> dict:
 
 
 def dumb_week(qq: int) -> dict:
-    """笨笨机器人周榜：本周满 10 局的玩家按胜率排名（与 QQ 端共用 bot_weekly.json）"""
+    """笨笨机器人周榜：本周满 10 局的玩家按胜率排名领奖，未满的只展示不领奖"""
     weekly = _dumb_week_ensure(_add_fish)
-    rows = _bot_week_rows(weekly)
+    all_rows = _bot_week_all_rows(weekly)
+    full = [r for r in all_rows if r["qualified"]]
+    rest = [r for r in all_rows if not r["qualified"]]
+    tiers = _rank_rewards(full, BOT_WEEKLY_REWARDS)
     rec = (weekly.get("players") or {}).get(str(qq))
     mine = None
     if isinstance(rec, dict):
@@ -731,11 +734,13 @@ def dumb_week(qq: int) -> dict:
         "week": weekly.get("week", ""),
         "min_games": BOT_WEEKLY_MIN_GAMES,
         "mistake_p": BOT_DUMB_MISTAKE_P,
-        "rows": [{"name": r["name"], "wins": r["wins"], "losses": r["losses"],
-                  "games": r["games"], "rate": r["rate"],
-                  "reward": (BOT_WEEKLY_REWARDS[i]
-                             if i < len(BOT_WEEKLY_REWARDS) else 0)}
-                 for i, r in enumerate(rows[:len(BOT_WEEKLY_REWARDS)])],
+        "basis": "本周胜率",
+        "rows": [{"rank": rank, "name": r["name"], "wins": r["wins"],
+                  "losses": r["losses"], "games": r["games"], "rate": r["rate"],
+                  "reward": reward}
+                 for (rank, reward), r in zip(tiers, full)],
+        "rest": [{"name": r["name"], "wins": r["wins"], "losses": r["losses"],
+                  "games": r["games"], "rate": r["rate"]} for r in rest[:10]],
         "mine": mine,
         "rewards": BOT_WEEKLY_REWARDS,
     }

@@ -758,8 +758,8 @@ def _farkle_week_key() -> str:
     return (today - timedelta(days=(today.weekday() - 2) % 7)).isoformat()
 
 
-def _bot_week_rows(weekly: dict) -> list:
-    """笨笨机器人周榜行：只有本周对战满 10 局的玩家参与排名"""
+def _bot_week_all_rows(weekly: dict) -> list:
+    """周榜全部玩家行（满 10 局的排前面），带 qualified 标记"""
     rows = []
     for qq, rec in (weekly.get("players") or {}).items():
         if not isinstance(rec, dict):
@@ -767,12 +767,30 @@ def _bot_week_rows(weekly: dict) -> list:
         wins = int(rec.get("wins", 0))
         losses = int(rec.get("losses", 0))
         games = wins + losses
-        if games < BOT_WEEKLY_MIN_GAMES:
+        if games <= 0:
             continue
         rows.append({"qq": qq, "name": rec.get("name") or qq, "wins": wins,
-                     "losses": losses, "games": games, "rate": wins / games})
-    rows.sort(key=lambda r: (-r["rate"], -r["games"], -r["wins"]))
+                     "losses": losses, "games": games, "rate": wins / games,
+                     "qualified": games >= BOT_WEEKLY_MIN_GAMES})
+    rows.sort(key=lambda r: (0 if r["qualified"] else 1,
+                             -r["rate"], -r["games"], -r["wins"]))
     return rows
+
+
+def _bot_week_rows(weekly: dict) -> list:
+    """只有本周对战满 10 局的玩家参与排名领奖"""
+    return [r for r in _bot_week_all_rows(weekly) if r["qualified"]]
+
+
+def _rank_rewards(rows: list, rewards: list) -> list:
+    """给已排好序的达标行分配名次与奖励：同分并列、共同领该名次的最高档奖励（1,1,3…）"""
+    out = []
+    for i, row in enumerate(rows):
+        if i and round(row["rate"], 6) == round(rows[i - 1]["rate"], 6):
+            out.append(out[-1])
+            continue
+        out.append((i + 1, rewards[i] if i < len(rewards) else 0))
+    return out
 
 
 def _valid_locks(hand) -> list:
@@ -834,18 +852,21 @@ def _dumb_week_ensure(add_fish=None) -> dict:
 
 
 def _dumb_week_settle(weekly: dict, add_fish=None) -> None:
-    """按上一周胜率排名发放鱼干奖励（同一周只结算一次）"""
+    """按上一周胜率排名发放鱼干奖励（满 10 局才算数，同分并列领同一档；同一周只结算一次）"""
     prev = weekly.get("week")
     if not prev:
         return
     settled = weekly.setdefault("settled", [])
     if prev in settled:
         return
-    rows = _bot_week_rows(weekly)[:len(BOT_WEEKLY_REWARDS)]
+    rows = _bot_week_rows(weekly)
+    tiers = _rank_rewards(rows, BOT_WEEKLY_REWARDS)
     if add_fish is not None:
-        for i, row in enumerate(rows):
+        for (_, reward), row in zip(tiers, rows):
+            if reward <= 0:
+                continue
             try:
-                add_fish(int(row["qq"]), BOT_WEEKLY_REWARDS[i])
+                add_fish(int(row["qq"]), reward)
             except Exception:
                 pass
     settled.append(prev)
@@ -1123,20 +1144,30 @@ class FarklePlugin:
 
         # 笨笨机器人周榜（周三 00:00 刷新）
         weekly = self._ensure_bot_week()
-        week_rows = _bot_week_rows(weekly)
+        all_rows = _bot_week_all_rows(weekly)
+        week_rows = [r for r in all_rows if r["qualified"]]
+        rest_rows = [r for r in all_rows if not r["qualified"]]
         if lines:
             lines.append("")
         lines.append(f"🏅 {BOT_DUMB_NAME}周榜（本周 {weekly.get('week', '')}，"
-                     f"周三 00:00 刷新，本周满 {BOT_WEEKLY_MIN_GAMES} 局才上榜）")
+                     f"周三 00:00 刷新）")
+        lines.append(f"排行依据：本周胜率；满 {BOT_WEEKLY_MIN_GAMES} 局才算数领奖，"
+                     "同分并列领同一档（取高不取低）")
         if week_rows:
-            for i, r in enumerate(week_rows[:len(BOT_WEEKLY_REWARDS)]):
+            tiers = _rank_rewards(week_rows, BOT_WEEKLY_REWARDS)
+            for (rank, reward), r in zip(tiers, week_rows):
                 lines.append(
-                    f"{i + 1}. {r['name']}：{r['wins']} 胜 {r['losses']} 负"
+                    f"{rank}. {r['name']}：{r['wins']} 胜 {r['losses']} 负"
                     f"（胜率 {r['rate'] * 100:.1f}%，{r['games']} 局）"
-                    f"· 奖励 {BOT_WEEKLY_REWARDS[i]} 鱼干")
+                    f"· 奖励 {reward} 鱼干")
         else:
             lines.append(f"本周还没有人打满 {BOT_WEEKLY_MIN_GAMES} 局，"
                          f"发送「farkle 笨蛋」去挑战吧")
+        if rest_rows:
+            lines.append(f"本周不满 {BOT_WEEKLY_MIN_GAMES} 局（不参与领奖）：")
+            for r in rest_rows[:10]:
+                lines.append(f"· {r['name']}：{r['wins']} 胜 {r['losses']} 负"
+                             f"（胜率 {r['rate'] * 100:.1f}%，{r['games']} 局）")
         rec = (weekly.get("players") or {}).get(str(ctx.user_id))
         if isinstance(rec, dict):
             wins = int(rec.get("wins", 0))
@@ -2128,7 +2159,7 @@ class FarklePlugin:
             "不能下猫眼石\n"
             f"· 它每做一个决定有 {BOT_DUMB_MISTAKE_P * 100:g}% 概率不走最优\n"
             f"· 本周与它打满 {BOT_WEEKLY_MIN_GAMES} 局即可进周榜（周三 00:00 刷新），"
-            "按胜率排名发鱼干\n"
+            "按胜率排名发鱼干，同分并列领同一档\n"
             f"· 周榜奖励：第1名{BOT_WEEKLY_REWARDS[0]}鱼干，逐名-100，"
             f"发到第{BOT_WEEKLY_MIN_GAMES}名{BOT_WEEKLY_REWARDS[-1]}鱼干\n"
             "【结算与作废】\n"

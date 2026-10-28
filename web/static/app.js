@@ -354,22 +354,32 @@ async function loadDumbWeek() {
   if (status === 401) { fkPanel.classList.add('hidden'); showLogin(); return; }
   if (status !== 200 || !data.ok) return;
   document.getElementById('fk-dumb-week-sub').textContent =
-    `本周（${data.week}）· 周三 00:00 刷新 · 满 ${data.min_games} 局才上榜`;
-  const rows = data.rows.map((r, i) => `
+    `本周（${data.week}）· 排行依据：${data.basis} · 满 ${data.min_games} 局才领奖 · 周三 00:00 刷新`;
+  const rows = data.rows.map((r) => `
     <div class="rank-row">
-      <span class="rank-no">${i + 1}</span>
+      <span class="rank-no">${r.rank}</span>
       <span class="rank-name">${esc(r.name)}</span>
       <span class="rank-val">${r.wins} 胜 ${r.losses} 负（${r.games} 局）· 胜率 ${(r.rate * 100).toFixed(1)}%</span>
       <span class="rank-reward">奖励 ${r.reward} 鱼干</span>
     </div>`).join('');
+  const restRows = (data.rest || []).map((r) => `
+    <div class="rank-row">
+      <span class="rank-no">—</span>
+      <span class="rank-name">${esc(r.name)}</span>
+      <span class="rank-val">${r.wins} 胜 ${r.losses} 负（${r.games} 局）· 胜率 ${(r.rate * 100).toFixed(1)}%</span>
+      <span class="rank-reward">不满 ${data.min_games} 局，不领奖</span>
+    </div>`).join('');
+  const restBlock = restRows
+    ? `<p class="hint">本周不满 ${data.min_games} 局（不参与领奖）</p>${restRows}`
+    : '';
   const mine = data.mine
     ? `<p class="hint">你对${data.name}：${data.mine.wins} 胜 ${data.mine.losses} 负（${data.mine.games} 局）`
       + `${data.mine.left > 0 ? `，还差 ${data.mine.left} 局上榜` : '，已上榜'}</p>`
     : `<p class="hint">你本周还没和${data.name}对战过，挑战一次吧</p>`;
   const note = `<p class="hint">每周按胜率排名发鱼干：第1名 ${data.rewards[0]}，逐名 -100，`
-    + `发到第 ${data.rewards.length} 名 ${data.rewards[data.rewards.length - 1]}</p>`;
+    + `发到第 ${data.rewards.length} 名 ${data.rewards[data.rewards.length - 1]}；同分并列领同一档</p>`;
   const empty = `<p class="room-empty">本周还没有人打满 ${data.min_games} 局，去挑战吧</p>`;
-  box.innerHTML = (rows || empty) + mine + note;
+  box.innerHTML = (rows || empty) + restBlock + mine + note;
 }
 
 document.getElementById('btn-fk-bot').addEventListener('click', () => startBotGame(false));
@@ -3270,18 +3280,29 @@ async function loadWeekly() {
   const { status, data } = await api('/api/yahtzee/weekly');
   if (status === 401) { yzPanel.classList.add('hidden'); showLogin(); return; }
   if (status !== 200 || !data.ok) return;
-  weeklySub.textContent = `本周（${data.week}）按前 ${data.max_games} 局的平均分排名，换周后按排名发鱼干`;
-  if (!data.ranks.length) {
+  weeklySub.textContent = `本周（${data.week}）排行依据：${data.basis}；满 ${data.max_games} 局才算数领奖，同分并列领同一档（取高不取低）`;
+  if (!data.ranks.length && !(data.rest || []).length) {
     weeklyRanks.innerHTML = '<p class="room-empty">本周还没有人完成对局喵，去开一局吧</p>';
     return;
   }
-  weeklyRanks.innerHTML = data.ranks.map((r, i) => `
+  const rows = data.ranks.map((r) => `
     <div class="rank-row">
-      <span class="rank-no">${i + 1}</span>
+      <span class="rank-no">${r.rank}</span>
       <span class="rank-name">${esc(r.name)}</span>
       <span class="rank-val">平均 ${r.score} 分（${r.played}/${data.max_games} 局）</span>
       <span class="rank-reward">奖励 ${r.reward} 鱼干</span>
     </div>`).join('');
+  const restRows = (data.rest || []).map((r) => `
+    <div class="rank-row">
+      <span class="rank-no">—</span>
+      <span class="rank-name">${esc(r.name)}</span>
+      <span class="rank-val">平均 ${r.score} 分（${r.played}/${data.max_games} 局）</span>
+      <span class="rank-reward">不满 ${data.max_games} 局，不领奖</span>
+    </div>`).join('');
+  const restBlock = restRows
+    ? `<p class="hint">本周不满 ${data.max_games} 局（不参与领奖）</p>${restRows}`
+    : '';
+  weeklyRanks.innerHTML = (rows || `<p class="room-empty">本周还没有人打满 ${data.max_games} 局喵</p>`) + restBlock;
 }
 
 document.getElementById('btn-weekly-refresh').addEventListener('click', loadWeekly);

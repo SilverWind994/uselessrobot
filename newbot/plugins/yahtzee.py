@@ -108,6 +108,17 @@ def _entry_avg(info: dict) -> float:
     return (sum(scores) / len(scores)) if scores else 0.0
 
 
+def _rank_rewards(keys: list, rewards: list) -> list:
+    """按已排好序的分数分配名次与奖励：同分并列、共同领该名次的最高档奖励（1,1,3…）"""
+    out = []
+    for i, key in enumerate(keys):
+        if i and round(key, 6) == round(keys[i - 1], 6):
+            out.append(out[-1])
+            continue
+        out.append((i + 1, rewards[i] if i < len(rewards) else 0))
+    return out
+
+
 def _score_of(index: int, dice: list) -> int:
     """按格子下标计算 5 颗骰子（已排序）的得分"""
     if index < 6:
@@ -262,15 +273,30 @@ class YahtzeePlugin:
         if not scores:
             self._sender.reply(ctx, f"本周（{week}）还没有人完成快艇骰子喵，快去开一局吧")
             return
-        ranked = sorted(scores.items(), key=lambda kv: _entry_avg(kv[1]), reverse=True)
+        entries = sorted(scores.items(), key=lambda kv: _entry_avg(kv[1]), reverse=True)
+        full = [kv for kv in entries
+                if len(_entry_scores(kv[1])) >= WEEKLY_MAX_SCORES]
+        partial = [kv for kv in entries
+                   if len(_entry_scores(kv[1])) < WEEKLY_MAX_SCORES]
+        tiers = _rank_rewards([_entry_avg(info) for _, info in full], WEEKLY_REWARDS)
         lines = [f"快艇骰子本周排行榜（{week}）",
-                 f"按本周前 {WEEKLY_MAX_SCORES} 局的平均分排名，换周后发鱼干", ""]
-        for i, (_, info) in enumerate(ranked[:10]):
+                 f"排行依据：本周前 {WEEKLY_MAX_SCORES} 局的平均分；"
+                 f"满 {WEEKLY_MAX_SCORES} 局才算数领奖，同分并列领同一档（取高不取低）", ""]
+        for (rank, reward), (_, info) in zip(tiers, full):
             avg = _entry_avg(info)
             played = len(_entry_scores(info))
-            reward = WEEKLY_REWARDS[i] if i < len(WEEKLY_REWARDS) else 0
-            lines.append(f"{i + 1}. {info['name']} — 平均 {avg:.1f}分"
+            lines.append(f"{rank}. {info['name']} — 平均 {avg:.1f}分"
                          f"（{played}/{WEEKLY_MAX_SCORES} 局，奖励{reward}鱼干）")
+        if not full:
+            lines.append(f"本周还没有人打满 {WEEKLY_MAX_SCORES} 局")
+        if partial:
+            lines.append("")
+            lines.append(f"本周不满 {WEEKLY_MAX_SCORES} 局（不参与领奖）：")
+            for _, info in partial[:10]:
+                avg = _entry_avg(info)
+                played = len(_entry_scores(info))
+                lines.append(f"· {info['name']} — 平均 {avg:.1f}分"
+                             f"（{played}/{WEEKLY_MAX_SCORES} 局）")
         self._sender.reply(ctx, "\n".join(lines))
 
     # ==================== 子指令实现 ====================
@@ -590,7 +616,7 @@ class YahtzeePlugin:
         return weekly
 
     def _settle_week(self, weekly: dict) -> None:
-        """按上一周前 3 局平均分排名发放鱼干奖励（只结算一次）"""
+        """按上一周前 3 局平均分排名发放鱼干奖励（满 3 局才算数，同分并列领同一档）"""
         prev = weekly.get("week")
         scores = weekly.get("scores") or {}
         if not prev or not scores:
@@ -598,11 +624,16 @@ class YahtzeePlugin:
         settled = weekly.setdefault("settled", [])
         if prev in settled:
             return
-        ranked = sorted(scores.items(), key=lambda kv: _entry_avg(kv[1]), reverse=True)
-        for i, (qq, _info) in enumerate(ranked[:len(WEEKLY_REWARDS)]):
+        entries = sorted(scores.items(), key=lambda kv: _entry_avg(kv[1]), reverse=True)
+        full = [kv for kv in entries
+                if len(_entry_scores(kv[1])) >= WEEKLY_MAX_SCORES]
+        tiers = _rank_rewards([_entry_avg(info) for _, info in full], WEEKLY_REWARDS)
+        for (_, reward), (qq, _info) in zip(tiers, full):
+            if reward <= 0:
+                continue
             if self._cat is not None:
                 try:
-                    self._cat.add_fish(int(qq), WEEKLY_REWARDS[i])
+                    self._cat.add_fish(int(qq), reward)
                 except Exception:
                     pass
         settled.append(prev)
@@ -640,8 +671,10 @@ class YahtzeePlugin:
             f"· 每周记录你本周前 {WEEKLY_MAX_SCORES} 局的分数（正常打完或放弃都算），"
             "按这 3 局的平均分排名\n"
             "· 同周超过 3 局的部分不计入；换周后重新从第 1 局开始计\n"
+            f"· 本周不满 {WEEKLY_MAX_SCORES} 局只展示、不参与领奖\n"
             f"· 换周后按平均分从高到低排名发鱼干：第1名{WEEKLY_REWARDS[0]}，"
             f"逐名-100，发到第10名{WEEKLY_REWARDS[-1]}，第10名之后没有奖励\n"
+            "· 同分并列（比如并列第一）共同领该名次的最高档奖励\n"
             "· 奖励在换周后第一次用到快艇骰子时自动发放"
         )
 

@@ -29,7 +29,7 @@ from config import Config                                            # noqa: E40
 from plugins.cat_config import CatConfig                             # noqa: E402
 from plugins.yahtzee import (YahtzeePlugin, _WEEKLY_PATH,            # noqa: E402
                              WEEKLY_REWARDS, WEEKLY_MAX_SCORES,
-                             _save_json, _entry_scores, _entry_avg)
+                             _save_json, _entry_scores, _entry_avg, _rank_rewards)
 from core.web_auth import (make_token, parse_token, verify_password,           # noqa: E402
                           check_password_text, hash_password, make_salt)
 import cat_web                                                       # noqa: E402
@@ -1014,20 +1014,33 @@ yahtzee_web.set_weekly_recorder(_record_weekly)
 
 @app.get("/api/yahtzee/weekly")
 def yahtzee_weekly(cat_token: str = Cookie(default="")) -> JSONResponse:
-    """快艇骰子本周排行榜（按本周前 3 局平均分排名）"""
+    """快艇骰子本周排行榜（本周前 3 局平均分，满 3 局才算数领奖）"""
     if _auth_qq(cat_token) is None:
         return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
     weekly = _yz_plugin._ensure_week()
     scores = weekly.get("scores") or {}
-    ranked = sorted(scores.items(), key=lambda kv: _entry_avg(kv[1]), reverse=True)
+    entries = sorted(scores.items(), key=lambda kv: _entry_avg(kv[1]), reverse=True)
+    full = [kv for kv in entries
+            if len(_entry_scores(kv[1])) >= WEEKLY_MAX_SCORES]
+    rest = [kv for kv in entries
+            if len(_entry_scores(kv[1])) < WEEKLY_MAX_SCORES]
+    tiers = _rank_rewards([_entry_avg(info) for _, info in full], WEEKLY_REWARDS)
     ranks = [{
+        "rank": rank,
         "name": info["name"],
         "score": round(_entry_avg(info), 1),
         "played": len(_entry_scores(info)),
-        "reward": WEEKLY_REWARDS[i] if i < len(WEEKLY_REWARDS) else 0,
-    } for i, (_, info) in enumerate(ranked)]
+        "reward": reward,
+    } for (rank, reward), (_, info) in zip(tiers, full)]
+    rest_ranks = [{
+        "name": info["name"],
+        "score": round(_entry_avg(info), 1),
+        "played": len(_entry_scores(info)),
+    } for _, info in rest[:10]]
     return JSONResponse({"ok": True, "week": weekly.get("week", ""),
-                         "max_games": WEEKLY_MAX_SCORES, "ranks": ranks})
+                         "max_games": WEEKLY_MAX_SCORES,
+                         "basis": f"本周前 {WEEKLY_MAX_SCORES} 局平均分",
+                         "ranks": ranks, "rest": rest_ranks})
 
 
 # ==================== 个人中心 / 管理员 ====================

@@ -3353,6 +3353,40 @@ document.getElementById('nick-form').addEventListener('submit', async (event) =>
   await refresh();   // 顶部玩家昵称与个人信息一起刷新
 });
 
+// ---------- 赠送 ----------
+
+const giftMsg = document.getElementById('gift-msg');
+const giftTarget = document.getElementById('gift-target');
+const giftAmount = document.getElementById('gift-amount');
+const giftKind = document.getElementById('gift-kind');
+
+document.getElementById('gift-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  giftMsg.textContent = '';
+  giftMsg.classList.remove('ok');
+  const target = giftTarget.value.trim();
+  const amount = giftAmount.value.trim();
+  if (!target || !amount) {
+    giftMsg.textContent = '对方 QQ 和数量都要填喵';
+    return;
+  }
+  const { status, data } = await api('/api/gift', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ target, amount, kind: giftKind.value }),
+  });
+  if (status === 401) { homePanel.classList.add('hidden'); showLogin(); return; }
+  if (status !== 200 || !data.ok) {
+    giftMsg.textContent = data.msg || '赠送失败喵';
+    return;
+  }
+  giftMsg.textContent = `${data.msg}（对方余额：${data.target_balance}）`;
+  giftMsg.classList.add('ok');
+  giftAmount.value = '';
+  await refresh();       // 顶部余额与个人信息一起刷新
+  await loadProfile();
+});
+
 // ---------- 管理员页面（仅管理员可见） ----------
 
 document.getElementById('admin-form').addEventListener('submit', async (event) => {

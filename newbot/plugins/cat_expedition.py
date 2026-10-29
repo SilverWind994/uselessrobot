@@ -345,6 +345,11 @@ class CatExpeditionPlugin:
             description="猫猫远征队·世界地图"
         )
         router.register(
+            ["赠送", "喵赠送", "catgift", ".catgift"],
+            self.cmd_gift,
+            description="猫猫远征队·赠送鱼干或猫眼石（不收手续费，不能送成负债）"
+        )
+        router.register(
             ["喵邮件", "catmail", ".catmail"],
             self.cmd_mail,
             description="猫猫远征队·管理员全服邮件（仅管理员可用）",
@@ -1464,6 +1469,87 @@ class CatExpeditionPlugin:
     def cmd_research(self, ctx: CommandContext) -> None:
         """科研（占位）"""
         self._sender.reply(ctx, "远征队还在准备中，敬请期待喵～ (=^･ω･^=)")
+
+    # ==================== 赠送 ====================
+
+    @staticmethod
+    def _gift_usage() -> str:
+        return ("用法：赠送 @某人 数量 鱼干/猫眼石\n"
+                "例：赠送 @群友 100 鱼干\n"
+                "例：赠送 123456789 2 猫眼石\n"
+                "不收手续费；自己有多少才能送多少，送完不能变成欠债")
+
+    @staticmethod
+    def _extract_at_qq(ctx: CommandContext) -> Optional[int]:
+        """取出消息里被 @ 的 QQ 号：优先 message 段，再退回 CQ 码"""
+        message = ctx.raw_data.get("message")
+        if isinstance(message, list):
+            for seg in message:
+                if seg.get("type") != "at":
+                    continue
+                qq = str(seg.get("data", {}).get("qq", ""))
+                if qq.isdigit():
+                    return int(qq)
+        m = re.search(r"\[CQ:at,qq=(\d+)\]", ctx.raw_message or "")
+        return int(m.group(1)) if m else None
+
+    def cmd_gift(self, ctx: CommandContext) -> None:
+        """赠送鱼干或猫眼石给其他玩家（不收手续费，赠送方不能送成负债）"""
+        # 参数顺序随意：赠送 @某人 100 鱼干 / 赠送 100 鱼干 @某人
+        args = re.sub(r"\[CQ:[^\]]*\]", " ", ctx.get_args() or "")
+        target_qq = self._extract_at_qq(ctx)
+        amount = None
+        field = None
+        for token in args.split():
+            if token in ("鱼干", "鱼", "fish"):
+                field = "fish"
+            elif token in ("猫眼石", "猫眼", "石头", "stone", "eye"):
+                field = "eye_stones"
+            elif token.isdigit():
+                value = int(token)
+                if value == target_qq:
+                    continue                # @ 过就不必再写一遍 QQ 号
+                if target_qq is None and len(token) >= 5:
+                    target_qq = value          # 没 @ 人时，第一个长数字当 QQ 号
+                elif amount is None:
+                    amount = value
+
+        if target_qq is None or amount is None or field is None:
+            self._sender.reply(ctx, self._gift_usage())
+            return
+        if target_qq == ctx.user_id:
+            self._sender.reply(ctx, "不能送给自己喵~")
+            return
+        if amount <= 0:
+            self._sender.reply(ctx, "赠送数量要大于 0 喵~")
+            return
+
+        if str(ctx.user_id) not in self._load_players():
+            self._get_player(ctx.user_id)      # 自己还没建档时先建档（正常不会走到）
+        players = self._load_players()
+        me = players[str(ctx.user_id)]
+        target = players.get(str(target_qq))
+        if target is None:
+            self._sender.reply(
+                ctx, f"找不到 QQ {target_qq} 的存档喵，对方先在群里发「喵签到」建档吧")
+            return
+
+        name = "鱼干" if field == "fish" else "猫眼石"
+        balance = me.get(field, 0)
+        if balance < amount:
+            self._sender.reply(
+                ctx, f"{name}不够啦！你现在有 {balance} {name}，赠送后不能欠债喵")
+            return
+
+        me[field] = balance - amount
+        target[field] = target.get(field, 0) + amount
+        self._save_players(players)
+
+        who = target.get("nick") or str(target_qq)
+        self._sender.reply(
+            ctx,
+            f"已赠送给 {who} {amount} {name} 🎁\n"
+            f"你的余额：{me[field]} {name} | {who} 的余额：{target[field]} {name}")
 
     def cmd_mail(self, ctx: CommandContext) -> None:
         """管理员全服邮件：给所有玩家发放鱼干或猫眼石"""

@@ -1078,6 +1078,63 @@ def profile_rename(payload: dict, cat_token: str = Cookie(default="")) -> JSONRe
     return JSONResponse({"ok": True, "nick": nick, "msg": "改名成功喵"})
 
 
+@app.post("/api/gift")
+def profile_gift(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
+    """赠送鱼干/猫眼石给其他玩家：不收手续费，赠送后自己的余额不能为负"""
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+
+    try:
+        target_qq = int(str(payload.get("target", "")).strip())
+    except ValueError:
+        return JSONResponse({"ok": False, "msg": "对方 QQ 号格式不正确喵"}, status_code=400)
+    try:
+        amount = int(payload.get("amount", 0))
+    except (TypeError, ValueError):
+        return JSONResponse({"ok": False, "msg": "数量得是整数喵"}, status_code=400)
+
+    field = str(payload.get("kind", ""))
+    if field not in ("fish", "eye_stones"):
+        return JSONResponse({"ok": False, "msg": "只能赠送鱼干或猫眼石喵"}, status_code=400)
+    name = "鱼干" if field == "fish" else "猫眼石"
+
+    if target_qq == qq:
+        return JSONResponse({"ok": False, "msg": "不能送给自己喵~"}, status_code=400)
+    if amount <= 0:
+        return JSONResponse({"ok": False, "msg": "赠送数量要大于 0 喵~"}, status_code=400)
+
+    players = _load_players()
+    me = players.get(str(qq))
+    if me is None:
+        return JSONResponse({"ok": False, "msg": "存档不存在喵"}, status_code=404)
+    target = players.get(str(target_qq))
+    if target is None:
+        return JSONResponse(
+            {"ok": False, "msg": f"找不到 QQ {target_qq} 的存档喵，让对方先在群里发「喵签到」建档"},
+            status_code=404)
+
+    balance = me.get(field, 0)
+    if balance < amount:
+        return JSONResponse(
+            {"ok": False, "msg": f"{name}不够啦！你现在有 {balance} {name}，赠送后不能欠债喵"},
+            status_code=400)
+
+    me[field] = balance - amount
+    target[field] = target.get(field, 0) + amount
+    _save_players(players)
+
+    who = target.get("nick") or str(target_qq)
+    return JSONResponse({
+        "ok": True,
+        "msg": f"已赠送给 {who} {amount} {name} 🎁",
+        "fish": me.get("fish", 0),
+        "eye_stones": me.get("eye_stones", 0),
+        "target_balance": target.get(field, 0),
+        "target_name": who,
+    })
+
+
 @app.post("/api/admin/create_user")
 def admin_create_user(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
     """管理员在网页端为新 QQ 开一份空白存档（默认密码即该 QQ 号，首次登录强制改密）"""

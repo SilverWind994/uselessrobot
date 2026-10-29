@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>串子小车 · 网页端</title>
-  <link rel="stylesheet" href="/static/style.css?v=14">
+  <link rel="stylesheet" href="/static/style.css?v=15">
 </head>
 <body>
   <div class="bg-glow"></div>
@@ -324,6 +324,32 @@
             <button class="btn btn-primary" type="submit">保存昵称</button>
           </form>
           <p id="nick-msg" class="msg"></p>
+        </div>
+
+        <div class="card">
+          <div class="panel-title">赠送资源</div>
+          <div class="panel-sub">把鱼干或猫眼石送给群友，不收手续费；自己有多少才能送多少，送完不能欠债</div>
+          <form id="gift-form" autocomplete="off">
+            <div class="create-row">
+              <label class="field inline">
+                <span>对方 QQ</span>
+                <input id="gift-target" type="text" inputmode="numeric" placeholder="123456789">
+              </label>
+              <label class="field inline">
+                <span>数量</span>
+                <input id="gift-amount" type="number" min="1" step="1" placeholder="100">
+              </label>
+              <label class="field inline">
+                <span>资源</span>
+                <select id="gift-kind">
+                  <option value="fish">鱼干</option>
+                  <option value="eye_stones">猫眼石</option>
+                </select>
+              </label>
+            </div>
+            <button class="btn btn-primary" type="submit">赠送</button>
+          </form>
+          <p id="gift-msg" class="msg"></p>
         </div>
       </section>
 
@@ -778,6 +804,6 @@
 
   <footer class="foot">串子小车 · 网页端</footer>
 
-  <script src="/static/app.js?v=14"></script>
+  <script src="/static/app.js?v=15"></script>
 </body>
 </html>

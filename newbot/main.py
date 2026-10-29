@@ -26,6 +26,31 @@ from plugins.tournament import TournamentPlugin
 # AI 自动回复读取的群聊上下文条数
 GROUP_CHAT_CONTEXT_LEN = 20
 
+# 图片 CQ 码 / 其它 CQ 码
+_IMAGE_CQ_RE = re.compile(r"\[CQ:image,[^\]]*\]")
+_CQ_RE = re.compile(r"\[CQ:[^\]]+\]")
+_IMAGE_URL_RE = re.compile(r"url=([^,\]]+)")
+
+
+def _extract_image_urls(data) -> list:
+    """取出消息里的图片地址：优先 OneBot message 段，再退回 raw_message 的 CQ 码"""
+    urls = []
+    message = data.get("message")
+    if isinstance(message, list):
+        for seg in message:
+            if isinstance(seg, dict) and seg.get("type") == "image":
+                info = seg.get("data") or {}
+                url = info.get("url") or info.get("file") or ""
+                if url:
+                    urls.append(url)
+    if urls:
+        return urls
+    for cq in _IMAGE_CQ_RE.findall(data.get("raw_message") or ""):
+        m = _IMAGE_URL_RE.search(cq)
+        if m:
+            urls.append(m.group(1))
+    return urls
+
 
 class Bot:
     def __init__(self):
@@ -215,21 +240,23 @@ class Bot:
 
         # --- 特殊群：缓存最近若干条 + 自动回复概率触发 ---
         # 被 @ 时不受群白名单、CQ 码过滤与概率限制，任何已连接群都尽可能回复
+        # 纯图片消息也算有效内容（AI 能看图），其它 CQ 码（表情、回复引用等）仍跳过
+        image_urls = _extract_image_urls(ctx.raw_data)
         special = target.group_id in Config.SPECIAL_GROUPS
-        if not (at_me or (special and "[CQ:" not in instruction)):
+        if not (at_me or (special and ("[CQ:" not in instruction or image_urls))):
             return
 
         # 非特殊群第一次被 @ 时也建立聊天上下文
         chat_list = self._group_chat2.setdefault(target.group_id, [])
 
-        # 去掉 CQ 码再进上下文，避免模型看到 [CQ:at,qq=...] 这种裸代码
-        clean = re.sub(r"\[CQ:[^\]]+\]", "", instruction).strip()
-        chat_list.append(f"{ctx.sender_nickname}:{clean}")
+        # 去掉 CQ 码再进上下文，避免模型看到 [CQ:at,qq=...] 这种裸代码；图片留占位
+        clean = _CQ_RE.sub("", _IMAGE_CQ_RE.sub("[图片]", instruction)).strip()
+        chat_list.append(f"{ctx.sender_nickname}:{clean or '[图片]'}")
         while len(chat_list) > GROUP_CHAT_CONTEXT_LEN:
             del chat_list[0]
 
         # 自动回复概率触发（@ 机器人时强制触发）
-        self._ai_plugin.auto_reply(ctx, chat_list, force=at_me)
+        self._ai_plugin.auto_reply(ctx, chat_list, force=at_me, images=image_urls)
 
         # 选图回复（低概率：约1%）
         if random.randint(0, 10000) >= 9900:

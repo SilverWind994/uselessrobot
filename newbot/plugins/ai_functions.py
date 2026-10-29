@@ -1,4 +1,5 @@
 import json
+import base64
 import os
 import random
 import re
@@ -27,11 +28,33 @@ AI_AUTO_HINT = "\n\n现在没人点你的名，顺手接一句群聊就好，别
 # 自动回复概率上限（万分比），防止自己回复自己无限循环
 MAX_AUTO_REPLY_PROB = 2000
 
+# 一次回复最多附带几张图，控制 token 与延迟
+MAX_IMAGES_PER_REPLY = 3
+
+_IMAGE_MIME = {"jpg": "jpeg", "jpeg": "jpeg", "png": "png", "gif": "gif",
+               "webp": "webp", "bmp": "bmp"}
+
+
+def _image_part(src: str):
+    """把图片地址转成 OpenAI 兼容的 image_url 片段：http(s) 直接给地址，本地缓存文件转 base64"""
+    if src.startswith(("http://", "https://")):
+        return {"type": "image_url", "image_url": {"url": src}}
+    if not os.path.exists(src):
+        return None
+    try:
+        with open(src, "rb") as f:
+            data = base64.b64encode(f.read()).decode()
+    except OSError:
+        return None
+    ext = os.path.splitext(src)[1].lower().lstrip(".")
+    return {"type": "image_url",
+            "image_url": {"url": f"data:image/{_IMAGE_MIME.get(ext, 'jpeg')};base64,{data}"}}
+
+
 # 机器人在群里的 QQ 昵称（写进提示词，让它知道自己叫什么）
 AI_SELF_NAME = "更有甚者"
 
-# 长期记忆：每累计这么多次自动回复，就在后台整理一次群体记忆（不阻塞回复）
-MEMORY_EVOLVE_EVERY = 20
+# 长期记忆：每次自动回复后都在后台整理一次群体记忆（不阻塞回复）
 # 注入提示词时最多带上几位群友的档案，控制 prompt 长度以免拖慢首字延迟
 MEMORY_INJECT_USERS = 8
 
@@ -62,9 +85,9 @@ class AIFunctionsPlugin:
         # 所有 AI 回复共用的统一性格（ai设置 可以整体改掉）
         self._persona: str = AI_PERSONA
 
-        # 自动回复配置: {group_id: {"f": 概率万分比}}
+        # 自动回复配置: {group_id: {"f": 概率万分比}}，默认 5% 概率随机接话
         self._ai_response: Dict[int, dict] = {
-            gid: {"f": 100} for gid in Config.SPECIAL_GROUPS
+            gid: {"f": 500} for gid in Config.SPECIAL_GROUPS
         }
 
         # 语音合成音色描述词
@@ -79,8 +102,6 @@ class AIFunctionsPlugin:
         self._memory_path = self._assets.get("ai_memory", "")
         self._memory_lock = threading.Lock()
         self._memory = self._load_memory()
-        # 各群自动回复计数，用于决定何时触发后台记忆整理
-        self._reply_counts: Dict[int, int] = {}
 
         # QQ 消息单条上限
         self._max_reply_len = 3000
@@ -220,14 +241,15 @@ class AIFunctionsPlugin:
             self._ai_response[target.group_id] = {"f": 0}
 
         parts = args.split(" ", 1)
-        if len(parts) < 2:
+        if not args.strip():
             cfg = self._ai_response[target.group_id]
             self._sender.send_text(
                 target,
                 f"当前配置: 概率万分之{cfg['f']} (上限{MAX_AUTO_REPLY_PROB})\n"
                 f"统一性格: {self._persona}\n"
-                f"设置格式: ai设置 <概率(万分比)> <性格词>\n"
-                f"示例: ai设置 50 你是个毒舌的群友\n"
+                f"只改本群概率: ai设置 <概率(万分比)>\n"
+                f"同时改概率和性格: ai设置 <概率(万分比)> <性格词>\n"
+                f"示例: ai设置 50 / ai设置 50 你是个毒舌的群友\n"
                 f"性格词对所有人、所有群和三种回复方式统一生效"
             )
             return
@@ -239,14 +261,21 @@ class AIFunctionsPlugin:
             self._sender.send_text(target, "概率需要是数字喵")
             return
 
-        persona = parts[1].strip()
+        persona = parts[1].strip() if len(parts) > 1 else ""
         self._ai_response[target.group_id]["f"] = prob
-        self._persona = persona
+        if persona:
+            self._persona = persona
         self._save_settings()
-        self._sender.send_text(
-            target,
-            f"AI自动回复概率设为万分之{prob}，统一性格更新为: {persona}"
-        )
+        if persona:
+            self._sender.send_text(
+                target,
+                f"AI自动回复概率设为万分之{prob}，统一性格更新为: {persona}"
+            )
+        else:
+            self._sender.send_text(
+                target,
+                f"AI自动回复概率设为万分之{prob}（统一性格保持不变）"
+            )
 
     def cmd_ai_set_voice(self, ctx: CommandContext) -> None:
         """设置语音合成的音色描述词（仅管理员）"""
@@ -419,12 +448,7 @@ class AIFunctionsPlugin:
 
     def _maybe_evolve_memory(self, group_id: int, chat_history: List[str],
                              my_reply: str) -> None:
-        """累计到阈值后，在后台把近期对话整理进长期记忆（不占用回复耗时）"""
-        with self._memory_lock:
-            n = self._reply_counts.get(group_id, 0) + 1
-            self._reply_counts[group_id] = n
-        if n % MEMORY_EVOLVE_EVERY != 0:
-            return
+        """每次回复后都在后台把近期对话整理进长期记忆（不占用回复耗时）"""
         threading.Thread(
             target=self._evolve_memory,
             args=(group_id, list(chat_history), my_reply),
@@ -504,8 +528,11 @@ class AIFunctionsPlugin:
     # ==================== 被动触发方法（供 main.py 调用） ====================
 
     def auto_reply(self, ctx: CommandContext, chat_history: List[str],
-                   force: bool = False) -> None:
-        """群自动回复：按概率触发，AI回一句；force=True（被 @ 时）几乎必回"""
+                   force: bool = False, images: List[str] = None) -> None:
+        """群自动回复：按概率触发，AI回一句；force=True（被 @ 时）几乎必回
+
+        images 为当前消息里的图片地址；有图时改用视觉模型，并把图片一起发给模型。
+        """
         target = Target.from_data(ctx.raw_data)
         group_id = target.group_id
 
@@ -536,26 +563,54 @@ class AIFunctionsPlugin:
                        "如果与上面的性格设定或身份冲突，一律以上面的设定为准。\n"
                        + mem_hint)
 
-        messages = [
-            {"role": "system", "content": system},
-            {"role": "user", "content": (
-                f"下面是群里的最近聊天记录：\n{chat_text}\n\n"
-                f"现在说话的是「{speaker}」。"
-                f"请按上面的性格自然地接一句：可以接梗、吐槽、顺着话题聊，"
-                f"也可以在合适的时候提到你记得的群友或你之前的观点。"
-                f"长短随心情，不要每句都套同一个模板，不要解释你为什么这么回复。"
-                f"（最多不超过100字）"
-            )},
-        ]
+        prompt = (
+            f"下面是群里的最近聊天记录：\n{chat_text}\n\n"
+            f"现在说话的是「{speaker}」。"
+            f"请按上面的性格自然地接一句：可以接梗、吐槽、顺着话题聊，"
+            f"也可以在合适的时候提到你记得的群友或你之前的观点。"
+            f"长短随心情，不要每句都套同一个模板，不要解释你为什么这么回复。"
+            f"（最多不超过100字）"
+        )
+
+        # 当前消息带图片：改用视觉模型，把图和文字一起发过去
+        image_parts = [part for part in
+                       (_image_part(u) for u in (images or [])[:MAX_IMAGES_PER_REPLY]) if part]
+        if image_parts:
+            prompt += "这条消息还带了图片，请结合图片里的内容自然地接一句，不要复述聊天记录。"
+            model = Config.AI_MODEL.get("vision") or Config.AI_MODEL["reply"]
+            messages = [
+                {"role": "system", "content": system},
+                {"role": "user",
+                 "content": [{"type": "text", "text": prompt}] + image_parts},
+            ]
+        else:
+            model = Config.AI_MODEL["reply"]
+            messages = [
+                {"role": "system", "content": system},
+                {"role": "user", "content": prompt},
+            ]
 
         def _do():
             try:
-                reply = self._call_ai(
-                    Config.AI_MODEL["reply"],
-                    messages,
-                    temperature=0.9,
-                    max_tokens=300,
-                )
+                try:
+                    reply = self._call_ai(
+                        model,
+                        messages,
+                        temperature=0.9,
+                        max_tokens=300,
+                    )
+                except Exception:
+                    if not image_parts:
+                        raise
+                    # 视觉模型不可用时退回纯文本模型，至少按聊天记录接一句
+                    reply = self._call_ai(
+                        Config.AI_MODEL["reply"],
+                        [{"role": "system", "content": system},
+                         {"role": "user",
+                          "content": prompt + "（这次图片看不到，只能凭聊天记录接话）"}],
+                        temperature=0.9,
+                        max_tokens=300,
+                    )
                 reply = self._truncate(reply)
                 if "silverwind" in reply.lower() or "银风" in reply:
                     return

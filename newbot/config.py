@@ -45,6 +45,7 @@ class Config:
         "chat": "deepseek-ai/DeepSeek-V4-Flash",       # AI对话
         "summarise": "deepseek-ai/DeepSeek-V4-Flash",  # 群聊总结
         "reply": "deepseek-ai/DeepSeek-V4-Flash",      # 群自动回复
+        "vision": "Qwen/Qwen2.5-VL-72B-Instruct",      # 带图片时改用的视觉模型
     }
 
     SYSTEM_USER_IDS = []

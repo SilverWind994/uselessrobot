@@ -5,6 +5,7 @@ import random
 import re
 import threading
 import time
+import xml.etree.ElementTree as ET
 
 import requests
 from typing import Dict, List
@@ -24,9 +25,57 @@ AI_PERSONA = (
 AI_QA_HINT = "\n\n现在有人直接向你提问，请认真、简洁地回答；除非对方明确要求，不要长篇大论。"
 AI_AT_HINT = "\n\n现在有人在群里 @ 你聊天，像真正的群友一样自然地回一句。"
 AI_AUTO_HINT = "\n\n现在没人点你的名，顺手接一句群聊就好，别抢戏。"
+# ai 提问时允许联网：需要时效性信息就先搜再答
+AI_SEARCH_HINT = ("\n\n需要时效性信息（新闻、天气、价格、赛程、最近发生的事）时，"
+                  "先用 web_search 工具搜索，再结合搜索结果回答；搜不到就直接说不知道，不要编。")
 
 # 自动回复概率上限（万分比），防止自己回复自己无限循环
 MAX_AUTO_REPLY_PROB = 2000
+
+# 免费联网搜索：抓 Bing 的 RSS 输出，无需 API Key；Bing 不通时换国内站
+_SEARCH_ENDPOINTS = ("https://www.bing.com/search", "https://cn.bing.com/search")
+_SEARCH_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+              "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
+_WEB_SEARCH_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "web_search",
+        "description": "联网搜索最新信息，适合查询新闻、天气、价格、赛程等时效性内容",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "搜索关键词"},
+            },
+            "required": ["query"],
+        },
+    },
+}
+
+
+def web_search(query: str, limit: int = 5) -> str:
+    """免费联网搜索，返回给模型阅读的纯文本结果；失败时返回错误说明"""
+    query = (query or "").strip()
+    if not query:
+        return "搜索失败：搜索词为空"
+    for base in _SEARCH_ENDPOINTS:
+        try:
+            resp = requests.get(base, params={"q": query, "format": "rss"},
+                                headers={"User-Agent": _SEARCH_UA}, timeout=10)
+            if resp.status_code != 200:
+                continue
+            items = ET.fromstring(resp.text).findall("./channel/item")[:limit]
+        except (requests.RequestException, ET.ParseError, ValueError):
+            continue
+        lines = []
+        for i, item in enumerate(items, 1):
+            title = re.sub(r"\s+", " ", item.findtext("title") or "").strip()
+            link = (item.findtext("link") or "").strip()
+            desc = re.sub(r"\s+", " ", item.findtext("description") or "").strip()
+            lines.append(f"{i}. {title}\n   {link}\n   {desc[:200]}")
+        if lines:
+            return "\n".join(lines)
+    return "搜索失败：暂时无法获取搜索结果"
+
 
 # 一次回复最多附带几张图，控制 token 与延迟
 MAX_IMAGES_PER_REPLY = 3
@@ -192,7 +241,7 @@ class AIFunctionsPlugin:
 
         if key not in self._ai_contexts:
             self._ai_contexts[key] = [
-                {"role": "system", "content": self._persona + AI_QA_HINT}
+                {"role": "system", "content": self._persona + AI_QA_HINT + AI_SEARCH_HINT}
             ]
 
         self._ai_contexts[key].append({"role": "user", "content": args})
@@ -216,7 +265,7 @@ class AIFunctionsPlugin:
     def _do_ai_chat(self, ctx: CommandContext, key: str) -> None:
         target = Target.from_data(ctx.raw_data)
         try:
-            reply = self._call_ai(
+            reply = self._call_ai_with_search(
                 Config.AI_MODEL["chat"],
                 self._ai_contexts[key],
                 temperature=0.8,
@@ -680,15 +729,16 @@ class AIFunctionsPlugin:
 
     # ==================== 底层 API 调用 ====================
 
-    def _call_ai(
+    def _request_chat(
         self,
         model: str,
         messages: List[dict],
         temperature: float = 0.7,
         max_retries: int = 2,
         max_tokens: int = 0,
-    ) -> str:
-        """调用硅基流动 API（OpenAI 兼容格式）"""
+        tools: List[dict] = None,
+    ) -> dict:
+        """调用 OpenAI 兼容接口，返回 assistant 原始消息（可能带 tool_calls）"""
         api_key = Config.SILICONFLOW_API_KEY
         if not api_key or api_key.startswith("sk-") and len(api_key) <= 3:
             raise RuntimeError("API Key 未配置")
@@ -707,6 +757,8 @@ class AIFunctionsPlugin:
         }
         if max_tokens > 0:
             payload["max_tokens"] = max_tokens
+        if tools:
+            payload["tools"] = tools
 
         # ✅ 简单重试
         last_error = None
@@ -715,12 +767,54 @@ class AIFunctionsPlugin:
                 resp = requests.post(url, headers=headers, json=payload, timeout=60)
                 if resp.status_code == 200:
                     data = resp.json()
-                    return data["choices"][0]["message"]["content"].strip()
+                    return data["choices"][0]["message"]
                 last_error = RuntimeError(f"HTTP {resp.status_code}: {resp.text[:200]}")
             except requests.RequestException as e:
                 last_error = e
 
         raise last_error or RuntimeError("AI 调用失败，已重试多次")
+
+    def _call_ai(
+        self,
+        model: str,
+        messages: List[dict],
+        temperature: float = 0.7,
+        max_retries: int = 2,
+        max_tokens: int = 0,
+    ) -> str:
+        """调用模型并取纯文本回复"""
+        msg = self._request_chat(model, messages, temperature, max_retries, max_tokens)
+        return (msg.get("content") or "").strip()
+
+    def _call_ai_with_search(
+        self,
+        model: str,
+        messages: List[dict],
+        temperature: float = 0.7,
+        max_tokens: int = 0,
+        max_rounds: int = 2,
+    ) -> str:
+        """允许联网的对话：模型请求 web_search 时先搜再把结果喂回去，最多搜 max_rounds 轮"""
+        msgs = list(messages)
+        for _ in range(max_rounds):
+            msg = self._request_chat(model, msgs, temperature, max_tokens=max_tokens,
+                                     tools=[_WEB_SEARCH_TOOL])
+            calls = msg.get("tool_calls") or []
+            if not calls:
+                return (msg.get("content") or "").strip()
+            msgs.append({"role": "assistant", "content": msg.get("content") or "",
+                         "tool_calls": calls})
+            for call in calls:
+                fn = call.get("function") or {}
+                try:
+                    query = json.loads(fn.get("arguments") or "{}").get("query", "")
+                except ValueError:
+                    query = ""
+                result = web_search(query) if fn.get("name") == "web_search" else "未知工具"
+                msgs.append({"role": "tool", "tool_call_id": call.get("id", ""),
+                             "content": result})
+        print("[AI search] 搜索轮次用完，改为不联网作答")
+        return self._call_ai(model, msgs, temperature=temperature, max_tokens=max_tokens)
 
     # ==================== 工具方法 ====================
 

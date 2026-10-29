@@ -1496,6 +1496,7 @@ class FarklePlugin:
         self._sender.reply(
             ctx, f"{player['name']} 掷出 {faces}。\n"
                  f"发送「farkle 留 <点数>」锁定至少一颗计分骰，例如「farkle 留 15」；"
+                 f"默认优先用普通骰，点数后加 s 可优先用特制骰，如「farkle 留 1s1s55」；"
                  f"也可在点数后直接加 r（继续掷）或 b（入账），如「farkle 留 14445 b」"
                  + wild_hint)
         self._send_board(ctx, game)
@@ -1540,15 +1541,15 @@ class FarklePlugin:
                 tokens = tokens[:-1]
         dice_str = " ".join(tokens)
 
-        counts, perr = self._parse_keep(dice_str)
+        counts, specials, perr = self._parse_keep(
+            dice_str, {d.get("kind") for d in game["hand"]})
         if perr:
             self._sender.reply(ctx, perr)
             return
 
-        # 从手中挑选骰子：仙贝加成是「仙贝数 × 非仙贝数」，因此同面时最多取
-        # 一半仙贝（收益最大），其余优先赌怪骰（不然不能入账）、普通骰，
-        # 再次作弊骰的非万能面，最后才用万能面顶替；
-        # 未被指定的万能面留在手中（下一轮重掷）
+        # 从手中挑选骰子：默认优先用普通骰；点数后加字母（如「留 1s」）的名额
+        # 才优先用对应的特制骰，特制骰不够时同样回落到普通骰；
+        # 最后才用恶魔骰的万能面顶替，未被指定的万能面留在手中（下一轮重掷）
         hand = list(game["hand"])
 
         def _take(matcher, n):
@@ -1564,23 +1565,17 @@ class FarklePlugin:
 
         selected = []
         wild_faces = []   # 万能面顶替到的点数（用于组合校验）
-        senbei_left = sum(counts.values()) // 2   # 本次锁定最多取这么多仙贝收益最高
         for face in sorted(counts, reverse=True):
             need = counts[face]
-            if senbei_left > 0:
-                # 仙贝按份额取，不能让它的配额覆盖掉这个点数真正还缺的颗数
+            # 加了字母的名额先挑特制骰（万能面也算特制骰的一种）
+            want = min(specials.get(face, 0), need)
+            if want:
                 taken, hand, _ = _take(
-                    lambda d, f=face: d.get("kind") == DICE_SENBEI and d["value"] == f,
-                    min(senbei_left, need))
+                    lambda d, f=face: d.get("kind") != DICE_NORMAL and d["value"] == f,
+                    want)
                 selected += taken
-                senbei_left -= len(taken)
+                wild_faces += [face] * sum(1 for d in taken if _is_wild(d))
                 need -= len(taken)
-            if need:
-                # 赌怪骰留手会一直卡着不能入账，同点数时优先把它锁定掉
-                taken, hand, need = _take(
-                    lambda d, f=face: d.get("kind") == DICE_GAMBLER and d["value"] == f,
-                    need)
-                selected += taken
             if need:
                 taken, hand, need = _take(
                     lambda d, f=face: d.get("kind") == DICE_NORMAL and d["value"] == f,
@@ -1588,7 +1583,8 @@ class FarklePlugin:
                 selected += taken
             if need:
                 taken, hand, need = _take(
-                    lambda d, f=face: not _is_wild(d) and d["value"] == f, need)
+                    lambda d, f=face: d.get("kind") != DICE_NORMAL and not _is_wild(d)
+                    and d["value"] == f, need)
                 selected += taken
             if need:
                 taken, hand, lack = _take(_is_wild, need)
@@ -1620,15 +1616,9 @@ class FarklePlugin:
         n_senbei = sum(1 for d in selected if d.get("kind") == DICE_SENBEI)
         score += SENBEI_BONUS * n_senbei * (len(selected) - n_senbei)
 
-        # 开司骰每次掷出都必须计分：玩家没锁它时自动补选并重新计分；
-        # 若已锁了普通 1，则让它让位给开司骰，保持锁定点数不变
+        # 开司骰每次掷出都必须计分：玩家没锁它时自动补选并重新计分
         forced = [d for d in hand if d.get("kind") == DICE_KAIJI]
         if forced:
-            swap = next((d for d in selected
-                         if d.get("kind") != DICE_KAIJI and d.get("value") == 1), None)
-            if swap is not None:
-                selected.remove(swap)
-                hand.append(swap)
             selected += forced
             hand = [d for d in hand if d.get("kind") != DICE_KAIJI]
             score = _score_dice(selected)
@@ -1997,17 +1987,38 @@ class FarklePlugin:
         return ""
 
     @staticmethod
-    def _parse_keep(rest: str):
-        """解析锁定的点数，返回 (counts, err)；支持「留 15」「留 1 5 5」等多种写法"""
-        cleaned = re.sub(r"[\s,，、]+", "", rest)
+    def _parse_keep(rest: str, hand_kinds=frozenset()):
+        """解析锁定的点数，返回 (counts, specials, err)。
+
+        支持「留 15」「留 1 5 5」等写法；点数后加字母表示这一颗优先用特制骰，
+        如「留 1s1s55」= 两个 1 用特制骰、两个 5 用普通骰。字母取骰型名首字母，
+        也可以统一用 s 表示「特制骰」（同一骰组只有一种特制骰）。
+        """
+        cleaned = re.sub(r"[\s,，、]+", "", rest).lower()
         if not cleaned:
-            return None, "请指定要锁定的骰子点数，例如「farkle 留 15」"
-        counts = {}
-        for c in cleaned:
+            return None, None, "请指定要锁定的骰子点数，例如「farkle 留 15」"
+        special_kinds = {k for k in hand_kinds if k != DICE_NORMAL}
+        counts, specials = {}, {}
+        i = 0
+        while i < len(cleaned):
+            c = cleaned[i]
             if c not in "123456":
-                return None, "只能锁定 1~6 点的骰子喵"
-            counts[int(c)] = counts.get(int(c), 0) + 1
-        return counts, None
+                return None, None, "只能锁定 1~6 点的骰子喵"
+            face = int(c)
+            i += 1
+            mark = ""
+            if i < len(cleaned) and cleaned[i] not in "123456":
+                mark = cleaned[i]
+                i += 1
+            counts[face] = counts.get(face, 0) + 1
+            if mark:
+                if mark == "s" or any(k[0] == mark for k in special_kinds):
+                    specials[face] = specials.get(face, 0) + 1
+                else:
+                    return None, None, (
+                        "点数后的字母要对应手里的特制骰，"
+                        "如「farkle 留 1s」表示这个 1 优先用特制骰喵")
+        return counts, specials, None
 
     # ==================== 展示 ====================
 
@@ -2066,7 +2077,7 @@ class FarklePlugin:
                 lx += 26 + _font(18).getlength(label) + 26
 
         hint = {
-            "keep": "「farkle 留 <点数>」锁定，末尾可加 r/b（如 留 15 b）",
+            "keep": "「farkle 留 <点数>」锁定，末尾可加 r/b（如 留 15 b），点数后加 s 优先用特制骰（如 留 1s1s55）",
             "decide": ("赌怪骰还在桌上，本轮不能入账｜「farkle 掷」继续"
                        if any(d.get("kind") == DICE_GAMBLER for d in game["hand"])
                        else "「farkle 掷」继续博分，或「farkle 入账」收分"),
@@ -2134,6 +2145,8 @@ class FarklePlugin:
             "· 轮到你的第一次掷骰会自动进行，不需要手动发送\n"
             "· 「farkle 留 <点数>」：锁定至少一颗能计分的骰子，"
             "如「farkle 留 15」（=锁 1 个 1 点、1 个 5 点）、「farkle 留 1 5 5」\n"
+            "· 默认优先用普通骰；点数后加 s 表示这个点数优先用特制骰，"
+            "如「farkle 留 1s1s55」= 两个 1 用特制骰、两个 5 用普通骰\n"
             "· 也可把后续动作写在点数末尾，省一条指令："
             "末尾加 r 继续掷（如「farkle 留 14445 r」）、加 b 入账（如「farkle 留 14445 b」）\n"
             "· 锁定后可「farkle 掷」继续博更多分（有爆骰风险），或「farkle 入账」收分换手\n"

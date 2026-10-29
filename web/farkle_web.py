@@ -360,17 +360,11 @@ class Room:
             return "选择的骰子不对喵"
 
         picked = [self.hand[i] for i in idxs]
-        # 开司骰每次掷出都必须计分：未选中时自动补选；
-        # 若已选了普通 1，则让它让位，保持锁定点数不变
+        # 开司骰每次掷出都必须计分：未选中时自动补选
         forced = [i for i in range(len(self.hand))
                   if self.hand[i].get("kind") == DICE_KAIJI and i not in set(idxs)]
         if forced:
-            swap = next((i for i in idxs
-                         if self.hand[i].get("kind") != DICE_KAIJI
-                         and self.hand[i].get("value") == 1), None)
-            if swap is not None:
-                idxs = [i for i in idxs if i != swap]
-            idxs = sorted(list(idxs) + forced)
+            idxs = sorted(set(idxs) | set(forced))
             picked = [self.hand[i] for i in idxs]
         score = _score_dice(picked)
         if score is None:

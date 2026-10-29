@@ -23,6 +23,9 @@ from plugins.mahjong17 import Mahjong17Plugin
 from plugins.farkle import FarklePlugin
 from plugins.tournament import TournamentPlugin
 
+# AI 自动回复读取的群聊上下文条数
+GROUP_CHAT_CONTEXT_LEN = 20
+
 
 class Bot:
     def __init__(self):
@@ -210,7 +213,7 @@ class Bot:
         if not target.is_group:
             return
 
-        # --- 特殊群：缓存最近5条 + 自动回复概率触发 ---
+        # --- 特殊群：缓存最近若干条 + 自动回复概率触发 ---
         # 被 @ 时不受群白名单、CQ 码过滤与概率限制，任何已连接群都尽可能回复
         special = target.group_id in Config.SPECIAL_GROUPS
         if not (at_me or (special and "[CQ:" not in instruction)):
@@ -222,7 +225,7 @@ class Bot:
         # 去掉 CQ 码再进上下文，避免模型看到 [CQ:at,qq=...] 这种裸代码
         clean = re.sub(r"\[CQ:[^\]]+\]", "", instruction).strip()
         chat_list.append(f"{ctx.sender_nickname}:{clean}")
-        while len(chat_list) > 5:
+        while len(chat_list) > GROUP_CHAT_CONTEXT_LEN:
             del chat_list[0]
 
         # 自动回复概率触发（@ 机器人时强制触发）

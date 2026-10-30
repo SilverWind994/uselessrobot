@@ -43,10 +43,12 @@ CAT_STOCK_LINK_SECTOR = 0.25         # 同行业企业联动系数
 CAT_STOCK_DELIST_BAD_RATIO = 0.6     # 股价低于基准价该比例视为持续低迷
 CAT_STOCK_DELIST_BAD_TICKS = 10      # 连续低迷多少个整点才进入退市候选
 CAT_STOCK_CATCHUP_MAX = 6            # 单次最多补发多少个错过的整点
-CAT_STOCK_NEWS_WEB_DAYS = 7          # 网页端只展示最近 days 天的新闻
+CAT_STOCK_NEWS_DAYS = 3              # 新闻只保留最近 days 天
+CAT_STOCK_WORLD_TICKS = 2            # 人工世界走向影响接下来几个整点
+CAT_STOCK_WORLD_ADMIN = 2544910201   # 世界走向指令仅限该管理员私聊使用
 CAT_STOCK_BIG_HOLDING_VALUE = 20000  # 单只股票持仓市值达到该值才可能被针对
 CAT_STOCK_BIG_HOLDING_CHANCE = 0.04  # 每个整点针对大额持仓的概率
-CAT_STOCK_NEWS_MAX = 200             # 新闻最多保留条数（需覆盖网页 7 天）
+CAT_STOCK_NEWS_MAX = 200             # 新闻最多保留条数（需覆盖统计天数）
 CAT_STOCK_POLICY_MIN_SHARES = 1000   # 改公司方针所需的最低持股数
 CAT_STOCK_POLICY_MAX_LEN = 24        # 方针文本最大长度
 CAT_STOCK_COUNTRY_MIN_LISTED = 2     # 每个国家尽量维持的上市公司数
@@ -237,6 +239,13 @@ class CatStockPlugin:
             self.cmd_stock,
             description="喵股市·奇幻世界 if 线股票小游戏（大盘/新闻/持仓/买卖/兑换）"
         )
+        # 隐藏指令：仅管理员私聊可用，不进帮助列表
+        router.register(
+            ["世界走向", "world"],
+            self.cmd_world,
+            description="外部世界走向",
+            permission_check=lambda ctx: ctx.is_private and ctx.user_id == CAT_STOCK_WORLD_ADMIN
+        )
 
     # ==================== 行情存档 ====================
 
@@ -273,6 +282,8 @@ class CatStockPlugin:
         state.setdefault("catalog", list(_LISTING_CATALOG))
         state.setdefault("last_tick", "")
         state.setdefault("day", "")
+        state.setdefault("world", {"arc": "", "relations": []})
+        state.setdefault("world_directives", [])
         return state
 
     def _save_market(self, state: dict) -> None:
@@ -382,6 +393,40 @@ class CatStockPlugin:
                     "没有这个子命令喵～ 可用：大盘 / 新闻 / 持仓 / 买 / 卖 / 充值 / 提现 / 排行 / 方针\n"
                     "发送「喵股市 帮助」查看完整说明"
                 )
+
+    # ==================== 隐藏指令：世界走向 ====================
+
+    def cmd_world(self, ctx: CommandContext) -> None:
+        target = Target.from_data(ctx.raw_data)
+        raw = ctx.get_args().strip()
+        ticks = CAT_STOCK_WORLD_TICKS
+        text = raw
+        head, _, tail = raw.partition(" ")
+        if head.isdigit():
+            ticks = max(1, min(48, int(head)))
+            text = tail.strip()
+        with self._lock:
+            market = self._load_market()
+            directives = market.setdefault("world_directives", [])
+            if text:
+                directives.append({"text": text[:100],
+                                   "ticks": ticks,
+                                   "remaining": ticks,
+                                   "at": datetime.now().strftime("%m-%d %H:%M")})
+                market["world_directives"] = directives[-20:]
+                message = (f"已记录世界走向：{text[:100]}\n"
+                           f"将在接下来 {ticks} 个整点影响世界局势、新闻与股价。")
+            else:
+                active = [d for d in directives if int(d.get("remaining", 0)) > 0]
+                if active:
+                    message = "当前生效的世界走向：\n" + "\n".join(
+                        f"- {d.get('text', '')}（剩 {int(d.get('remaining', 0))} 个整点）"
+                        for d in active)
+                else:
+                    message = ("当前没有生效中的世界走向。\n"
+                               "用法：世界走向 <窗口数> <内容>（窗口数可省略，默认 2）")
+            self._save_market(market)
+        self._sender.send_text(target, message)
 
     # ==================== 展示 ====================
 
@@ -883,9 +928,9 @@ class CatStockPlugin:
     # ==================== 网页端数据接口 ====================
 
     def _recent_news(self, news: list) -> list:
-        """只保留最近 CAT_STOCK_NEWS_WEB_DAYS 天的新闻"""
+        """只保留最近 CAT_STOCK_NEWS_DAYS 天的新闻"""
         now = datetime.now()
-        cutoff = now.timestamp() - CAT_STOCK_NEWS_WEB_DAYS * 86400
+        cutoff = now.timestamp() - CAT_STOCK_NEWS_DAYS * 86400
         result = []
         for item in news:
             ts = item.get("ts")
@@ -930,7 +975,16 @@ class CatStockPlugin:
         news = [{"time": item.get("time", ""),
                  "title": item.get("title", ""),
                  "detail": item.get("detail", "")}
-                for item in self._recent_news(market.get("news", []))[:60]]
+                for item in self._recent_news(market.get("news", []))[:40]]
+        world = market.get("world") or {}
+        world_view = {
+            "arc": str(world.get("arc") or ""),
+            "relations": [{
+                "a": rel.get("a", ""), "a_name": self._country_name(rel.get("a", "")),
+                "b": rel.get("b", ""), "b_name": self._country_name(rel.get("b", "")),
+                "state": rel.get("state", ""),
+            } for rel in (world.get("relations") or [])[:10]],
+        }
 
         data = {
             "open": self._is_open(now),
@@ -941,6 +995,7 @@ class CatStockPlugin:
             "up": up,
             "down": len(rows) - up,
             "news": news,
+            "world": world_view,
             "rules": {
                 "initial_catnip": CAT_STOCK_INITIAL_CATNIP,
                 "fish_to_catnip": CAT_STOCK_FISH_TO_CATNIP,
@@ -1073,8 +1128,11 @@ class CatStockPlugin:
         if snapshot.get("last_tick") == key:
             return
 
+        # 人工世界走向：接下来两个整点内持续生效
+        world = [d.get("text", "") for d in snapshot.get("world_directives", [])
+                 if int(d.get("remaining", 0)) > 0]
         # AI 生成新闻较慢，先不占用锁，避免玩家交易被阻塞
-        ai_news, effects = self._make_news(snapshot, now)
+        ai_news, effects, world_update = self._make_news(snapshot, now, world)
 
         with self._lock:
             market = self._load_market()
@@ -1142,8 +1200,18 @@ class CatStockPlugin:
                 news_entries.append({"time": stamp, "ts": stamp_ts, "title": "世界暂时平静，大盘随资金情绪小幅波动",
                                      "detail": ""})
 
-            market["news"] = (news_entries + market["news"])[:CAT_STOCK_NEWS_MAX]
+            market["news"] = self._recent_news(
+                news_entries + market["news"])[:CAT_STOCK_NEWS_MAX]
             market["last_tick"] = key
+            # 世界走向在本次整点已生效，剩余窗口数减一
+            directives = market.get("world_directives") or []
+            for item in directives:
+                if int(item.get("remaining", 0)) > 0:
+                    item["remaining"] = int(item.get("remaining", 0)) - 1
+            market["world_directives"] = [
+                d for d in directives if int(d.get("remaining", 0)) > 0]
+            if world_update:
+                market["world"] = world_update
             self._save_market(market)
             self._save_stock_players(players)
 
@@ -1339,18 +1407,20 @@ class CatStockPlugin:
         return ("这个世界各领域的知名喵喵（可选择性提及，不必强制出场）：\n"
                 + "\n".join(parts) + "\n")
 
-    def _make_news(self, market: dict, now: datetime) -> Tuple[List[dict], List[dict]]:
+    def _make_news(self, market: dict, now: datetime,
+                   world: Optional[List[str]] = None) -> Tuple[List[dict], List[dict], Optional[dict]]:
         try:
-            news, effects = self._ai_news(market, now)
+            news, effects, world_update = self._ai_news(market, now, world)
             if news:
-                return news, effects
+                return news, effects, world_update
         except Exception as e:
             print(f"[cat_stock] AI news failed, use fallback: {e}")
-        return self._fallback_news(market)
+        return self._fallback_news(market, world)
 
-    def _ai_news(self, market: dict, now: datetime) -> Tuple[List[dict], List[dict]]:
+    def _ai_news(self, market: dict, now: datetime,
+                 world: Optional[List[str]] = None) -> Tuple[List[dict], List[dict], Optional[dict]]:
         if not self._ai:
-            return [], []
+            return [], [], None
         companies = market["companies"]
         lines = []
         has_policy = False
@@ -1370,12 +1440,32 @@ class CatStockPlugin:
             recent_block = ("\n最近几小时的新闻（供你延续事件线索，新新闻可以和它们呼应或升级）：\n"
                             + "\n".join(f"- {n.get('title', '')}" for n in recent_news if n.get("title"))
                             + "\n")
+        world_block = ""
+        if world:
+            world_block = ("\n本小时的世界主线（由世界观察者下达，优先级最高，"
+                           "必须体现在新闻和股价影响里）：\n"
+                           + "\n".join(f"- {w}" for w in world)
+                           + "\n请让至少一条新闻直接承接这些世界走向，并给出相应的涨跌影响。\n")
+        state = market.get("world") or {}
+        state_block = ""
+        arc = str(state.get("arc") or "").strip()
+        relations = state.get("relations") or []
+        if arc or relations:
+            state_block = "\n当前世界格局（必须延续，不要与已有关系自相矛盾）：\n"
+            if arc:
+                state_block += f"- 长期主线：{arc}\n"
+            for rel in relations[:10]:
+                state_block += (f"- {self._country_name(rel.get('a', ''))}"
+                                f" ↔ {self._country_name(rel.get('b', ''))}："
+                                f"{rel.get('state', '')}\n")
+            state_block += ("各国存在合纵连横：盟友可能因共同敌人靠拢，敌对国可能互相制裁、"
+                            "断商路、边境摩擦；新闻要顺着这些关系发展，而不是每个小时另起炉灶。\n")
         prompt = (
             "你是一个奇幻世界的财经新闻主编，世界背景是《猫猫远征队》的 if 线："
             "各国之间存在战争、魔物袭击、魔法灾变、王室更替、龙潮、亡灵复苏等事件。\n"
             f"现在是 {now.strftime('%H:%M')}，股市开市。\n"
             "以下是当前上市企业（代码｜名称｜国家｜行业｜现价｜近1小时涨跌）：\n"
-            + "\n".join(lines) + recent_block +
+            + "\n".join(lines) + recent_block + world_block + state_block +
             "\n\n请生成 1~3 条本小时的世界新闻。"
             "每条新闻必须与股市直接相关，并且至少给出 1 条能由这条新闻解释的股价影响"
             "（例如战争利好军工、灾变利空产地企业、商路被切断利空物流）。"
@@ -1391,9 +1481,13 @@ class CatStockPlugin:
             "但不必强行出场，也不必每条新闻都提到。\n"
             "只输出一个 JSON 对象，不要解释，格式：\n"
             '{"news":[{"title":"新闻标题","detail":"一句话详情",'
-            '"effects":[{"code":"股票代码","pct":0.15},{"country":"国家代码","pct":-0.1}]}]}\n'
+            '"effects":[{"code":"股票代码","pct":0.15},{"country":"国家代码","pct":-0.1}]}],'
+            '"world":{"arc":"当前世界局势主线（一句话）",'
+            '"relations":[{"a":"国家代码","b":"国家代码","state":"同盟/敌对/贸易往来/边境摩擦"}]}}\n'
             "pct 是小数涨跌幅，范围 -0.2 ~ 0.25，正数为涨；code 和 country 二选一；"
             "每条新闻给 1~3 条 effects。"
+            "world 是可选的：如果本小时局势有推进，就给出更新后的完整长期主线"
+            "（不超过一句话）和仍然成立的完整国家关系列表（最多 10 条，没有变化可省略）。"
         )
         text = self._ai._call_ai(
             Config.AI_MODEL["chat"],
@@ -1401,11 +1495,11 @@ class CatStockPlugin:
              {"role": "user", "content": prompt}],
             temperature=0.9,
             max_retries=1,
-            max_tokens=700,
+            max_tokens=900,
         )
         data = _extract_json(text)
         if not data:
-            return [], []
+            return [], [], None
 
         codes = {c["code"] for c in companies.values()}
         names = {c["name"] for c in companies.values()}
@@ -1450,13 +1544,45 @@ class CatStockPlugin:
                 news.append({"title": "市场突传未署名消息，交易所正在核实",
                              "detail": "多家机构已暂停报价"})
                 effects = top_effects
-        return news, effects
+        return news, effects, self._parse_world(data, company_countries=country_codes)
 
-    def _fallback_news(self, market: dict) -> Tuple[List[dict], List[dict]]:
+    def _parse_world(self, data: dict, company_countries: set) -> Optional[dict]:
+        """校验 AI 返回的世界格局，避免脏数据写入行情文件"""
+        raw = data.get("world")
+        if not isinstance(raw, dict):
+            return None
+        arc = str(raw.get("arc") or "").strip()[:120]
+        relations = []
+        for item in raw.get("relations") or []:
+            if not isinstance(item, dict):
+                continue
+            a = str(item.get("a") or "").strip()
+            b = str(item.get("b") or "").strip()
+            state = str(item.get("state") or "").strip()[:16]
+            if a in company_countries and b in company_countries and a != b and state:
+                relations.append({"a": a, "b": b, "state": state})
+            if len(relations) >= 10:
+                break
+        if not arc and not relations:
+            return None
+        return {"arc": arc, "relations": relations,
+                "updated": datetime.now().strftime("%m-%d %H:%M")}
+
+    def _fallback_news(self, market: dict,
+                       world: Optional[List[str]] = None) -> Tuple[List[dict], List[dict], None]:
         companies = market["companies"]
         picks = random.sample(_FALLBACK_EVENTS, k=random.randint(1, 2))
         news = []
         effects = []
+        # AI 不可用时，人工世界走向仍要体现在新闻和盘面上
+        if world:
+            text = world[-1][:50]
+            news.append({"title": f"世界走向：{text}",
+                         "detail": "世界观察者的动向正在影响各国市场情绪"})
+            if companies:
+                comp = random.choice(list(companies.values()))
+                effects.append({"country": comp["country"],
+                                "pct": round(random.uniform(-0.18, 0.18), 3)})
         for title, targets in picks:
             news.append({"title": title, "detail": "本消息由喵股市编辑部整理"})
             for code, pct in targets:
@@ -1477,7 +1603,7 @@ class CatStockPlugin:
                 "title": f"{companies[code]['name']}（{code}）盘中突然{sign}",
                 "detail": detail,
             })
-        return news, effects
+        return news, effects, None
 
     # ==================== 整点播报 ====================
 
@@ -1497,6 +1623,10 @@ class CatStockPlugin:
                 lines.append(f"  {item['detail']}")
         lines.append("")
         lines.append(f"盘面：在市 {len(comps)} 家｜上涨 {up}｜下跌 {down}")
+        world = market.get("world") or {}
+        arc = str(world.get("arc") or "").strip()
+        if arc:
+            lines.append(f"🌍 世界局势：{arc}")
 
         movers = sorted(moved, key=lambda x: x[1], reverse=True)
         hottest = [m for m in movers if m[1] > 3][:3]

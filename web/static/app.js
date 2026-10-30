@@ -3678,10 +3678,8 @@ const stockWalletEl = document.getElementById('stock-wallet');
 const stockRulesEl = document.getElementById('stock-rules');
 const stockExchangeEl = document.getElementById('stock-exchange-hint');
 const stockMsgEl = document.getElementById('stock-msg');
-const stockCodesEl = document.getElementById('stock-codes');
-const stockCodeEl = document.getElementById('stock-code');
-const stockSharesEl = document.getElementById('stock-shares');
 const stockFishEl = document.getElementById('stock-fish-amount');
+const stockWorldEl = document.getElementById('stock-world');
 const stockMarketBodyEl = document.getElementById('stock-market-body');
 const stockMarketSubEl = document.getElementById('stock-market-sub');
 const stockHoldingsEl = document.getElementById('stock-holdings');
@@ -3729,9 +3727,6 @@ function renderStock(data) {
   ].map(([label, val]) => `
     <div class="stat"><div class="stat-num">${esc(val)}</div><div class="stat-label">${label}</div></div>`).join('');
 
-  stockCodesEl.innerHTML = companies.map(
-    (c) => `<option value="${esc(c.code)}">${esc(c.name)}</option>`).join('');
-
   stockMarketBodyEl.innerHTML = companies.map((c) => `
     <tr>
       <td>${esc(c.code)}</td>
@@ -3740,11 +3735,25 @@ function renderStock(data) {
       <td>${esc(c.sector)}</td>
       <td>${Number(c.price).toFixed(1)}</td>
       ${stockPctCell(c.pct)}
+      <td>
+        <div class="stock-trade">
+          <input class="stock-trade-shares" type="number" min="10" step="1" placeholder="股数" data-code="${esc(c.code)}">
+          <button class="btn btn-primary btn-sm stock-buy" type="button" data-code="${esc(c.code)}">买</button>
+          <button class="btn btn-ghost btn-sm stock-sell" type="button" data-code="${esc(c.code)}">卖</button>
+        </div>
+      </td>
     </tr>`).join('');
   if (!companies.length) {
-    stockMarketBodyEl.innerHTML = '<tr><td colspan="6" class="room-empty">暂无行情喵</td></tr>';
+    stockMarketBodyEl.innerHTML = '<tr><td colspan="7" class="room-empty">暂无行情喵</td></tr>';
   }
   stockMarketSubEl.textContent = `${data.status_line}｜行情每个整点更新`;
+
+  const world = data.world || {};
+  const relLines = (world.relations || []).map(
+    (r) => `${esc(r.a_name)} ↔ ${esc(r.b_name)}：${esc(r.state)}`).join('；');
+  stockWorldEl.innerHTML = world.arc
+    ? `主线：${esc(world.arc)}${relLines ? `<br>国家关系：${relLines}` : ''}`
+    : '世界局势暂时平静，等待下一次风吹草动。';
 
   stockHoldSubEl.textContent =
     `总市值 ${stockMoney(Math.round(p.total_value || 0))}｜总浮动 ${stockMoney(p.total_pnl)}`;
@@ -3841,26 +3850,28 @@ async function stockAction(path, body, actionName) {
 
 document.getElementById('btn-stock-refresh').addEventListener('click', () => loadStock());
 
-document.getElementById('btn-stock-buy').addEventListener('click', () => {
-  const code = stockCodeEl.value.trim();
-  const shares = stockSharesEl.value.trim();
-  if (!code || !shares) {
-    stockMsgEl.textContent = '股票和股数都要填喵';
+stockMarketBodyEl.addEventListener('click', (e) => {
+  const btn = e.target.closest('.stock-buy, .stock-sell');
+  if (!btn) return;
+  const code = btn.dataset.code || '';
+  const input = btn.closest('.stock-trade').querySelector('input');
+  const shares = input ? input.value.trim() : '';
+  if (!shares) {
+    stockMsgEl.textContent = '先填要交易的股数喵';
     stockMsgEl.classList.remove('ok');
     return;
   }
-  stockAction('/api/stock/buy', { code, shares }, '买入');
+  const isBuy = btn.classList.contains('stock-buy');
+  stockAction(`/api/stock/${isBuy ? 'buy' : 'sell'}`, { code, shares },
+    isBuy ? '买入' : '卖出');
 });
 
-document.getElementById('btn-stock-sell').addEventListener('click', () => {
-  const code = stockCodeEl.value.trim();
-  const shares = stockSharesEl.value.trim();
-  if (!code || !shares) {
-    stockMsgEl.textContent = '股票和股数都要填喵';
-    stockMsgEl.classList.remove('ok');
-    return;
-  }
-  stockAction('/api/stock/sell', { code, shares }, '卖出');
+stockMarketBodyEl.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter' || !e.target.classList.contains('stock-trade-shares')) return;
+  e.preventDefault();
+  const box = e.target.closest('.stock-trade');
+  const buyBtn = box && box.querySelector('.stock-buy');
+  if (buyBtn) buyBtn.click();
 });
 
 document.getElementById('btn-stock-deposit').addEventListener('click', () => {

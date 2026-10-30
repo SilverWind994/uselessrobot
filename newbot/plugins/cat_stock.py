@@ -4,7 +4,7 @@ import random
 import re
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 
 from config import Config
@@ -26,7 +26,8 @@ CAT_STOCK_CATNIP_TO_FISH = 105       # 105 猫薄荷 -> 1 鱼干
 CAT_STOCK_BUY_FEE = 0.01             # 买入手续费 1%
 CAT_STOCK_SELL_FEE = 0.01            # 卖出手续费 1%
 CAT_STOCK_OPEN_HOUR = 8              # 每日 08:00 开市
-CAT_STOCK_CLOSE_HOUR = 12            # 每日 12:00 收市（一天四个交易整点）
+CAT_STOCK_CLOSE_HOUR = 20            # 每日 20:00 收市
+CAT_STOCK_LOCK_HOURS = 4             # 买入后需满 4 个开市小时才能卖出
 CAT_STOCK_MAX_SHARES = 1_000_000     # 单笔最大股数
 CAT_STOCK_MIN_SHARES = 10            # 单笔买入最少股数
 CAT_STOCK_DELIST_RATE = 0.7          # 退市清算按最新价的 70% 赔付
@@ -183,13 +184,31 @@ def _extract_json(text: str):
     return data if isinstance(data, dict) else None
 
 
+def _market_hours_between(start: datetime, end: datetime) -> float:
+    """计算两段时间内落在开市时段（08:00~20:00）的小时数，休市时间不计入"""
+    if end <= start:
+        return 0.0
+    total = 0.0
+    day = start.date()
+    last = end.date()
+    while day <= last:
+        open_at = datetime(day.year, day.month, day.day, CAT_STOCK_OPEN_HOUR)
+        close_at = datetime(day.year, day.month, day.day, CAT_STOCK_CLOSE_HOUR)
+        seg_start = max(start, open_at)
+        seg_end = min(end, close_at)
+        if seg_end > seg_start:
+            total += (seg_end - seg_start).total_seconds() / 3600.0
+        day += timedelta(days=1)
+    return total
+
+
 def _lot_sellable(lot: dict) -> bool:
-    """按自然日计算锁定期：买入当天不能卖，次日 0 点起可卖"""
+    """买入后满 4 个开市小时才能卖出，休市时间不计入"""
     try:
-        bought = datetime.fromtimestamp(float(lot.get("ts", 0))).date()
+        bought = datetime.fromtimestamp(float(lot.get("ts", 0)))
     except (OSError, ValueError, OverflowError):
         return True
-    return bought < datetime.now().date()
+    return _market_hours_between(bought, datetime.now()) >= CAT_STOCK_LOCK_HOURS
 
 
 class CatStockPlugin:
@@ -469,7 +488,7 @@ class CatStockPlugin:
         total_pnl = total_value - total_cost
         lines.append("")
         lines.append(f"总市值：{total_value:.0f}｜总浮动：{total_pnl:+.0f}｜猫薄荷：{catnip}")
-        lines.append("（买入当天不能卖出，次日开市后即可卖出）")
+        lines.append("（买入后满 4 个交易小时才能卖出，休市时间不计入）")
         self._sender.send_text(target, "\n".join(lines))
 
     # ==================== 盈亏排行 ====================
@@ -590,7 +609,7 @@ class CatStockPlugin:
             f"买入成交：{comp['code']} {comp['name']} {shares} 股\n"
             f"成交价 {self._fmt_price(price)}｜成交额 {cost}｜手续费 {fee}\n"
             f"剩余猫薄荷 {new_balance}\n"
-            f"（买入当天不能卖出，次日开市后即可卖出）"
+            f"（买入后满 4 个交易小时才能卖出，休市时间不计入）"
         )
 
     def _sell(self, target: Target, qq: int, rest: List[str]) -> None:
@@ -628,7 +647,7 @@ class CatStockPlugin:
                 self._sender.send_text(
                     target,
                     f"{comp['code']} 当前没有可卖出的股份\n"
-                    f"买入当天不能卖出，次日开市后即可卖出"
+                    f"买入后满 4 个交易小时才能卖出（只计算开市时间）"
                 )
                 return
             if shares > sellable:
@@ -636,7 +655,7 @@ class CatStockPlugin:
                 self._sender.send_text(
                     target,
                     f"可卖数量不足喵：{comp['code']} 现在只能卖 {sellable} 股"
-                    f"（其余为当天买入，需等到次日）"
+                    f"（其余为未满 4 个交易小时的持仓）"
                 )
                 return
 
@@ -904,7 +923,7 @@ class CatStockPlugin:
                 "catnip_to_fish": CAT_STOCK_CATNIP_TO_FISH,
                 "buy_fee": CAT_STOCK_BUY_FEE,
                 "sell_fee": CAT_STOCK_SELL_FEE,
-                "lock_note": "买入当天不能卖，次日开市后可卖",
+                "lock_note": "买入后满 4 个交易小时才能卖出（休市不计）",
                 "max_shares": CAT_STOCK_MAX_SHARES,
                 "delist_rate": CAT_STOCK_DELIST_RATE,
             },
@@ -970,12 +989,13 @@ class CatStockPlugin:
             "【喵股市 · 奇幻世界 if 线】\n"
             "这是猫猫远征队世界观的一条平行时间线，涨跌与新闻不会影响主线存档。\n"
             f"开市时间：每天 {CAT_STOCK_OPEN_HOUR:02d}:00 ~ {CAT_STOCK_CLOSE_HOUR:02d}:00，"
-            "共四个交易整点，每个整点 AI 发布世界新闻并重新定价；休市期间不能买卖。\n"
+            "每个整点 AI 发布世界新闻并重新定价；休市期间不能买卖。\n"
             f"初始猫薄荷：每人 {CAT_STOCK_INITIAL_CATNIP}（首次使用自动到账）\n"
             f"充值：喵股市 充值 <鱼干数>（1 鱼干 = {CAT_STOCK_FISH_TO_CATNIP} 猫薄荷）\n"
             f"提现：喵股市 提现 <鱼干数>（{CAT_STOCK_CATNIP_TO_FISH} 猫薄荷 = 1 鱼干）\n"
             f"手续费：买入 {CAT_STOCK_BUY_FEE:.0%}、卖出 {CAT_STOCK_SELL_FEE:.0%}（每笔最低 1 猫薄荷）\n"
-            "交易规则：买入当天不能卖出，次日开市后即可卖出；单笔最少 10 股、最多 100 万股\n"
+            f"交易规则：买入后满 {CAT_STOCK_LOCK_HOURS} 个开市小时才能卖出（休市时间不计）；"
+            "单笔最少 10 股、最多 100 万股\n"
             "涨跌：不设涨跌停，单小时大致 -20% ~ +25%；事件会延续发酵，"
             "同国与同行业的企业也会联动涨跌\n"
             f"退市：企业上市满 {CAT_STOCK_DELIST_MIN_DAYS} 天后才可能因战争/灾变退市（偶发事件），"

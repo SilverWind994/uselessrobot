@@ -52,6 +52,8 @@ CAT_STOCK_NEWS_MAX = 200             # 新闻最多保留条数（需覆盖统�
 CAT_STOCK_POLICY_MIN_SHARES = 1000   # 改公司方针所需的最低持股数
 CAT_STOCK_POLICY_MAX_LEN = 24        # 方针文本最大长度
 CAT_STOCK_COUNTRY_MIN_LISTED = 2     # 每个国家尽量维持的上市公司数
+CAT_STOCK_COMPANY_MIN = 35           # 市场最少保持的上市公司数
+CAT_STOCK_COMPANY_MAX = 70           # 市场最多容纳的上市公司数
 
 # ==================== 世界地理 ====================
 # 依据世界地图整理：land 为陆上邻国，sea 为海上/天空可达国家
@@ -1175,7 +1177,7 @@ class CatStockPlugin:
         world = [d.get("text", "") for d in snapshot.get("world_directives", [])
                  if int(d.get("remaining", 0)) > 0]
         # AI 生成新闻较慢，先不占用锁，避免玩家交易被阻塞
-        ai_news, effects, world_update = self._make_news(snapshot, now, world)
+        ai_news, effects, world_update, ai_actions = self._make_news(snapshot, now, world)
 
         with self._lock:
             market = self._load_market()
@@ -1220,6 +1222,8 @@ class CatStockPlugin:
             listed = self._maybe_list(market)
             if listed:
                 event_news.append(listed)
+            # 4.1) AI 依据世界走向提出的产业上市 / 下市
+            event_news.extend(self._apply_ai_actions(market, players, ai_actions))
 
             # 5) 价格上下限，并记录本小时走势供下一小时延续
             for comp in companies.values():
@@ -1347,7 +1351,7 @@ class CatStockPlugin:
             else:
                 comp["bad_ticks"] = 0
 
-        if len(companies) <= 20 or random.random() >= CAT_STOCK_DELIST_CHANCE:
+        if len(companies) <= CAT_STOCK_COMPANY_MIN or random.random() >= CAT_STOCK_DELIST_CHANCE:
             return None
         eligible = [c for c in companies.values()
                     if int(c.get("bad_ticks", 0)) >= CAT_STOCK_DELIST_BAD_TICKS]
@@ -1382,7 +1386,7 @@ class CatStockPlugin:
     def _maybe_list(self, market: dict) -> Optional[dict]:
         companies = market["companies"]
         catalog = market.get("catalog", [])
-        if not catalog or len(companies) >= 40:
+        if not catalog or len(companies) >= CAT_STOCK_COMPANY_MAX:
             return None
 
         # 保证每个国家至少有 CAT_STOCK_COUNTRY_MIN_LISTED 家：
@@ -1416,6 +1420,81 @@ class CatStockPlugin:
         return {"title": f"新上市：{item['name']}（{item['code']}）挂牌交易",
                 "detail": f"来自 {self._country_name(item['country'])}，{reason}；"
                           f"首日参考价 {self._fmt_price(price)}，行业 {item.get('sector', '综合')}"}
+
+    def _apply_ai_actions(self, market: dict, players: dict,
+                          actions: Optional[dict]) -> List[dict]:
+        """落实 AI 依据世界走向提出的新产业上市 / 产业下市"""
+        if not actions:
+            return []
+        companies = market["companies"]
+        catalog = market.setdefault("catalog", [])
+        catalog_codes = {str(c.get("code", "")).upper() for c in catalog}
+        catalog_names = {str(c.get("name", "")) for c in catalog}
+        existing_names = {c["name"] for c in companies.values()}
+        news = []
+
+        for item in actions.get("listings") or []:
+            if len(companies) >= CAT_STOCK_COMPANY_MAX:
+                break
+            code = str(item.get("code") or "").strip().upper()
+            name = str(item.get("name") or "").strip()[:10]
+            country = str(item.get("country") or "").strip()
+            sector = str(item.get("sector") or "").strip()[:4]
+            base = item.get("base")
+            if (not re.fullmatch(r"[A-Z]{3}", code) or code in companies
+                    or code in catalog_codes or not name
+                    or name in existing_names or name in catalog_names
+                    or country not in _COUNTRY_GEO or not sector
+                    or not isinstance(base, (int, float)) or not 20 <= base <= 300):
+                continue
+            base = int(base)
+            price = float(max(10, int(base * random.uniform(0.85, 1.15))))
+            companies[code] = {
+                "code": code, "name": name, "country": country, "sector": sector,
+                "base": base, "price": price, "prev_close": price, "bad_ticks": 0,
+            }
+            existing_names.add(name)
+            news.append({
+                "title": f"新产业上市：{name}（{code}）挂牌交易",
+                "detail": (f"世界局势催生新的{sector}企业，落户"
+                           f"{self._country_name(country)}；首日参考价 {self._fmt_price(price)}"),
+            })
+
+        for item in actions.get("delistings") or []:
+            if len(companies) <= CAT_STOCK_COMPANY_MIN:
+                break
+            code = str(item.get("code") or "").strip().upper()
+            comp = companies.get(code)
+            if not comp:
+                continue
+            news.append(self._force_delist(market, players, comp,
+                                           str(item.get("reason") or "").strip()[:40]))
+        return news
+
+    def _force_delist(self, market: dict, players: dict, comp: dict, reason: str) -> dict:
+        """按世界走向强制摘牌，持仓按退市比例清算"""
+        code = comp["code"]
+        payout = int(round(float(comp["price"]) * CAT_STOCK_DELIST_RATE))
+        paid = False
+        for st in players.values():
+            lots = st.get("holdings", {}).pop(code, None)
+            if not lots:
+                continue
+            shares = self._shares_of(lots)
+            if shares > 0:
+                st["catnip"] = int(st.get("catnip", 0)) + shares * payout
+                paid = True
+        market["companies"].pop(code, None)
+        market.setdefault("catalog", []).append({
+            "code": comp["code"], "name": comp["name"], "country": comp["country"],
+            "sector": comp["sector"], "base": comp["base"],
+        })
+        detail = reason or "世界局势变动，该产业整体退出市场"
+        detail += f"，持仓按最新价 {CAT_STOCK_DELIST_RATE:.0%} 强制清算"
+        if paid:
+            detail += "（本小时有玩家持仓被清算）"
+        return {"title": f"产业下市：{comp['name']}（{code}）正式摘牌",
+                "detail": detail}
 
     # ==================== AI 新闻生成 ====================
 
@@ -1451,19 +1530,21 @@ class CatStockPlugin:
                 + "\n".join(parts) + "\n")
 
     def _make_news(self, market: dict, now: datetime,
-                   world: Optional[List[str]] = None) -> Tuple[List[dict], List[dict], Optional[dict]]:
+                   world: Optional[List[str]] = None
+                   ) -> Tuple[List[dict], List[dict], Optional[dict], Optional[dict]]:
         try:
-            news, effects, world_update = self._ai_news(market, now, world)
-            if news:
-                return news, effects, world_update
+            news, effects, world_update, actions = self._ai_news(market, now, world)
+            if news or actions:
+                return news, effects, world_update, actions
         except Exception as e:
             print(f"[cat_stock] AI news failed, use fallback: {e}")
         return self._fallback_news(market, world)
 
     def _ai_news(self, market: dict, now: datetime,
-                 world: Optional[List[str]] = None) -> Tuple[List[dict], List[dict], Optional[dict]]:
+                 world: Optional[List[str]] = None
+                 ) -> Tuple[List[dict], List[dict], Optional[dict], Optional[dict]]:
         if not self._ai:
-            return [], [], None
+            return [], [], None, None
         companies = market["companies"]
         lines = []
         has_policy = False
@@ -1532,6 +1613,15 @@ class CatStockPlugin:
             "每条新闻给 1~3 条 effects。"
             "world 是可选的：如果本小时局势有推进，就给出更新后的完整长期主线"
             "（不超过一句话）和仍然成立的完整国家关系列表（最多 10 条，没有变化可省略）。"
+            "\n如果世界走向明确要求某个产业兴起、或局势催生全新行业，可以额外返回 listings"
+            "（最多 2 家，没有就省略）："
+            '{"code":"三位大写字母代码","name":"企业名","country":"国家代码",'
+            '"sector":"行业名（不超过4字）","base":基准价整数20~300}；'
+            "如果世界走向明确要求某行业整体衰败退出，可以额外返回 delistings"
+            "（最多 2 家，没有就省略）："
+            '{"code":"现有股票代码","reason":"一句话原因"}。'
+            "只有世界走向直接涉及产业兴衰时才给，平时不要凭空增减上市公司；"
+            "这类上市与摘牌会由交易所自动播报，不需要写进 news。\n"
         )
         text = self._ai._call_ai(
             Config.AI_MODEL["chat"],
@@ -1543,7 +1633,7 @@ class CatStockPlugin:
         )
         data = _extract_json(text)
         if not data:
-            return [], [], None
+            return [], [], None, None
 
         codes = {c["code"] for c in companies.values()}
         names = {c["name"] for c in companies.values()}
@@ -1588,7 +1678,17 @@ class CatStockPlugin:
                 news.append({"title": "市场突传未署名消息，交易所正在核实",
                              "detail": "多家机构已暂停报价"})
                 effects = top_effects
-        return news, effects, self._parse_world(data, company_countries=country_codes)
+        return (news, effects,
+                self._parse_world(data, company_countries=country_codes),
+                self._parse_actions(data))
+
+    def _parse_actions(self, data: dict) -> Optional[dict]:
+        """收集 AI 提出的新产业上市 / 产业下市，具体校验在落地时进行"""
+        listings = [x for x in (data.get("listings") or []) if isinstance(x, dict)][:2]
+        delistings = [x for x in (data.get("delistings") or []) if isinstance(x, dict)][:2]
+        if not listings and not delistings:
+            return None
+        return {"listings": listings, "delistings": delistings}
 
     def _parse_world(self, data: dict, company_countries: set) -> Optional[dict]:
         """校验 AI 返回的世界格局，避免脏数据写入行情文件"""
@@ -1614,7 +1714,8 @@ class CatStockPlugin:
                 "updated": datetime.now().strftime("%m-%d %H:%M")}
 
     def _fallback_news(self, market: dict,
-                       world: Optional[List[str]] = None) -> Tuple[List[dict], List[dict], None]:
+                       world: Optional[List[str]] = None
+                       ) -> Tuple[List[dict], List[dict], None, None]:
         companies = market["companies"]
         picks = random.sample(_FALLBACK_EVENTS, k=random.randint(1, 2))
         news = []
@@ -1648,7 +1749,7 @@ class CatStockPlugin:
                 "title": f"{companies[code]['name']}（{code}）盘中突然{sign}",
                 "detail": detail,
             })
-        return news, effects, None
+        return news, effects, None, None
 
     # ==================== 整点播报 ====================
 

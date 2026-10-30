@@ -26,14 +26,19 @@ CAT_STOCK_CATNIP_TO_FISH = 105       # 105 猫薄荷 -> 1 鱼干
 CAT_STOCK_BUY_FEE = 0.01             # 买入手续费 1%
 CAT_STOCK_SELL_FEE = 0.01            # 卖出手续费 1%
 CAT_STOCK_OPEN_HOUR = 8              # 每日 08:00 开市
-CAT_STOCK_CLOSE_HOUR = 20            # 每日 20:00 收市
+CAT_STOCK_CLOSE_HOUR = 12            # 每日 12:00 收市（一天四个交易整点）
 CAT_STOCK_MAX_SHARES = 1_000_000     # 单笔最大股数
 CAT_STOCK_MIN_SHARES = 10            # 单笔买入最少股数
 CAT_STOCK_DELIST_RATE = 0.7          # 退市清算按最新价的 70% 赔付
 CAT_STOCK_DELIST_CHANCE = 0.02       # 每个整点的退市概率（偶发，不要太频繁）
 CAT_STOCK_LIST_CHANCE = 0.02         # 每个整点的新上市概率（偶发，不要太频繁）
-CAT_STOCK_DAILY_LIMIT = 0.10         # 单日涨跌幅上限（相对当日基准价）
-CAT_STOCK_CARRY_MAX = 0.50           # 涨跌停未释放的幅度最多累计多少（次日继续释放）
+CAT_STOCK_TICK_NOISE = 0.015         # 每个整点的基础随机波动标准差
+CAT_STOCK_MARKET_NOISE = 0.008       # 每个整点全市场共同情绪波动
+CAT_STOCK_COUNTRY_NOISE = 0.008      # 每个整点各国家的共同波动
+CAT_STOCK_EFFECT_MAX = 0.22          # 单条新闻对单只股票的单小时影响上限
+CAT_STOCK_MOMENTUM_CARRY = 0.45      # 上一小时走势延续到下一小时的比例
+CAT_STOCK_LINK_COUNTRY = 0.35        # 同国企业联动系数
+CAT_STOCK_LINK_SECTOR = 0.25         # 同行业企业联动系数
 CAT_STOCK_DELIST_MIN_DAYS = 10       # 企业上市满 10 天后才可能退市
 CAT_STOCK_BIG_HOLDING_VALUE = 20000  # 单只股票持仓市值达到该值才可能被针对
 CAT_STOCK_BIG_HOLDING_CHANCE = 0.04  # 每个整点针对大额持仓的概率
@@ -965,14 +970,14 @@ class CatStockPlugin:
             "【喵股市 · 奇幻世界 if 线】\n"
             "这是猫猫远征队世界观的一条平行时间线，涨跌与新闻不会影响主线存档。\n"
             f"开市时间：每天 {CAT_STOCK_OPEN_HOUR:02d}:00 ~ {CAT_STOCK_CLOSE_HOUR:02d}:00，"
-            "每个整点 AI 发布世界新闻并重新定价；休市期间不能买卖。\n"
+            "共四个交易整点，每个整点 AI 发布世界新闻并重新定价；休市期间不能买卖。\n"
             f"初始猫薄荷：每人 {CAT_STOCK_INITIAL_CATNIP}（首次使用自动到账）\n"
             f"充值：喵股市 充值 <鱼干数>（1 鱼干 = {CAT_STOCK_FISH_TO_CATNIP} 猫薄荷）\n"
             f"提现：喵股市 提现 <鱼干数>（{CAT_STOCK_CATNIP_TO_FISH} 猫薄荷 = 1 鱼干）\n"
             f"手续费：买入 {CAT_STOCK_BUY_FEE:.0%}、卖出 {CAT_STOCK_SELL_FEE:.0%}（每笔最低 1 猫薄荷）\n"
             "交易规则：买入当天不能卖出，次日开市后即可卖出；单笔最少 10 股、最多 100 万股\n"
-            f"涨跌限制：每只股票单日涨跌幅最多 ±{CAT_STOCK_DAILY_LIMIT:.0%}，盘中再激烈也不会更夸张\n"
-            "涨跌停顺延：当天被上限挡住的涨跌压力不会消失，会在次日开盘继续释放（最多累计 50%）\n"
+            "涨跌：不设涨跌停，单小时大致 -20% ~ +25%；事件会延续发酵，"
+            "同国与同行业的企业也会联动涨跌\n"
             f"退市：企业上市满 {CAT_STOCK_DELIST_MIN_DAYS} 天后才可能因战争/灾变退市（偶发事件），"
             "持仓按最新价 70% 强制清算，退市企业也可能改日重新上市\n"
             "买入：喵股市 买 <股票代码> <股数>\n"
@@ -1018,27 +1023,27 @@ class CatStockPlugin:
             players = self._load_stock_players()
             today = now.strftime("%Y-%m-%d")
             if market.get("day") != today:
-                # 新的一天：先记下昨收，再把昨天没释放完的涨跌压力释放在开盘价上
+                # 新的一天：记下昨收作为当日涨跌幅基准
                 for comp in companies.values():
                     comp["prev_close"] = comp["price"]
-                    carry = float(comp.get("carry", 0.0))
-                    if not carry:
-                        continue
-                    applied = max(-CAT_STOCK_DAILY_LIMIT, min(CAT_STOCK_DAILY_LIMIT, carry))
-                    comp["price"] = max(1.0, comp["price"] * (1 + applied))
-                    left = carry - applied
-                    if abs(left) > 1e-4:
-                        comp["carry"] = left
-                    else:
-                        comp.pop("carry", None)
                 market["day"] = today
             price_before = {code: comp["price"] for code, comp in companies.items()}
 
-            # 1) 每小时的随机波动
+            # 1) 基础波动：全市场共同情绪 + 国家共同情绪 + 个股随机扰动
+            market_move = random.gauss(0, CAT_STOCK_MARKET_NOISE)
+            country_moves = {}
             for comp in companies.values():
-                comp["price"] = max(1.0, comp["price"] * (1 + random.gauss(0, 0.018)))
+                country_moves.setdefault(comp["country"], random.gauss(0, CAT_STOCK_COUNTRY_NOISE))
+            for comp in companies.values():
+                # 上一小时的走势会按比例延续，新闻造成的趋势不会一小时就消失
+                momentum = float(comp.get("momentum", 0.0))
+                move = (market_move
+                        + country_moves.get(comp["country"], 0.0)
+                        + momentum * CAT_STOCK_MOMENTUM_CARRY
+                        + random.gauss(0, CAT_STOCK_TICK_NOISE))
+                comp["price"] = max(1.0, comp["price"] * (1 + move))
 
-            # 2) 新闻事件影响
+            # 2) 新闻事件影响（同国/同行业会跟着联动）
             for eff in effects:
                 self._apply_effect(companies, eff)
 
@@ -1054,22 +1059,12 @@ class CatStockPlugin:
             if listed:
                 event_news.append(listed)
 
-            # 5) 价格上下限
+            # 5) 价格上下限，并记录本小时走势供下一小时延续
             for comp in companies.values():
                 comp["price"] = round(min(max(comp["price"], 1.0), comp["base"] * 50), 2)
-
-            # 6) 单日涨跌幅限制：无论新闻多激烈，相对当日基准价都不会超过 ±10%
-            #    超出上限的部分不丢弃，记为 carry 顺延到次日开盘继续释放
-            for comp in companies.values():
-                prev = comp.get("prev_close") or comp["price"] or 1
-                lo = max(1.0, prev * (1 - CAT_STOCK_DAILY_LIMIT))
-                hi = max(1.0, prev * (1 + CAT_STOCK_DAILY_LIMIT))
-                raw = comp["price"]
-                clamped = min(max(raw, lo), hi)
-                if abs(raw - clamped) > 1e-6:
-                    carry = float(comp.get("carry", 0.0)) + (raw - clamped) / prev
-                    comp["carry"] = max(-CAT_STOCK_CARRY_MAX, min(CAT_STOCK_CARRY_MAX, carry))
-                comp["price"] = round(clamped, 2)
+                start = price_before.get(comp["code"]) or comp["price"] or 1
+                comp["momentum"] = round(max(-0.6, min(0.6, (comp["price"] - start) / start)), 3)
+                comp.pop("carry", None)
 
             stamp = now.strftime("%m-%d %H:%M")
             news_entries = []
@@ -1104,7 +1099,7 @@ class CatStockPlugin:
         pct = float(pct)
         if abs(pct) > 1:
             pct = pct / 100.0
-        pct = max(-0.45, min(0.55, pct))
+        pct = max(-CAT_STOCK_EFFECT_MAX, min(CAT_STOCK_EFFECT_MAX, pct))
         code = str(eff.get("code") or "").strip().upper()
         if code and code not in companies:
             # AI 偶尔会直接写企业名
@@ -1120,11 +1115,30 @@ class CatStockPlugin:
                     country = comp["country"]
                     break
         if code and code in companies:
-            companies[code]["price"] = max(1.0, companies[code]["price"] * (1 + pct))
+            affected = {code: 1.0}
+            comp = companies[code]
+            for peer in companies.values():
+                if peer["code"] == code:
+                    continue
+                if peer["country"] == comp["country"]:
+                    affected[peer["code"]] = max(
+                        affected.get(peer["code"], 0.0), CAT_STOCK_LINK_COUNTRY)
+                elif peer["sector"] == comp["sector"]:
+                    affected[peer["code"]] = max(
+                        affected.get(peer["code"], 0.0), CAT_STOCK_LINK_SECTOR)
+            for peer_code, ratio in affected.items():
+                peer = companies[peer_code]
+                peer["price"] = max(1.0, peer["price"] * (1 + pct * ratio))
         elif country:
+            sectors = set()
             for comp in companies.values():
                 if comp["country"] == country:
                     comp["price"] = max(1.0, comp["price"] * (1 + pct))
+                    sectors.add(comp["sector"])
+            # 同一行业在别国的企业也会受到小幅波及
+            for comp in companies.values():
+                if comp["country"] != country and comp["sector"] in sectors:
+                    comp["price"] = max(1.0, comp["price"] * (1 + pct * CAT_STOCK_LINK_SECTOR))
 
     def _big_holding_pressure(self, companies: dict, players: dict) -> List[dict]:
         """大额持仓可能被空头狙击：概率低、幅度有限，只影响一只股票"""
@@ -1143,7 +1157,7 @@ class CatStockPlugin:
             return []
         code = random.choice(candidates)[0]
         comp = companies.get(code)
-        pct = -random.uniform(0.06, 0.12)
+        pct = -random.uniform(0.015, 0.03)
         comp["price"] = max(1.0, comp["price"] * (1 + pct))
         return [{
             "title": f"空头狙击！{comp['name']}（{code}）传出大额持仓被集中做空",
@@ -1283,24 +1297,32 @@ class CatStockPlugin:
         has_policy = False
         for comp in companies.values():
             line = (f"{comp['code']}｜{comp['name']}｜{comp['country']}({self._country_name(comp['country'])})"
-                    f"｜{comp['sector']}｜现价{self._fmt_price(comp['price'])}")
+                    f"｜{comp['sector']}｜现价{self._fmt_price(comp['price'])}"
+                    f"｜近1小时{self._fmt_pct(float(comp.get('momentum', 0.0)) * 100)}")
             policy = comp.get("policy")
             if policy:
                 has_policy = True
                 line += f"｜方针:{policy}"
             lines.append(line)
         cat_seed = self._cat_news_seed()
+        recent_news = (market.get("news") or [])[:5]
+        recent_block = ""
+        if recent_news:
+            recent_block = ("\n最近几小时的新闻（供你延续事件线索，新新闻可以和它们呼应或升级）：\n"
+                            + "\n".join(f"- {n.get('title', '')}" for n in recent_news if n.get("title"))
+                            + "\n")
         prompt = (
             "你是一个奇幻世界的财经新闻主编，世界背景是《猫猫远征队》的 if 线："
             "各国之间存在战争、魔物袭击、魔法灾变、王室更替、龙潮、亡灵复苏等事件。\n"
             f"现在是 {now.strftime('%H:%M')}，股市开市。\n"
-            "以下是当前上市企业（代码｜名称｜国家｜行业｜现价）：\n"
-            + "\n".join(lines) +
+            "以下是当前上市企业（代码｜名称｜国家｜行业｜现价｜近1小时涨跌）：\n"
+            + "\n".join(lines) + recent_block +
             "\n\n请生成 1~3 条本小时的世界新闻。"
             "每条新闻必须与股市直接相关，并且至少给出 1 条能由这条新闻解释的股价影响"
             "（例如战争利好军工、灾变利空产地企业、商路被切断利空物流）。"
-            "突发新闻可以来得很突然，但因果关系必须合理、能自圆其说。"
-            "涨跌要激烈、有戏剧性，但不要所有股票同涨同跌。"
+            "新闻要参考企业最近的走势和前面的新闻，保持事件连续性："
+            "战事可以升级、灾后可以重建、订单可以交付、政策可以落地，不要每小时都凭空冒出新事件。"
+            "涨跌可以有戏剧性，单小时大致 -20% ~ +25%，但必须有因果依据，也不要所有股票同涨同跌。"
             + ("\n有企业带着「方针」，那是最大股东制定的经营方向；"
                "新闻与股价影响请尽量呼应方针（例如方针偏军工，就更容易接到军备订单），"
                "但方针只是倾向，不是涨跌保证。\n" if has_policy else "")
@@ -1310,8 +1332,8 @@ class CatStockPlugin:
             "但不必强行出场，也不必每条新闻都提到。\n"
             "只输出一个 JSON 对象，不要解释，格式：\n"
             '{"news":[{"title":"新闻标题","detail":"一句话详情",'
-            '"effects":[{"code":"股票代码","pct":0.18},{"country":"国家代码","pct":-0.12}]}]}\n'
-            "pct 是小数涨跌幅，范围 -0.4 ~ 0.5，正数为涨；code 和 country 二选一；"
+            '"effects":[{"code":"股票代码","pct":0.15},{"country":"国家代码","pct":-0.1}]}]}\n'
+            "pct 是小数涨跌幅，范围 -0.2 ~ 0.25，正数为涨；code 和 country 二选一；"
             "每条新闻给 1~3 条 effects。"
         )
         text = self._ai._call_ai(

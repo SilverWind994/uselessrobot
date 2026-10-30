@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>串子小车 · 网页端</title>
-  <link rel="stylesheet" href="/static/style.css?v=15">
+  <link rel="stylesheet" href="/static/style.css?v=16">
 </head>
 <body>
   <div class="bg-glow"></div>
@@ -17,6 +17,7 @@
     <nav id="main-nav" class="main-nav hidden">
       <button class="nav-tab is-active" data-tab="expedition" type="button">喵喵远征队</button>
       <button class="nav-tab" data-tab="games" type="button">小游戏</button>
+      <button class="nav-tab" data-tab="stock" type="button">喵股市</button>
       <button class="nav-tab" data-tab="tournament" type="button">锦标赛</button>
       <button class="nav-tab" data-tab="ucml" type="button">UCML 计分</button>
       <button class="nav-tab" data-tab="profile" type="button">个人</button>
@@ -296,6 +297,100 @@
               <li>非决赛单场定胜负，平局加赛一次、仍平局随机晋级；决赛三局两胜。</li>
               <li>麻酱宝藏项目会随机加入 1~3 名电脑，只比较两位正式选手的点棒，同分算平局。</li>
               <li>冠军拿全额奖励，其余名次按对半递减（向下取整）。带鱼干 / 猫眼石奖励的锦标赛仅指定管理员可以开设。</li>
+            </ol>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========== 页面：喵股市 ========== -->
+      <section id="tab-stock" class="tab-pane hidden">
+        <div class="card">
+          <div class="panel-head">
+            <div>
+              <div class="panel-title">喵股市 · 奇幻世界 if 线</div>
+              <div class="panel-sub" id="stock-status">加载中…</div>
+            </div>
+            <button id="btn-stock-refresh" class="btn btn-ghost btn-sm" type="button">刷新</button>
+          </div>
+          <div id="stock-wallet" class="stats"></div>
+          <p class="hint" id="stock-rules"></p>
+          <p id="stock-msg" class="msg"></p>
+        </div>
+
+        <div class="card">
+          <div class="panel-title">交易</div>
+          <div class="create-row">
+            <label class="field inline">
+              <span>股票</span>
+              <input id="stock-code" type="text" list="stock-codes" placeholder="代码或名称，如 FRS">
+              <datalist id="stock-codes"></datalist>
+            </label>
+            <label class="field inline">
+              <span>股数</span>
+              <input id="stock-shares" type="number" min="1" step="1" placeholder="例如 100">
+            </label>
+            <button id="btn-stock-buy" class="btn btn-primary btn-sm" type="button">买入</button>
+            <button id="btn-stock-sell" class="btn btn-ghost btn-sm" type="button">卖出</button>
+          </div>
+          <p class="hint">买入、卖出各收 1% 手续费（每笔最低 1 猫薄荷）；买入满 24 小时后才能卖出，休市期间不能交易。</p>
+        </div>
+
+        <div class="card">
+          <div class="panel-title">鱼干 / 猫薄荷兑换</div>
+          <div class="create-row">
+            <label class="field inline">
+              <span>鱼干数量</span>
+              <input id="stock-fish-amount" type="number" min="1" step="1" placeholder="例如 100">
+            </label>
+            <button id="btn-stock-deposit" class="btn btn-primary btn-sm" type="button">充值（鱼干 → 猫薄荷）</button>
+            <button id="btn-stock-withdraw" class="btn btn-ghost btn-sm" type="button">提现（猫薄荷 → 鱼干）</button>
+          </div>
+          <p class="hint" id="stock-exchange-hint"></p>
+        </div>
+
+        <div class="card">
+          <div class="panel-head">
+            <div>
+              <div class="panel-title">我的持仓</div>
+              <div class="panel-sub" id="stock-hold-sub"></div>
+            </div>
+          </div>
+          <div id="stock-holdings"></div>
+        </div>
+
+        <div class="card">
+          <div class="panel-head">
+            <div>
+              <div class="panel-title">大盘</div>
+              <div class="panel-sub" id="stock-market-sub"></div>
+            </div>
+          </div>
+          <div class="stock-table-wrap">
+            <table class="stock-table">
+              <thead>
+                <tr>
+                  <th>代码</th><th>名称</th><th>国家</th><th>行业</th><th>现价</th><th>涨跌</th>
+                </tr>
+              </thead>
+              <tbody id="stock-market-body"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="panel-title">最近新闻</div>
+          <div id="stock-news" class="stock-news"></div>
+        </div>
+
+        <div class="card">
+          <div class="panel-title">规则</div>
+          <div class="tips">
+            <ol>
+              <li>每天 08:00~20:00 开市，每个整点 AI 发布世界新闻并重新定价；休市期间不能买卖。</li>
+              <li>每人首次进入自动获得 10000 猫薄荷；1 鱼干 = 95 猫薄荷，105 猫薄荷 = 1 鱼干。</li>
+              <li>买卖各收 1% 手续费（每笔最低 1 猫薄荷）；买入满 24 小时后才能卖出。</li>
+              <li>每只股票单日涨跌幅最多 ±10%；企业上市满 10 天后才可能因战争、灾变退市，持仓按最新价 70% 强制清算，退市企业也可能重新上市。</li>
+              <li>单只持仓市值过大时可能被空头盯上，别把猫薄荷都押在一只股上。</li>
             </ol>
           </div>
         </div>
@@ -804,6 +899,6 @@
 
   <footer class="foot">串子小车 · 网页端</footer>
 
-  <script src="/static/app.js?v=15"></script>
+  <script src="/static/app.js?v=16"></script>
 </body>
 </html>

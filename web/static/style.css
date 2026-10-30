@@ -774,4 +774,24 @@ code { background: #120f0d; border: 1px solid var(--line); border-radius: 6px; p
   .tour-round { min-width: 0; }
 }
 
+/* 喵股市 */
+.stock-table-wrap { overflow-x: auto; margin-top: 12px; }
+.stock-table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 560px; }
+.stock-table th {
+  text-align: left; color: var(--text-dim); font-weight: 600;
+  padding: 8px 10px; border-bottom: 1px solid var(--line); white-space: nowrap;
+}
+.stock-table td { padding: 8px 10px; border-bottom: 1px solid rgba(58, 49, 40, 0.6); white-space: nowrap; }
+.stock-table tbody tr:last-child td { border-bottom: none; }
+.stock-up { color: var(--danger); font-weight: 600; }
+.stock-down { color: #4fbf7a; font-weight: 600; }
+
+.stock-news { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+.stock-news-item { background: #120f0d; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+.stock-news-title { font-weight: 700; }
+.stock-news-detail { color: var(--text-dim); font-size: 13px; margin-top: 2px; }
+
+#stock-wallet { margin-bottom: 12px; }
+#stock-holdings { margin-top: 4px; }
+
 

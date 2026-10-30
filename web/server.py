@@ -39,6 +39,7 @@ import mahjong17_web                                                 # noqa: E40
 import mahjong_gold_web                                              # noqa: E402
 import tournament_web                                                # noqa: E402
 import ucml_web                                                      # noqa: E402
+import stock_web                                                     # noqa: E402
 
 _STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 # 麻将牌面素材（mj0.png ~ mj37.png），供 17 步麻将网页版直接引用
@@ -1166,3 +1167,53 @@ def admin_create_user(payload: dict, cat_token: str = Cookie(default="")) -> JSO
         player["nick"] = nick
         cat_web._plugin._update_player(new_qq, player)
     return JSONResponse({"ok": True, "msg": f"已创建 {new_qq} 的存档喵，默认密码就是该 QQ 号"})
+
+
+# ==================== 喵股市 ====================
+
+@app.get("/api/stock/overview")
+def stock_overview(cat_token: str = Cookie(default="")) -> JSONResponse:
+    """大盘行情 + 新闻 + 本人持仓（规则与 QQ 端完全同源）"""
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    return JSONResponse({"ok": True, **stock_web.overview(qq)})
+
+
+def _stock_action(result: str, qq: int) -> JSONResponse:
+    """把 QQ 端原本文案 + 操作后的最新状态一起返回给网页"""
+    return JSONResponse({"ok": True, "msg": result, "overview": stock_web.overview(qq)})
+
+
+@app.post("/api/stock/buy")
+def stock_buy(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    return _stock_action(stock_web.buy(qq, payload.get("code"), payload.get("shares")), qq)
+
+
+@app.post("/api/stock/sell")
+def stock_sell(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    return _stock_action(stock_web.sell(qq, payload.get("code"), payload.get("shares")), qq)
+
+
+@app.post("/api/stock/deposit")
+def stock_deposit(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
+    """鱼干兑换猫薄荷"""
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    return _stock_action(stock_web.deposit(qq, payload.get("fish")), qq)
+
+
+@app.post("/api/stock/withdraw")
+def stock_withdraw(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
+    """猫薄荷兑换鱼干"""
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    return _stock_action(stock_web.withdraw(qq, payload.get("fish")), qq)

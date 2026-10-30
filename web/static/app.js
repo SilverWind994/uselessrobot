@@ -2674,7 +2674,7 @@ wireChat('gold', '/api/mahjong_gold/say', () => goldCode, goldMsg);
 // ==================== 顶部导航（喵喵远征队 / 小游戏 / 个人 / 开发中 / 管理） ====================
 
 const mainNav = document.getElementById('main-nav');
-const TAB_NAMES = ['expedition', 'games', 'tournament', 'ucml', 'profile', 'dev', 'admin'];
+const TAB_NAMES = ['expedition', 'games', 'stock', 'tournament', 'ucml', 'profile', 'dev', 'admin'];
 let currentTab = 'expedition';
 
 function showTabNav() {
@@ -2716,6 +2716,7 @@ function switchTab(name) {
   if (name === 'tournament') startTournamentPolling();
   else stopTournamentPolling();
   if (name === 'expedition') switchSub(currentSub);
+  if (name === 'stock') loadStock();
   if (name === 'ucml') loadUcml();
   if (name === 'profile') loadProfile();
 }
@@ -3669,3 +3670,192 @@ setInterval(async () => {
   const { status, data } = await api('/api/tournament/state');
   if (status === 200 && data.ok) updateTournamentNotice(data);
 }, 6000);
+
+// ==================== 喵股市 ====================
+
+const stockStatusEl = document.getElementById('stock-status');
+const stockWalletEl = document.getElementById('stock-wallet');
+const stockRulesEl = document.getElementById('stock-rules');
+const stockExchangeEl = document.getElementById('stock-exchange-hint');
+const stockMsgEl = document.getElementById('stock-msg');
+const stockCodesEl = document.getElementById('stock-codes');
+const stockCodeEl = document.getElementById('stock-code');
+const stockSharesEl = document.getElementById('stock-shares');
+const stockFishEl = document.getElementById('stock-fish-amount');
+const stockMarketBodyEl = document.getElementById('stock-market-body');
+const stockMarketSubEl = document.getElementById('stock-market-sub');
+const stockHoldingsEl = document.getElementById('stock-holdings');
+const stockHoldSubEl = document.getElementById('stock-hold-sub');
+const stockNewsEl = document.getElementById('stock-news');
+
+function stockMoney(n) {
+  return Number(n || 0).toLocaleString('zh-CN');
+}
+
+function stockPnlCell(n) {
+  const v = Number(n || 0);
+  return `<td class="${v >= 0 ? 'stock-up' : 'stock-down'}">${v >= 0 ? '+' : ''}${stockMoney(v)}</td>`;
+}
+
+function stockPctCell(pct) {
+  const v = Number(pct || 0);
+  return `<td class="${v >= 0 ? 'stock-up' : 'stock-down'}">${v >= 0 ? '▲' : '▼'}${Math.abs(v).toFixed(1)}%</td>`;
+}
+
+function renderStock(data) {
+  const r = data.rules || {};
+  const p = data.portfolio || {};
+  const companies = data.companies || [];
+  const holdings = p.holdings || [];
+
+  stockStatusEl.textContent =
+    `${data.status_line}｜在市 ${companies.length} 家｜上涨 ${data.up} · 下跌 ${data.down}`;
+  stockRulesEl.textContent =
+    `开市 ${data.open_hour}:00~${data.close_hour}:00｜1 鱼干 = ${r.fish_to_catnip} 猫薄荷｜`
+    + `${r.catnip_to_fish} 猫薄荷 = 1 鱼干｜手续费 ${Math.round((r.buy_fee || 0) * 100)}%｜`
+    + `买入 ${r.lock_hours} 小时后可卖`;
+  stockExchangeEl.textContent =
+    `充值 1 鱼干 → ${r.fish_to_catnip} 猫薄荷，提现 ${r.catnip_to_fish} 猫薄荷 → 1 鱼干；`
+    + `当前猫薄荷约可提现 ${stockMoney(p.catnip_to_fish_est)} 鱼干`;
+
+  stockWalletEl.innerHTML = [
+    ['猫薄荷', stockMoney(p.catnip)],
+    ['鱼干', stockMoney(p.fish)],
+    ['持仓市值', stockMoney(Math.round(p.total_value || 0))],
+    ['总浮动', `${Number(p.total_pnl || 0) >= 0 ? '+' : ''}${stockMoney(p.total_pnl)}`],
+  ].map(([label, val]) => `
+    <div class="stat"><div class="stat-num">${esc(val)}</div><div class="stat-label">${label}</div></div>`).join('');
+
+  stockCodesEl.innerHTML = companies.map(
+    (c) => `<option value="${esc(c.code)}">${esc(c.name)}</option>`).join('');
+
+  stockMarketBodyEl.innerHTML = companies.map((c) => `
+    <tr>
+      <td>${esc(c.code)}</td>
+      <td>${esc(c.name)}</td>
+      <td>${esc(c.country_name)}</td>
+      <td>${esc(c.sector)}</td>
+      <td>${Number(c.price).toFixed(1)}</td>
+      ${stockPctCell(c.pct)}
+    </tr>`).join('');
+  if (!companies.length) {
+    stockMarketBodyEl.innerHTML = '<tr><td colspan="6" class="room-empty">暂无行情喵</td></tr>';
+  }
+  stockMarketSubEl.textContent = `${data.status_line}｜行情每个整点更新`;
+
+  stockHoldSubEl.textContent =
+    `总市值 ${stockMoney(Math.round(p.total_value || 0))}｜总浮动 ${stockMoney(p.total_pnl)}`;
+
+  if (!holdings.length) {
+    stockHoldingsEl.innerHTML = '<p class="room-empty">当前空仓喵，先去大盘挑一只吧</p>';
+  } else {
+    const rows = holdings.map((h) => `
+      <tr>
+        <td>${esc(h.code)}</td>
+        <td>${esc(h.name)}</td>
+        <td>${h.shares}</td>
+        <td>${h.sellable}</td>
+        <td>${h.locked}</td>
+        <td>${Number(h.avg_cost).toFixed(1)}</td>
+        <td>${h.price ? Number(h.price).toFixed(1) : '—'}</td>
+        <td>${stockMoney(Math.round(h.value))}</td>
+        ${stockPnlCell(h.pnl)}
+      </tr>`).join('');
+    stockHoldingsEl.innerHTML = `
+      <div class="stock-table-wrap">
+        <table class="stock-table">
+          <thead>
+            <tr>
+              <th>代码</th><th>名称</th><th>持有</th><th>可卖</th><th>锁定</th>
+              <th>成本</th><th>现价</th><th>市值</th><th>浮动</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+  }
+
+  stockNewsEl.innerHTML = (data.news || []).length
+    ? data.news.map((n) => `
+      <div class="stock-news-item">
+        <div class="stock-news-title">${esc(n.time)} ${esc(n.title)}</div>
+        ${n.detail ? `<div class="stock-news-detail">${esc(n.detail)}</div>` : ''}
+      </div>`).join('')
+    : '<p class="room-empty">还没有新闻喵～ 开市后每个整点更新世界快报</p>';
+}
+
+async function loadStock() {
+  const { status, data } = await api('/api/stock/overview');
+  if (status === 401) { homePanel.classList.add('hidden'); showLogin(); return; }
+  if (status !== 200 || !data.ok) {
+    stockMsgEl.textContent = data.msg || '加载失败喵';
+    return;
+  }
+  stockMsgEl.textContent = '';
+  stockMsgEl.classList.remove('ok');
+  renderStock(data);
+}
+
+async function stockAction(path, body, actionName) {
+  stockMsgEl.textContent = '';
+  stockMsgEl.classList.remove('ok');
+  const { status, data } = await api(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (status === 401) { homePanel.classList.add('hidden'); showLogin(); return; }
+  if (status !== 200 || !data.ok) {
+    stockMsgEl.textContent = data.msg || `${actionName}失败喵`;
+    return;
+  }
+  const msg = data.msg || `${actionName}完成喵`;
+  stockMsgEl.textContent = msg;
+  stockMsgEl.classList.toggle('ok', /成交|成功/.test(msg));
+  if (data.overview) renderStock(data.overview);
+  await refresh();  // 兑换会改动鱼干，同步顶部余额
+}
+
+document.getElementById('btn-stock-refresh').addEventListener('click', () => loadStock());
+
+document.getElementById('btn-stock-buy').addEventListener('click', () => {
+  const code = stockCodeEl.value.trim();
+  const shares = stockSharesEl.value.trim();
+  if (!code || !shares) {
+    stockMsgEl.textContent = '股票和股数都要填喵';
+    stockMsgEl.classList.remove('ok');
+    return;
+  }
+  stockAction('/api/stock/buy', { code, shares }, '买入');
+});
+
+document.getElementById('btn-stock-sell').addEventListener('click', () => {
+  const code = stockCodeEl.value.trim();
+  const shares = stockSharesEl.value.trim();
+  if (!code || !shares) {
+    stockMsgEl.textContent = '股票和股数都要填喵';
+    stockMsgEl.classList.remove('ok');
+    return;
+  }
+  stockAction('/api/stock/sell', { code, shares }, '卖出');
+});
+
+document.getElementById('btn-stock-deposit').addEventListener('click', () => {
+  const fish = stockFishEl.value.trim();
+  if (!fish) {
+    stockMsgEl.textContent = '先填要兑换的鱼干数量喵';
+    stockMsgEl.classList.remove('ok');
+    return;
+  }
+  stockAction('/api/stock/deposit', { fish }, '充值');
+});
+
+document.getElementById('btn-stock-withdraw').addEventListener('click', () => {
+  const fish = stockFishEl.value.trim();
+  if (!fish) {
+    stockMsgEl.textContent = '先填要兑换的鱼干数量喵';
+    stockMsgEl.classList.remove('ok');
+    return;
+  }
+  stockAction('/api/stock/withdraw', { fish }, '提现');
+});

@@ -32,6 +32,8 @@ CAT_STOCK_MAX_SHARES = 1_000_000     # 单笔最大股数
 CAT_STOCK_DELIST_RATE = 0.7          # 退市清算按最新价的 70% 赔付
 CAT_STOCK_DELIST_CHANCE = 0.02       # 每个整点的退市概率（偶发，不要太频繁）
 CAT_STOCK_LIST_CHANCE = 0.02         # 每个整点的新上市概率（偶发，不要太频繁）
+CAT_STOCK_DAILY_LIMIT = 0.10         # 单日涨跌幅上限（相对当日基准价）
+CAT_STOCK_DELIST_MIN_DAYS = 10       # 企业上市满 10 天后才可能退市
 CAT_STOCK_BIG_HOLDING_VALUE = 20000  # 单只股票持仓市值达到该值才可能被针对
 CAT_STOCK_BIG_HOLDING_CHANCE = 0.04  # 每个整点针对大额持仓的概率
 CAT_STOCK_NEWS_MAX = 80              # 新闻最多保留条数
@@ -175,14 +177,17 @@ def _extract_json(text: str):
 class CatStockPlugin:
     """喵股市：奇幻世界 if 线的股票小游戏"""
 
-    def __init__(self, sender: MessageSender, cat_game, ai_plugin=None):
+    def __init__(self, sender: MessageSender, cat_game, ai_plugin=None,
+                 start_scheduler: bool = True):
         self._sender = sender
         self._cat = cat_game
         self._ai = ai_plugin
         self._lock = threading.Lock()
         os.makedirs(STOCK_DIR, exist_ok=True)
         self._ensure_market()
-        self._start_scheduler()
+        # 网页端复用同一个插件时不需要再起一条调度线程，避免整点重复跑 tick
+        if start_scheduler:
+            self._start_scheduler()
 
     # ==================== 注册命令 ====================
 
@@ -670,6 +675,112 @@ class CatStockPlugin:
             f"提现成功：-{need} 猫薄荷，+{fish_amount} 鱼干\n剩余猫薄荷 {left}"
         )
 
+    # ==================== 网页端数据接口 ====================
+
+    def snapshot(self, qq: Optional[int] = None) -> dict:
+        """整理成网页端用的结构化行情 / 新闻 / 持仓（只读，不改动存档）"""
+        market = self._load_market()
+        now = datetime.now()
+        companies = market["companies"]
+
+        rows = []
+        for comp in companies.values():
+            prev = comp.get("prev_close") or comp["price"] or 1
+            pct = (comp["price"] - prev) / prev * 100
+            rows.append({
+                "code": comp["code"],
+                "name": comp["name"],
+                "country": comp["country"],
+                "country_name": self._country_name(comp["country"]),
+                "sector": comp["sector"],
+                "base": comp["base"],
+                "price": round(float(comp["price"]), 2),
+                "pct": round(pct, 2),
+            })
+        rows.sort(key=lambda r: (r["country"], r["code"]))
+        up = sum(1 for r in rows if r["pct"] >= 0)
+
+        news = [{"time": item.get("time", ""),
+                 "title": item.get("title", ""),
+                 "detail": item.get("detail", "")}
+                for item in market.get("news", [])[:20]]
+
+        data = {
+            "open": self._is_open(now),
+            "status_line": self._market_status_line(),
+            "open_hour": CAT_STOCK_OPEN_HOUR,
+            "close_hour": CAT_STOCK_CLOSE_HOUR,
+            "companies": rows,
+            "up": up,
+            "down": len(rows) - up,
+            "news": news,
+            "rules": {
+                "initial_catnip": CAT_STOCK_INITIAL_CATNIP,
+                "fish_to_catnip": CAT_STOCK_FISH_TO_CATNIP,
+                "catnip_to_fish": CAT_STOCK_CATNIP_TO_FISH,
+                "buy_fee": CAT_STOCK_BUY_FEE,
+                "sell_fee": CAT_STOCK_SELL_FEE,
+                "lock_hours": CAT_STOCK_LOCK_SECONDS // 3600,
+                "max_shares": CAT_STOCK_MAX_SHARES,
+                "delist_rate": CAT_STOCK_DELIST_RATE,
+            },
+        }
+        if qq is not None:
+            data["portfolio"] = self._portfolio_view(qq, companies)
+        return data
+
+    def _portfolio_view(self, qq: int, companies: dict) -> dict:
+        """某个玩家的持仓明细（含可卖 / 锁定股数）"""
+        with self._lock:
+            players = self._load_stock_players()
+            st = self._stock_player(qq, players)
+            catnip = int(st.get("catnip", 0))
+            raw = {code: list(lots) for code, lots in st.get("holdings", {}).items()}
+            self._save_stock_players(players)
+
+        now_ts = time.time()
+        rows = []
+        total_value = 0.0
+        total_cost = 0.0
+        for code, lots in raw.items():
+            comp = companies.get(code)
+            shares = self._shares_of(lots)
+            cost = sum(float(lot.get("price", 0)) * int(lot.get("shares", 0)) for lot in lots)
+            if not comp:
+                rows.append({"code": code, "name": code, "shares": shares, "sellable": 0,
+                             "locked": shares, "avg_cost": 0, "price": 0, "value": 0,
+                             "pnl": 0, "delisted": True})
+                continue
+            value = shares * comp["price"]
+            total_value += value
+            total_cost += cost
+            sellable = sum(int(lot.get("shares", 0)) for lot in lots
+                           if now_ts - float(lot.get("ts", 0)) >= CAT_STOCK_LOCK_SECONDS)
+            avg = cost / shares if shares else 0
+            rows.append({
+                "code": code,
+                "name": comp["name"],
+                "shares": shares,
+                "sellable": sellable,
+                "locked": shares - sellable,
+                "avg_cost": round(avg, 2),
+                "price": round(float(comp["price"]), 2),
+                "value": round(value, 0),
+                "pnl": round(value - cost, 0),
+                "delisted": False,
+            })
+        rows.sort(key=lambda r: r["value"], reverse=True)
+
+        player = self._cat._peek_player(qq) or {}
+        return {
+            "catnip": catnip,
+            "fish": int(player.get("fish", 0)),
+            "catnip_to_fish_est": catnip // CAT_STOCK_CATNIP_TO_FISH,
+            "holdings": rows,
+            "total_value": round(total_value, 0),
+            "total_pnl": round(total_value - total_cost, 0),
+        }
+
     # ==================== 帮助 ====================
 
     def _help_text(self) -> str:
@@ -683,8 +794,9 @@ class CatStockPlugin:
             f"提现：喵股市 提现 <鱼干数>（{CAT_STOCK_CATNIP_TO_FISH} 猫薄荷 = 1 鱼干）\n"
             f"手续费：买入 {CAT_STOCK_BUY_FEE:.0%}、卖出 {CAT_STOCK_SELL_FEE:.0%}（每笔最低 1 猫薄荷）\n"
             "交易规则：买入满 24 小时后才能卖出；单笔最多 100 万股\n"
-            "退市：企业可能因战争/灾变退市（偶发事件），持仓按最新价 70% 强制清算，"
-            "退市企业也可能改日重新上市\n"
+            f"涨跌限制：每只股票单日涨跌幅最多 ±{CAT_STOCK_DAILY_LIMIT:.0%}，盘中再激烈也不会更夸张\n"
+            f"退市：企业上市满 {CAT_STOCK_DELIST_MIN_DAYS} 天后才可能因战争/灾变退市（偶发事件），"
+            "持仓按最新价 70% 强制清算，退市企业也可能改日重新上市\n"
             "买入：喵股市 买 <股票代码> <股数>\n"
             "卖出：喵股市 卖 <股票代码> <股数>\n"
             "查看：喵股市 大盘 / 喵股市 新闻 / 喵股市 持仓\n"
@@ -753,6 +865,13 @@ class CatStockPlugin:
             # 5) 价格上下限
             for comp in companies.values():
                 comp["price"] = round(min(max(comp["price"], 1.0), comp["base"] * 50), 2)
+
+            # 6) 单日涨跌幅限制：无论新闻多激烈，相对当日基准价都不会超过 ±10%
+            for comp in companies.values():
+                prev = comp.get("prev_close") or comp["price"] or 1
+                lo = max(1.0, prev * (1 - CAT_STOCK_DAILY_LIMIT))
+                hi = max(1.0, prev * (1 + CAT_STOCK_DAILY_LIMIT))
+                comp["price"] = round(min(max(comp["price"], lo), hi), 2)
 
             stamp = now.strftime("%m-%d %H:%M")
             news_entries = []
@@ -837,8 +956,23 @@ class CatStockPlugin:
         companies = market["companies"]
         if len(companies) <= 20 or random.random() >= CAT_STOCK_DELIST_CHANCE:
             return None
-        weak = [c for c in companies.values() if c["price"] < c["base"] * 0.45]
-        pool = weak if weak and random.random() < 0.6 else list(companies.values())
+        # 上市未满 10 天的企业受保护，不会被退市
+        today = datetime.now().date()
+        eligible = []
+        for comp in companies.values():
+            listed_day = comp.get("listed_day")
+            if listed_day:
+                try:
+                    age = (today - datetime.strptime(listed_day, "%Y-%m-%d").date()).days
+                except ValueError:
+                    age = CAT_STOCK_DELIST_MIN_DAYS
+                if age < CAT_STOCK_DELIST_MIN_DAYS:
+                    continue
+            eligible.append(comp)
+        if not eligible:
+            return None
+        weak = [c for c in eligible if c["price"] < c["base"] * 0.45]
+        pool = weak if weak and random.random() < 0.6 else eligible
         comp = random.choice(pool)
         code = comp["code"]
         final_price = comp["price"]
@@ -879,12 +1013,44 @@ class CatStockPlugin:
             "base": item["base"],
             "price": price,
             "prev_close": price,
+            "listed_day": datetime.now().strftime("%Y-%m-%d"),
         }
         return {"title": f"新上市：{item['name']}（{item['code']}）挂牌交易",
                 "detail": f"来自 {self._country_name(item['country'])}，首日参考价 {self._fmt_price(price)}"
                           f"，行业 {item.get('sector', '综合')}"}
 
     # ==================== AI 新闻生成 ====================
+
+    def _notable_cats(self) -> List[dict]:
+        """传说 / 史诗 / 稀有喵喵：用于新闻故事里当主角或目击者"""
+        pool = getattr(self._cat, "_pool", None) or []
+        return [c for c in pool if c.get("rarity") in ("legend", "epic", "rare")]
+
+    def _cat_news_seed(self) -> str:
+        """随机挑几张传说/史诗/稀有喵喵，写进 AI 新闻提示词"""
+        pool = self._notable_cats()
+        if not pool:
+            return ""
+        labels = {"legend": "传说", "epic": "史诗", "rare": "稀有"}
+        parts = []
+        for rarity in ("legend", "epic", "rare"):
+            group = [c for c in pool if c.get("rarity") == rarity]
+            for cat in random.sample(group, k=min(2, len(group))):
+                country = self._country_name(cat.get("country", "")) or cat.get("country", "")
+                jobs = cat.get("job_path") or []
+                job = str(jobs[-1]) if jobs else ""
+                meta = "｜".join(x for x in (country, f"职业:{job}" if job else "") if x)
+                trait = cat.get("intro") or cat.get("trait_desc") or ""
+                if len(trait) > 60:
+                    trait = trait[:60] + "…"
+                line = f"- {labels[rarity]}喵「{cat.get('name', '无名喵')}」（{meta}）"
+                if trait:
+                    line += f"：{trait}"
+                parts.append(line)
+        if not parts:
+            return ""
+        return ("这个世界各领域的知名喵喵（可选择性提及，不必强制出场）：\n"
+                + "\n".join(parts) + "\n")
 
     def _make_news(self, market: dict, now: datetime) -> Tuple[List[dict], List[dict]]:
         try:
@@ -903,6 +1069,7 @@ class CatStockPlugin:
         for comp in companies.values():
             lines.append(f"{comp['code']}｜{comp['name']}｜{comp['country']}({self._country_name(comp['country'])})"
                          f"｜{comp['sector']}｜现价{self._fmt_price(comp['price'])}")
+        cat_seed = self._cat_news_seed()
         prompt = (
             "你是一个奇幻世界的财经新闻主编，世界背景是《猫猫远征队》的 if 线："
             "各国之间存在战争、魔物袭击、魔法灾变、王室更替、龙潮、亡灵复苏等事件。\n"
@@ -913,7 +1080,11 @@ class CatStockPlugin:
             "每条新闻必须与股市直接相关，并且至少给出 1 条能由这条新闻解释的股价影响"
             "（例如战争利好军工、灾变利空产地企业、商路被切断利空物流）。"
             "突发新闻可以来得很突然，但因果关系必须合理、能自圆其说。"
-            "涨跌要激烈、有戏剧性，但不要所有股票同涨同跌。\n"
+            "涨跌要激烈、有戏剧性，但不要所有股票同涨同跌。"
+            + (cat_seed + "\n" if cat_seed else "") +
+            "上面这些喵喵只是这个世界各领域的知名人物，和股票涨跌没有必然关系；"
+            "新闻里可以在合适的时候顺手提到他们（比如某位大师接了大单、某位名人现身商会），"
+            "但不必强行出场，也不必每条新闻都提到。\n"
             "只输出一个 JSON 对象，不要解释，格式：\n"
             '{"news":[{"title":"新闻标题","detail":"一句话详情",'
             '"effects":[{"code":"股票代码","pct":0.18},{"country":"国家代码","pct":-0.12}]}]}\n'
@@ -993,9 +1164,14 @@ class CatStockPlugin:
             pct = random.choice([-0.22, -0.15, -0.1, 0.1, 0.15, 0.23])
             effects.append({"code": code, "pct": pct})
             sign = "暴涨" if pct > 0 else "跳水"
+            detail = "交易所称原因不明，坊间传闻与神秘买盘有关"
+            cats = self._notable_cats()
+            if cats and random.random() < 0.5:
+                cat = random.choice(cats)
+                detail += f"，有人目击{cat.get('name', '某位喵喵')}出入交易大厅"
             news.append({
                 "title": f"{companies[code]['name']}（{code}）盘中突然{sign}",
-                "detail": "交易所称原因不明，坊间传闻与神秘买盘有关",
+                "detail": detail,
             })
         return news, effects
 

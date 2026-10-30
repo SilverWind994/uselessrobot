@@ -3686,6 +3686,9 @@ const stockMarketBodyEl = document.getElementById('stock-market-body');
 const stockMarketSubEl = document.getElementById('stock-market-sub');
 const stockHoldingsEl = document.getElementById('stock-holdings');
 const stockHoldSubEl = document.getElementById('stock-hold-sub');
+const stockRankSubEl = document.getElementById('stock-rank-sub');
+const stockRankBestEl = document.getElementById('stock-rank-best');
+const stockRankWorstEl = document.getElementById('stock-rank-worst');
 const stockNewsEl = document.getElementById('stock-news');
 
 function stockMoney(n) {
@@ -3774,6 +3777,26 @@ function renderStock(data) {
         </table>
       </div>`;
   }
+
+  const ranking = data.ranking || [];
+  stockRankSubEl.textContent = `共 ${ranking.length} 位股东｜按累计盈亏排序`;
+  const rankRow = (r, i) => `
+    <div class="rank-row">
+      <span class="rank-no">${i}</span>
+      <span class="rank-name">${esc(r.nick)}</span>
+      <span class="rank-val ${r.profit >= 0 ? 'stock-up' : 'stock-down'}">
+        ${r.profit >= 0 ? '+' : ''}${stockMoney(r.profit)}（${r.pct >= 0 ? '+' : ''}${Number(r.pct).toFixed(1)}%）
+      </span>
+      <span class="rank-reward">资产 ${stockMoney(r.assets)}</span>
+    </div>`;
+  const bestRank = ranking.slice(0, 5);
+  const worstRank = ranking.filter((r) => r.profit < 0).slice(-5).reverse();
+  stockRankBestEl.innerHTML = bestRank.length
+    ? bestRank.map((r, i) => rankRow(r, i + 1)).join('')
+    : '<p class="room-empty">还没有人入场喵</p>';
+  stockRankWorstEl.innerHTML = worstRank.length
+    ? worstRank.map((r, i) => rankRow(r, i + 1)).join('')
+    : '<p class="room-empty">暂时全员盈利，没人亏钱喵</p>';
 
   stockNewsEl.innerHTML = (data.news || []).length
     ? data.news.map((n) => `

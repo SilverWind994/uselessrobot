@@ -319,6 +319,8 @@ class CatStockPlugin:
             self._show_news(target)
         elif sub in ("持仓", "仓位", "我的"):
             self._show_holdings(target, ctx.user_id)
+        elif sub in ("排行", "榜单", "排名", "盈亏榜", "rank"):
+            self._show_rank(target)
         elif sub in ("买", "买入", "购", "buy"):
             self._buy(target, ctx.user_id, rest)
         elif sub in ("卖", "卖出", "抛", "抛售", "sell"):
@@ -335,7 +337,7 @@ class CatStockPlugin:
             else:
                 self._sender.send_text(
                     target,
-                    "没有这个子命令喵～ 可用：大盘 / 新闻 / 持仓 / 买 / 卖 / 充值 / 提现\n"
+                    "没有这个子命令喵～ 可用：大盘 / 新闻 / 持仓 / 买 / 卖 / 充值 / 提现 / 排行\n"
                     "发送「喵股市 帮助」查看完整说明"
                 )
 
@@ -449,6 +451,63 @@ class CatStockPlugin:
         lines.append("")
         lines.append(f"总市值：{total_value:.0f}｜总浮动：{total_pnl:+.0f}｜猫薄荷：{catnip}")
         lines.append("（买入满 24 小时后才能卖出）")
+        self._sender.send_text(target, "\n".join(lines))
+
+    # ==================== 盈亏排行 ====================
+
+    def rank_players(self) -> List[dict]:
+        """按累计盈亏排序（从高到低）
+
+        盈亏 =（猫薄荷 + 持仓市值）-（初始 10000 + 累计充值 - 累计提现），
+        这样充值/提现不会被误算成盈利或亏损。
+        """
+        market = self._load_market()
+        companies = market["companies"]
+        players = self._load_stock_players()
+        cat_players = self._cat._load_players()
+        rows: List[dict] = []
+        for key, st in players.items():
+            catnip = int(st.get("catnip", 0))
+            value = 0.0
+            for code, lots in st.get("holdings", {}).items():
+                comp = companies.get(code)
+                if comp:
+                    value += self._shares_of(lots) * comp["price"]
+            net_in = (CAT_STOCK_INITIAL_CATNIP
+                      + int(st.get("deposit_catnip", 0))
+                      - int(st.get("withdraw_catnip", 0)))
+            assets = catnip + value
+            profit = assets - net_in
+            player = cat_players.get(str(key)) or {}
+            rows.append({
+                "nick": player.get("nick") or "无名喵",
+                "assets": int(round(assets)),
+                "profit": int(round(profit)),
+                "pct": round(profit / net_in * 100, 1) if net_in > 0 else 0.0,
+            })
+        rows.sort(key=lambda r: r["profit"], reverse=True)
+        return rows
+
+    def _show_rank(self, target: Target, limit: int = 5) -> None:
+        rows = self.rank_players()
+        if not rows:
+            self._sender.send_text(target, "喵股市还没有人入场喵～ 发送「喵股市 充值」开始炒股")
+            return
+        lines = [f"【喵股市 · 盈亏排行】共 {len(rows)} 位股东"]
+        lines.append("")
+        lines.append("🏆 收益榜")
+        for i, r in enumerate(rows[:limit], 1):
+            lines.append(f"{i}. {r['nick']} {r['profit']:+d} 猫薄荷（{r['pct']:+.1f}%）")
+        losers = [r for r in rows if r["profit"] < 0][::-1][:limit]
+        lines.append("")
+        lines.append("💀 亏损榜（亏得最惨）")
+        if losers:
+            for i, r in enumerate(losers, 1):
+                lines.append(f"{i}. {r['nick']} {r['profit']:d} 猫薄荷（{r['pct']:.1f}%）")
+        else:
+            lines.append("暂时全员盈利，没人亏钱喵")
+        lines.append("")
+        lines.append("盈亏 =（猫薄荷 + 持仓市值）-（初始 10000 + 累计充值 - 累计提现）")
         self._sender.send_text(target, "\n".join(lines))
 
     # ==================== 交易 ====================
@@ -628,6 +687,8 @@ class CatStockPlugin:
             players = self._load_stock_players()
             st = self._stock_player(qq, players)
             st["catnip"] = int(st.get("catnip", 0)) + gain
+            # 记录累计充值，用于盈亏排行计算（不算作盈利）
+            st["deposit_catnip"] = int(st.get("deposit_catnip", 0)) + gain
             self._save_stock_players(players)
             catnip = st["catnip"]
 
@@ -666,6 +727,8 @@ class CatStockPlugin:
                 )
                 return
             st["catnip"] = catnip - need
+            # 记录累计提现，用于盈亏排行计算（不算作亏损）
+            st["withdraw_catnip"] = int(st.get("withdraw_catnip", 0)) + need
             self._save_stock_players(players)
             left = st["catnip"]
 
@@ -800,6 +863,7 @@ class CatStockPlugin:
             "买入：喵股市 买 <股票代码> <股数>\n"
             "卖出：喵股市 卖 <股票代码> <股数>\n"
             "查看：喵股市 大盘 / 喵股市 新闻 / 喵股市 持仓\n"
+            "排行：喵股市 排行（收益榜 + 亏得最惨榜）\n"
             f"（提示：大额持仓可能被空头盯上，别把猫薄荷都押在一只股上）"
         )
 

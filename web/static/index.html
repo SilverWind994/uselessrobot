@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>串子小车 · 网页端</title>
-  <link rel="stylesheet" href="/static/style.css?v=16">
+  <link rel="stylesheet" href="/static/style.css?v=17">
 </head>
 <body>
   <div class="bg-glow"></div>
@@ -356,6 +356,26 @@
             </div>
           </div>
           <div id="stock-holdings"></div>
+        </div>
+
+        <div class="card">
+          <div class="panel-head">
+            <div>
+              <div class="panel-title">盈亏排行</div>
+              <div class="panel-sub" id="stock-rank-sub"></div>
+            </div>
+          </div>
+          <div class="stock-rank-cols">
+            <div>
+              <div class="panel-sub">🏆 收益榜</div>
+              <div id="stock-rank-best" class="rank-list"><p class="room-empty">加载中…</p></div>
+            </div>
+            <div>
+              <div class="panel-sub">💀 亏损榜（亏得最惨）</div>
+              <div id="stock-rank-worst" class="rank-list"><p class="room-empty">加载中…</p></div>
+            </div>
+          </div>
+          <p class="hint">盈亏 =（猫薄荷 + 持仓市值）-（初始 10000 + 累计充值 - 累计提现），充值提现不算盈亏。</p>
         </div>
 
         <div class="card">
@@ -899,6 +919,6 @@
 
   <footer class="foot">串子小车 · 网页端</footer>
 
-  <script src="/static/app.js?v=16"></script>
+  <script src="/static/app.js?v=17"></script>
 </body>
 </html>

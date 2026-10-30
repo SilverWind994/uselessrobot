@@ -794,4 +794,9 @@ code { background: #120f0d; border: 1px solid var(--line); border-radius: 6px; p
 #stock-wallet { margin-bottom: 12px; }
 #stock-holdings { margin-top: 4px; }
 
+.stock-rank-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-top: 10px; }
+@media (max-width: 720px) {
+  .stock-rank-cols { grid-template-columns: 1fr; }
+}
+
 

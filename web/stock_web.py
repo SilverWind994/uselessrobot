@@ -45,8 +45,10 @@ def _run(func, qq: int, rest: list) -> str:
 
 
 def overview(qq: int) -> dict:
-    """行情 + 新闻 + 本人持仓"""
-    return _plugin.snapshot(qq)
+    """行情 + 新闻 + 本人持仓 + 盈亏排行"""
+    data = _plugin.snapshot(qq)
+    data["ranking"] = _plugin.rank_players()
+    return data
 
 
 def buy(qq: int, code, shares) -> str:

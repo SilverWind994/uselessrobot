@@ -22,6 +22,7 @@ from plugins.yahtzee import YahtzeePlugin
 from plugins.mahjong17 import Mahjong17Plugin
 from plugins.farkle import FarklePlugin
 from plugins.tournament import TournamentPlugin
+from plugins.cat_stock import CatStockPlugin
 
 # AI 自动回复读取的群聊上下文条数
 GROUP_CHAT_CONTEXT_LEN = 20
@@ -91,6 +92,10 @@ class Bot:
         # 猫猫远征队插件
         cat_game = CatExpeditionPlugin(self._sender)
         cat_game.register(self._router)
+
+        # 喵股市插件（猫猫远征队 if 线，鱼干与猫薄荷兑换复用远征队存档）
+        self._stock = CatStockPlugin(self._sender, cat_game, self._ai_plugin)
+        self._stock.register(self._router)
 
         # 何切阿瓦隆问答插件
         self._avalon = AvalonQuizPlugin(self._sender)

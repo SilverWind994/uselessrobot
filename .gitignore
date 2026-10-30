@@ -52,6 +52,8 @@ newbot/assets/mahjong17/*
 newbot/assets/farkle/*
 # 锦标赛：赛程状态（运行时内容，不纳入版本库）
 newbot/assets/tournament/*
+# 喵股市：行情、新闻与猫薄荷账本（运行时内容，不纳入版本库）
+newbot/assets/cat_stock/*
 
 # ===== 老代码归档（archive/mybot）中的运行时数据 =====
 archive/mybot/jsonFile/*

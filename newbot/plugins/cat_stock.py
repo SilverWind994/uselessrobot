@@ -40,10 +40,13 @@ CAT_STOCK_EFFECT_MAX = 0.22          # 单条新闻对单只股票的单小时�
 CAT_STOCK_MOMENTUM_CARRY = 0.45      # 上一小时走势延续到下一小时的比例
 CAT_STOCK_LINK_COUNTRY = 0.35        # 同国企业联动系数
 CAT_STOCK_LINK_SECTOR = 0.25         # 同行业企业联动系数
-CAT_STOCK_DELIST_MIN_DAYS = 10       # 企业上市满 10 天后才可能退市
+CAT_STOCK_DELIST_BAD_RATIO = 0.6     # 股价低于基准价该比例视为持续低迷
+CAT_STOCK_DELIST_BAD_TICKS = 10      # 连续低迷多少个整点才进入退市候选
+CAT_STOCK_CATCHUP_MAX = 6            # 单次最多补发多少个错过的整点
+CAT_STOCK_NEWS_WEB_DAYS = 7          # 网页端只展示最近 days 天的新闻
 CAT_STOCK_BIG_HOLDING_VALUE = 20000  # 单只股票持仓市值达到该值才可能被针对
 CAT_STOCK_BIG_HOLDING_CHANCE = 0.04  # 每个整点针对大额持仓的概率
-CAT_STOCK_NEWS_MAX = 80              # 新闻最多保留条数
+CAT_STOCK_NEWS_MAX = 200             # 新闻最多保留条数（需覆盖网页 7 天）
 CAT_STOCK_POLICY_MIN_SHARES = 1000   # 改公司方针所需的最低持股数
 CAT_STOCK_POLICY_MAX_LEN = 24        # 方针文本最大长度
 CAT_STOCK_COUNTRY_MIN_LISTED = 2     # 每个国家尽量维持的上市公司数
@@ -879,6 +882,27 @@ class CatStockPlugin:
 
     # ==================== 网页端数据接口 ====================
 
+    def _recent_news(self, news: list) -> list:
+        """只保留最近 CAT_STOCK_NEWS_WEB_DAYS 天的新闻"""
+        now = datetime.now()
+        cutoff = now.timestamp() - CAT_STOCK_NEWS_WEB_DAYS * 86400
+        result = []
+        for item in news:
+            ts = item.get("ts")
+            if not ts:
+                try:
+                    stamp = datetime.strptime(item.get("time", ""), "%m-%d %H:%M")
+                except ValueError:
+                    result.append(item)
+                    continue
+                stamp = stamp.replace(year=now.year)
+                if stamp.timestamp() > now.timestamp() + 86400:
+                    stamp = stamp.replace(year=stamp.year - 1)
+                ts = stamp.timestamp()
+            if ts >= cutoff:
+                result.append(item)
+        return result
+
     def snapshot(self, qq: Optional[int] = None) -> dict:
         """整理成网页端用的结构化行情 / 新闻 / 持仓（只读，不改动存档）"""
         market = self._load_market()
@@ -906,7 +930,7 @@ class CatStockPlugin:
         news = [{"time": item.get("time", ""),
                  "title": item.get("title", ""),
                  "detail": item.get("detail", "")}
-                for item in market.get("news", [])[:20]]
+                for item in self._recent_news(market.get("news", []))[:60]]
 
         data = {
             "open": self._is_open(now),
@@ -998,7 +1022,8 @@ class CatStockPlugin:
             "单笔最少 10 股、最多 100 万股\n"
             "涨跌：不设涨跌停，单小时大致 -20% ~ +25%；事件会延续发酵，"
             "同国与同行业的企业也会联动涨跌\n"
-            f"退市：企业上市满 {CAT_STOCK_DELIST_MIN_DAYS} 天后才可能因战争/灾变退市（偶发事件），"
+            f"退市：连续 {CAT_STOCK_DELIST_BAD_TICKS} 个整点股价低于基准价 "
+            f"{CAT_STOCK_DELIST_BAD_RATIO:.0%} 的企业会被摘牌，"
             "持仓按最新价 70% 强制清算，退市企业也可能改日重新上市\n"
             "买入：喵股市 买 <股票代码> <股数>\n"
             "卖出：喵股市 卖 <股票代码> <股数>\n"
@@ -1017,14 +1042,30 @@ class CatStockPlugin:
     def _scheduler_loop(self) -> None:
         while True:
             try:
-                now = datetime.now()
-                if self._is_open(now):
-                    key = now.strftime("%Y-%m-%d %H")
-                    if self._load_market().get("last_tick") != key:
-                        self._tick(now)
+                self._catch_up(datetime.now())
             except Exception as e:
                 print(f"[cat_stock] tick error: {e}")
             time.sleep(30)
+
+    def _catch_up(self, now: datetime) -> None:
+        """补齐因停机/休市错过、且仍在开市时段内的整点，每个整点各补一次"""
+        if not self._is_open(now):
+            return
+        current = now.replace(minute=0, second=0, microsecond=0)
+        last = self._load_market().get("last_tick") or ""
+        try:
+            last_dt = datetime.strptime(last, "%Y-%m-%d %H")
+        except ValueError:
+            last_dt = current - timedelta(hours=1)
+        slots = []
+        cursor = last_dt + timedelta(hours=1)
+        while cursor <= current:
+            if CAT_STOCK_OPEN_HOUR <= cursor.hour < CAT_STOCK_CLOSE_HOUR:
+                slots.append(cursor)
+            cursor += timedelta(hours=1)
+        for slot in slots[-CAT_STOCK_CATCHUP_MAX:]:
+            self._tick(slot)
+            time.sleep(0.5)
 
     def _tick(self, now: datetime) -> None:
         key = now.strftime("%Y-%m-%d %H")
@@ -1087,17 +1128,18 @@ class CatStockPlugin:
                 comp.pop("carry", None)
 
             stamp = now.strftime("%m-%d %H:%M")
+            stamp_ts = now.timestamp()
             news_entries = []
             for item in ai_news:
-                news_entries.append({"time": stamp,
+                news_entries.append({"time": stamp, "ts": stamp_ts,
                                      "title": item.get("title", ""),
                                      "detail": item.get("detail", "")})
             for item in pressure_news + event_news:
-                news_entries.append({"time": stamp,
+                news_entries.append({"time": stamp, "ts": stamp_ts,
                                      "title": item.get("title", ""),
                                      "detail": item.get("detail", "")})
             if not news_entries:
-                news_entries.append({"time": stamp, "title": "世界暂时平静，大盘随资金情绪小幅波动",
+                news_entries.append({"time": stamp, "ts": stamp_ts, "title": "世界暂时平静，大盘随资金情绪小幅波动",
                                      "detail": ""})
 
             market["news"] = (news_entries + market["news"])[:CAT_STOCK_NEWS_MAX]
@@ -1186,26 +1228,21 @@ class CatStockPlugin:
 
     def _maybe_delist(self, market: dict, players: dict) -> Optional[dict]:
         companies = market["companies"]
+        # 每个整点记录经营状态：股价长期低于基准价一定比例才累积低迷计数
+        for comp in companies.values():
+            base = float(comp.get("base", 0) or 0)
+            if base > 0 and comp["price"] <= base * CAT_STOCK_DELIST_BAD_RATIO:
+                comp["bad_ticks"] = int(comp.get("bad_ticks", 0)) + 1
+            else:
+                comp["bad_ticks"] = 0
+
         if len(companies) <= 20 or random.random() >= CAT_STOCK_DELIST_CHANCE:
             return None
-        # 上市未满 10 天的企业受保护，不会被退市
-        today = datetime.now().date()
-        eligible = []
-        for comp in companies.values():
-            listed_day = comp.get("listed_day")
-            if listed_day:
-                try:
-                    age = (today - datetime.strptime(listed_day, "%Y-%m-%d").date()).days
-                except ValueError:
-                    age = CAT_STOCK_DELIST_MIN_DAYS
-                if age < CAT_STOCK_DELIST_MIN_DAYS:
-                    continue
-            eligible.append(comp)
+        eligible = [c for c in companies.values()
+                    if int(c.get("bad_ticks", 0)) >= CAT_STOCK_DELIST_BAD_TICKS]
         if not eligible:
             return None
-        weak = [c for c in eligible if c["price"] < c["base"] * 0.45]
-        pool = weak if weak and random.random() < 0.6 else eligible
-        comp = random.choice(pool)
+        comp = random.choice(eligible)
         code = comp["code"]
         final_price = comp["price"]
         payout = int(round(final_price * CAT_STOCK_DELIST_RATE))
@@ -1223,10 +1260,12 @@ class CatStockPlugin:
             "code": comp["code"], "name": comp["name"], "country": comp["country"],
             "sector": comp["sector"], "base": comp["base"],
         })
-        detail = f"收盘获利了结，持仓按最新价 {CAT_STOCK_DELIST_RATE:.0%} 强制清算"
+        detail = (f"连续 {comp.get('bad_ticks', CAT_STOCK_DELIST_BAD_TICKS)} 个整点股价"
+                  f"低于基准价 {CAT_STOCK_DELIST_BAD_RATIO:.0%}，经营持续恶化，"
+                  f"持仓按最新价 {CAT_STOCK_DELIST_RATE:.0%} 强制清算")
         if paid:
             detail += "（本小时有玩家持仓被清算）"
-        return {"title": f"退市公告：{comp['name']}（{code}）资不抵债，正式摘牌",
+        return {"title": f"退市公告：{comp['name']}（{code}）长期低迷，正式摘牌",
                 "detail": detail}
 
     def _maybe_list(self, market: dict) -> Optional[dict]:
@@ -1260,7 +1299,7 @@ class CatStockPlugin:
             "base": item["base"],
             "price": price,
             "prev_close": price,
-            "listed_day": datetime.now().strftime("%Y-%m-%d"),
+            "bad_ticks": 0,
         }
         reason = "该国暂时缺上市公司，紧急挂牌" if shortage else "扩展业务版图"
         return {"title": f"新上市：{item['name']}（{item['code']}）挂牌交易",

@@ -54,6 +54,7 @@ CAT_STOCK_POLICY_MAX_LEN = 24        # 方针文本最大长度
 CAT_STOCK_COUNTRY_MIN_LISTED = 2     # 每个国家尽量维持的上市公司数
 CAT_STOCK_COMPANY_MIN = 35           # 市场最少保持的上市公司数
 CAT_STOCK_COMPANY_MAX = 70           # 市场最多容纳的上市公司数
+CAT_STOCK_AI_ACTION_CHANCE = 0.25    # 无世界走向时，AI 推动上市/摘牌被采纳的概率
 
 # ==================== 世界地理 ====================
 # 依据世界地图整理：land 为陆上邻国，sea 为海上/天空可达国家
@@ -1534,6 +1535,13 @@ class CatStockPlugin:
                    ) -> Tuple[List[dict], List[dict], Optional[dict], Optional[dict]]:
         try:
             news, effects, world_update, actions = self._ai_news(market, now, world)
+            if actions and not world:
+                # 没有世界走向时，普通事件偶尔也能推动换血，但概率压低避免频繁
+                if random.random() >= CAT_STOCK_AI_ACTION_CHANCE:
+                    actions = None
+                else:
+                    actions = {"listings": (actions.get("listings") or [])[:1],
+                               "delistings": (actions.get("delistings") or [])[:1]}
             if news or actions:
                 return news, effects, world_update, actions
         except Exception as e:
@@ -1620,7 +1628,8 @@ class CatStockPlugin:
             "如果世界走向明确要求某行业整体衰败退出，可以额外返回 delistings"
             "（最多 2 家，没有就省略）："
             '{"code":"现有股票代码","reason":"一句话原因"}。'
-            "只有世界走向直接涉及产业兴衰时才给，平时不要凭空增减上市公司；"
+            "世界走向涉及产业兴衰时必须给出；即使没有世界走向，普通事件（灾变、重建、"
+            "贸易繁荣、行业衰败等）也可以促成上市或摘牌，但不要频繁，大多数整点不要返回；"
             "这类上市与摘牌会由交易所自动播报，不需要写进 news。\n"
         )
         text = self._ai._call_ai(

@@ -53,6 +53,28 @@ CAT_STOCK_POLICY_MIN_SHARES = 1000   # 改公司方针所需的最低持股数
 CAT_STOCK_POLICY_MAX_LEN = 24        # 方针文本最大长度
 CAT_STOCK_COUNTRY_MIN_LISTED = 2     # 每个国家尽量维持的上市公司数
 
+# ==================== 世界地理 ====================
+# 依据世界地图整理：land 为陆上邻国，sea 为海上/天空可达国家
+_COUNTRY_GEO = {
+    "vo": {"land": ["du", "ta"], "sea": []},
+    "du": {"land": ["vo", "no", "ta"], "sea": []},
+    "ta": {"land": ["du", "vo", "sy"], "sea": ["ze", "au"]},
+    "ze": {"land": [], "sea": ["ta", "as", "au"]},
+    "as": {"land": [], "sea": ["ze", "au", "dr"]},
+    "au": {"land": ["sy", "za", "dr"], "sea": ["ta", "ze", "as", "ig", "ma"]},
+    "ig": {"land": [], "sea": ["au", "ma", "dr"]},
+    "ma": {"land": [], "sea": ["au", "ig", "dr", "so", "ab"]},
+    "dr": {"land": ["au"], "sea": ["ma", "ab", "as", "ig"]},
+    "sy": {"land": ["ta", "au", "za", "mo", "no"], "sea": []},
+    "za": {"land": ["sy", "au", "mo", "so"], "sea": []},
+    "no": {"land": ["du", "ch", "sy"], "sea": []},
+    "ch": {"land": ["no", "mo"], "sea": []},
+    "mo": {"land": ["ch", "sy", "za", "so"], "sea": []},
+    "so": {"land": ["mo", "za"], "sea": ["ma", "ab"]},
+    "ab": {"land": [], "sea": ["ma", "dr", "so"]},
+    "ci": {"land": [], "sea": [], "note": "无固定国土，仅在各国雇佣据点活动"},
+}
+
 # ==================== 初始上市公司 ====================
 # code / name / country / sector / base
 _INITIAL_COMPANIES = [
@@ -322,6 +344,27 @@ class CatStockPlugin:
     def _country_name(self, code: str) -> str:
         countries = getattr(self._cat, "_countries", {}) or {}
         return countries.get(code, code)
+
+    def _are_adjacent(self, a: str, b: str) -> bool:
+        geo = _COUNTRY_GEO.get(a) or {}
+        return b in geo.get("land", []) or b in geo.get("sea", [])
+
+    def _geography_prompt(self) -> str:
+        lines = ["\n世界地理（国家间互动必须符合地图距离与连通性）："]
+        for code, geo in _COUNTRY_GEO.items():
+            name = self._country_name(code)
+            if geo.get("note"):
+                lines.append(f"- {name}（{code}）：{geo['note']}")
+                continue
+            land = "、".join(self._country_name(c) for c in geo["land"]) or "无"
+            sea = "、".join(self._country_name(c) for c in geo["sea"]) or "无"
+            lines.append(f"- {name}（{code}）：陆上邻国 {land}；海上/天空可达 {sea}")
+        lines.append("边境摩擦、领土争端、陆路商队与陆上军事行动只能发生在陆上邻国之间；"
+                     "海上封锁、海战、跨海远征与空袭只能发生在海上/天空可达国家之间；"
+                     "既不相邻也不海上可达的国家之间，只能通过使团、远洋贸易、"
+                     "代理战争或第三方转口产生间接影响，不得写成直接边境摩擦或海上冲突。"
+                     "断交、结盟等外交行为可以跨国发生，但需说明是经由使团或第三方牵线。\n")
+        return "\n".join(lines)
 
     def _resolve_company(self, market: dict, text: str) -> Optional[dict]:
         """按代码或名称匹配企业"""
@@ -1465,7 +1508,8 @@ class CatStockPlugin:
             "各国之间存在战争、魔物袭击、魔法灾变、王室更替、龙潮、亡灵复苏等事件。\n"
             f"现在是 {now.strftime('%H:%M')}，股市开市。\n"
             "以下是当前上市企业（代码｜名称｜国家｜行业｜现价｜近1小时涨跌）：\n"
-            + "\n".join(lines) + recent_block + world_block + state_block +
+            + "\n".join(lines) + recent_block + world_block + state_block
+            + self._geography_prompt() +
             "\n\n请生成 1~3 条本小时的世界新闻。"
             "每条新闻必须与股市直接相关，并且至少给出 1 条能由这条新闻解释的股价影响"
             "（例如战争利好军工、灾变利空产地企业、商路被切断利空物流）。"
@@ -1559,7 +1603,8 @@ class CatStockPlugin:
             a = str(item.get("a") or "").strip()
             b = str(item.get("b") or "").strip()
             state = str(item.get("state") or "").strip()[:16]
-            if a in company_countries and b in company_countries and a != b and state:
+            if (a in company_countries and b in company_countries
+                    and a != b and state and self._are_adjacent(a, b)):
                 relations.append({"a": a, "b": b, "state": state})
             if len(relations) >= 10:
                 break

@@ -190,8 +190,8 @@ class CatExpeditionPlugin:
         return default.get("cats", []), pools
 
     def _migrate_players(self) -> None:
-        """启动时迁移玩家存档：把历史 id 补零为两位数，并按 id 对齐卡池中的 name/rarity。
-        卡池改 id/改名/调稀有度后，玩家收藏里的旧字段会在下次启动时自动更新。"""
+        """启动时迁移玩家存档：把历史 id 补零为两位数。
+        收藏里只保留 id 与星级，名称/稀有度/职业一律从卡池按 id 实时推导。"""
         pool_by_id = {c["id"]: c for c in self._pool}
         players = self._load_players()
         changed = False
@@ -201,15 +201,15 @@ class CatExpeditionPlugin:
                 if new_id != owned.get("id"):
                     owned["id"] = new_id
                     changed = True
-                ref = pool_by_id.get(owned.get("id"))
-                if ref is None:
-                    continue
-                if owned.get("name") != ref["name"]:
-                    owned["name"] = ref["name"]
+                if "star" not in owned:
+                    owned["star"] = 1
                     changed = True
-                if owned.get("rarity") != ref["rarity"]:
-                    owned["rarity"] = ref["rarity"]
-                    changed = True
+                if pool_by_id.get(owned.get("id")) is not None:
+                    # 淘汰历史冗余字段，读档时会按 id 重新推导
+                    for legacy in ("name", "rarity", "job"):
+                        if legacy in owned:
+                            del owned[legacy]
+                            changed = True
             team = pl.get("deploy_team")
             if isinstance(team, list):
                 for i, cid in enumerate(team):
@@ -828,37 +828,35 @@ class CatExpeditionPlugin:
         owned = self._find_collection_cat(player, cat_pool["id"])
 
         if owned is None:
-            # 新猫
-            owned = {
-                "id": cat_pool["id"],
-                "name": cat_pool["name"],
-                "rarity": cat_pool["rarity"],
-                "star": 1,
-                "job": _job_for_star(1)
-            }
+            # 新猫：存档只记 id 与星级，其余展示字段按卡池推导
+            owned = {"id": cat_pool["id"], "star": 1}
             player["collection"].append(owned)
-            return {**owned, "is_dup": False, "refunded": False, "refund_amt": 0,
+            return {**owned, "name": cat_pool["name"], "rarity": cat_pool["rarity"],
+                    "job": _job_for_star(1),
+                    "is_dup": False, "refunded": False, "refund_amt": 0,
                     "star_up": False, "job_up": False}
 
         # 重复猫：星级+1（star即抽取次数）
         old_star = owned["star"]
-        old_job = owned.get("job", "")
+        old_job = _job_for_star(old_star)
 
         # 已满星：返还鱼干
         if old_star >= CatConfig.CAT_MAX_STAR:
-            refund = CatConfig.CAT_DUP_REFUND_BY_RARITY.get(owned["rarity"], 50)
+            refund = CatConfig.CAT_DUP_REFUND_BY_RARITY.get(cat_pool["rarity"], 50)
             player["fish"] += refund
-            return {**owned, "is_dup": True, "refunded": True, "refund_amt": refund,
+            return {**owned, "name": cat_pool["name"], "rarity": cat_pool["rarity"],
+                    "job": old_job,
+                    "is_dup": True, "refunded": True, "refund_amt": refund,
                     "star_up": False, "job_up": False}
 
         # 未满星：升星
         owned["star"] += 1
         new_job = _job_for_star(owned["star"])
         job_up = new_job and new_job != old_job
-        if job_up:
-            owned["job"] = new_job
 
-        return {**owned, "is_dup": True, "refunded": False, "refund_amt": 0,
+        return {**owned, "name": cat_pool["name"], "rarity": cat_pool["rarity"],
+                "job": new_job,
+                "is_dup": True, "refunded": False, "refund_amt": 0,
                 "star_up": True, "job_up": job_up}
 
     # ==================== 猫眼石兑换 ====================
@@ -1029,12 +1027,13 @@ class CatExpeditionPlugin:
         total_bonus_ratio = 0.0
 
         for owned in player.get("collection", []):
-            base = CatConfig.CAT_BASE_POWER_BY_RARITY.get(owned["rarity"], 0)
+            pool_cat = self._find_pool_cat(owned.get("id", ""))
+            rarity = (pool_cat or {}).get("rarity", "normal")
+            base = CatConfig.CAT_BASE_POWER_BY_RARITY.get(rarity, 0)
             star_mult = CatConfig.CAT_STAR_POWER_MULT.get(owned.get("star", 1), 1)
             base_power = base * star_mult
             base_total += base_power
 
-            pool_cat = self._find_pool_cat_by_name(owned["id"])
             affinity = (pool_cat or {}).get("trait_affinity") or {}
             matched_weather = affinity.get("weather") == weather
             matched_terrain = affinity.get("terrain") == terrain
@@ -1046,11 +1045,11 @@ class CatExpeditionPlugin:
                 matches += 1
 
             if matches > 0:
-                per_match = CatConfig.CAT_TRAIT_BONUS_BY_RARITY.get(owned["rarity"], 0.02)
+                per_match = CatConfig.CAT_TRAIT_BONUS_BY_RARITY.get(rarity, 0.02)
                 trait_mult = CatConfig.CAT_TRAIT_MULT_BY_STAR.get(owned.get("star", 1), 1)
                 bonus_ratio = per_match * trait_mult * matches
                 total_bonus_ratio += bonus_ratio
-                name = owned.get("name", owned["id"])
+                name = (pool_cat or {}).get("name", owned.get("id", ""))
                 reason = ""
                 if matched_weather and matched_terrain:
                     reason = f"（天气+地形匹配，+{bonus_ratio*100:.0f}%）"
@@ -1915,7 +1914,9 @@ class CatExpeditionPlugin:
         以后会叠加遗物加成。"""
         total = 0
         for owned in player.get("collection", []):
-            base = CatConfig.CAT_BASE_POWER_BY_RARITY.get(owned.get("rarity", "normal"), 0)
+            pool_cat = self._find_pool_cat(owned.get("id", ""))
+            rarity = (pool_cat or {}).get("rarity", "normal")
+            base = CatConfig.CAT_BASE_POWER_BY_RARITY.get(rarity, 0)
             total += base * CatConfig.CAT_STAR_POWER_MULT.get(owned.get("star", 1), 1)
         return total
 
@@ -1931,9 +1932,10 @@ class CatExpeditionPlugin:
         """出阵猫战力：基础战力×星级倍率，再叠加适性特性加成。
         仅对出征队员调用，非出阵猫不享受特性加成。"""
         star = owned_cat.get("star", 1)
-        base = CatConfig.CAT_BASE_POWER_BY_RARITY[owned_cat["rarity"]]
+        rarity = (pool_cat or {}).get("rarity", "normal")
+        base = CatConfig.CAT_BASE_POWER_BY_RARITY[rarity]
         power = base * CatConfig.CAT_STAR_POWER_MULT.get(star, 1)
-        bonus = self._trait_bonus_ratio(pool_cat, owned_cat["rarity"], star,
+        bonus = self._trait_bonus_ratio(pool_cat, rarity, star,
                                         battle_type, weather, terrain)
         return int(power * (1 + bonus))
 
@@ -2032,17 +2034,19 @@ class CatExpeditionPlugin:
             owned = None
             key = arg.lower()
             for cat in collection:
-                if cat.get("name") == arg or str(cat.get("id", "")).lower() == key:
+                pool_cat = self._find_pool_cat(cat.get("id", "")) or {}
+                if pool_cat.get("name") == arg or str(cat.get("id", "")).lower() == key:
                     owned = cat
                     break
             if owned is None:
                 self._sender.reply(ctx, f"你的图鉴里没有「{arg}」这只猫喵")
                 return
+            pool_cat = self._find_pool_cat(owned.get("id", "")) or {}
             star = max(1, min(CatConfig.CAT_MAX_STAR, int(owned.get("star", 1))))
             self._sender.reply(
                 ctx,
                 f"【分解喵 · 估价】\n"
-                f"{owned.get('name', arg)} ★{star} → {star} 鱼干\n"
+                f"{pool_cat.get('name', arg)} ★{star} → {star} 鱼干\n"
                 f"（只是估价，猫猫不会被真的分解喵～）"
             )
             return

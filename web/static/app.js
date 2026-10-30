@@ -3716,7 +3716,7 @@ function renderStock(data) {
   stockRulesEl.textContent =
     `开市 ${data.open_hour}:00~${data.close_hour}:00｜1 鱼干 = ${r.fish_to_catnip} 猫薄荷｜`
     + `${r.catnip_to_fish} 猫薄荷 = 1 鱼干｜手续费 ${Math.round((r.buy_fee || 0) * 100)}%｜`
-    + `买入 ${r.lock_hours} 小时后可卖`;
+    + `买入当天不能卖，次日开市后可卖`;
   stockExchangeEl.textContent =
     `充值 1 鱼干 → ${r.fish_to_catnip} 猫薄荷，提现 ${r.catnip_to_fish} 猫薄荷 → 1 鱼干；`
     + `当前猫薄荷约可提现 ${stockMoney(p.catnip_to_fish_est)} 鱼干`;
@@ -3735,7 +3735,7 @@ function renderStock(data) {
   stockMarketBodyEl.innerHTML = companies.map((c) => `
     <tr>
       <td>${esc(c.code)}</td>
-      <td>${esc(c.name)}</td>
+      <td>${esc(c.name)}${c.policy ? `<div class="stock-policy">方针：${esc(c.policy)}</div>` : ''}</td>
       <td>${esc(c.country_name)}</td>
       <td>${esc(c.sector)}</td>
       <td>${Number(c.price).toFixed(1)}</td>

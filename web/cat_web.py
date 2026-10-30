@@ -165,14 +165,14 @@ def cat_collection(qq: int) -> dict:
         star = owned.get("star", 1)
         max_star += 1 if star >= CatConfig.CAT_MAX_STAR else 0
         job_path = pool_cat.get("job_path", [])
-        portrait_cat = pool_cat or {"name": owned.get("name", ""), "job_path": []}
-        rarity = owned.get("rarity", "normal")
+        portrait_cat = pool_cat or {"name": "", "job_path": []}
+        rarity = pool_cat.get("rarity", "normal")
         power = (CatConfig.CAT_BASE_POWER_BY_RARITY.get(rarity, 0)
                  * CatConfig.CAT_STAR_POWER_MULT.get(star, 1))
         country = pool_cat.get("country", "")
         cats.append({
             "id": owned["id"],
-            "name": owned.get("name", owned["id"]),
+            "name": pool_cat.get("name", owned["id"]),
             "rarity": rarity,
             "star": star,
             "job": _job_for_star(job_path, star),

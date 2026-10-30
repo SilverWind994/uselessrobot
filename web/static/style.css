@@ -785,6 +785,7 @@ code { background: #120f0d; border: 1px solid var(--line); border-radius: 6px; p
 .stock-table tbody tr:last-child td { border-bottom: none; }
 .stock-up { color: var(--danger); font-weight: 600; }
 .stock-down { color: #4fbf7a; font-weight: 600; }
+.stock-policy { color: var(--accent, #d8a657); font-size: 11px; margin-top: 3px; white-space: normal; }
 
 .stock-news { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
 .stock-news-item { background: #120f0d; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }

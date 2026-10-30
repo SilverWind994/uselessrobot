@@ -327,12 +327,12 @@
             </label>
             <label class="field inline">
               <span>股数</span>
-              <input id="stock-shares" type="number" min="1" step="1" placeholder="例如 100">
+              <input id="stock-shares" type="number" min="10" step="1" placeholder="例如 100">
             </label>
             <button id="btn-stock-buy" class="btn btn-primary btn-sm" type="button">买入</button>
             <button id="btn-stock-sell" class="btn btn-ghost btn-sm" type="button">卖出</button>
           </div>
-          <p class="hint">买入、卖出各收 1% 手续费（每笔最低 1 猫薄荷）；买入满 24 小时后才能卖出，休市期间不能交易。</p>
+          <p class="hint">买入、卖出各收 1% 手续费（每笔最低 1 猫薄荷）；买入当天不能卖，次日开市后可卖，休市期间不能交易。</p>
         </div>
 
         <div class="card">
@@ -408,9 +408,11 @@
             <ol>
               <li>每天 08:00~20:00 开市，每个整点 AI 发布世界新闻并重新定价；休市期间不能买卖。</li>
               <li>每人首次进入自动获得 10000 猫薄荷；1 鱼干 = 95 猫薄荷，105 猫薄荷 = 1 鱼干。</li>
-              <li>买卖各收 1% 手续费（每笔最低 1 猫薄荷）；买入满 24 小时后才能卖出。</li>
-              <li>每只股票单日涨跌幅最多 ±10%；企业上市满 10 天后才可能因战争、灾变退市，持仓按最新价 70% 强制清算，退市企业也可能重新上市。</li>
+              <li>买卖各收 1% 手续费（每笔最低 1 猫薄荷）；买入当天不能卖，次日开市后可卖。</li>
+              <li>每只股票单日涨跌幅最多 ±10%；当天被涨跌停挡住的那部分压力不会消失，次日开盘会继续释放（最多累计 50%）。</li>
+              <li>企业上市满 10 天后才可能因战争、灾变退市，持仓按最新价 70% 强制清算，退市企业也可能重新上市。</li>
               <li>单只持仓市值过大时可能被空头盯上，别把猫薄荷都押在一只股上。</li>
+              <li>持股 ≥1000 股且为该公司最大股东时，可在 QQ 端用「喵股市 方针 <代码> <内容>」制定公司方针，AI 写新闻时会参考。</li>
             </ol>
           </div>
         </div>

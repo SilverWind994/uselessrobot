@@ -51,16 +51,6 @@ CAT_STOCK_BIG_HOLDING_CHANCE = 0.04  # 每个整点针对大额持仓的概率
 CAT_STOCK_NEWS_MAX = 200             # 新闻最多保留条数（需覆盖统计天数）
 CAT_STOCK_POLICY_MIN_SHARES = 1000   # 改公司方针所需的最低持股数
 CAT_STOCK_POLICY_MAX_LEN = 24        # 方针文本最大长度
-CAT_STOCK_POLICY_VETO_WORDS = (      # 明显在坑公司的离谱方针：直接否决，不执行
-    "解散", "清算", "破产", "倒闭", "停产", "关停", "注销", "跑路", "卷款",
-    "私吞", "纵火", "炸毁", "摧毁", "烧毁", "卖光", "送人", "自爆", "掏空",
-    "搞垮", "毁掉", "摆烂", "枪毙",
-)
-CAT_STOCK_POLICY_ILLEGAL_WORDS = (   # 违规操作：可以提交，但有概率被监察机构查处
-    "内幕交易", "内幕", "操纵股价", "操纵市场", "洗钱", "贿赂", "行贿",
-    "走私", "偷税", "逃税", "造假", "做假账", "财务造假", "欺诈", "垄断",
-    "非法", "黑市", "回扣", "侵吞", "挪用", "暗箱", "违规", "违法",
-)
 CAT_STOCK_POLICY_CRIME_CHANCE = 0.35 # 违规方针被监察机构发现的概率
 CAT_STOCK_POLICY_FINE_RATE = 0.15    # 被查处时按当前猫薄荷比例罚款
 CAT_STOCK_POLICY_FINE_MIN = 500      # 最低罚款
@@ -817,6 +807,34 @@ class CatStockPlugin:
 
     # ==================== 公司方针 ====================
 
+    def _judge_policy(self, text: str) -> str:
+        """由 AI 判断方针性质，返回 ok / veto / illegal，不做任何关键词匹配"""
+        if not self._ai:
+            return "ok"
+        prompt = (
+            "请判断下面这条公司经营方针的性质：\n"
+            f"方针：{text}\n"
+            "只返回 JSON：{\"verdict\":\"ok|veto|illegal\",\"reason\":\"一句话理由\"}\n"
+            "veto：明显恶意、离谱、会直接毁掉公司的行为（例如解散公司、纵火、掏空资产）；\n"
+            "illegal：为私利违法违规（例如内幕交易、操纵股价、贿赂、财务造假）；\n"
+            "ok：正常经营方向。\n"
+            "拿不准时判 ok，不要冤枉正常方针。"
+        )
+        try:
+            raw = self._ai._call_ai(
+                Config.AI_MODEL["chat"],
+                [{"role": "system", "content": "你是奇幻王国的证券监察机构，只输出 JSON。"},
+                 {"role": "user", "content": prompt}],
+                temperature=0.2, max_retries=1, max_tokens=200,
+            )
+        except Exception:
+            return "ok"
+        data = _extract_json(raw) if isinstance(raw, str) else raw
+        if not isinstance(data, dict):
+            return "ok"
+        verdict = str(data.get("verdict") or "").strip().lower()
+        return verdict if verdict in ("veto", "illegal") else "ok"
+
     def _set_policy(self, target: Target, qq: int, rest: List[str]) -> None:
         """最大股东为公司制定方针；AI 每个整点写新闻时会参考方针"""
         if not rest:
@@ -841,13 +859,6 @@ class CatStockPlugin:
             return
 
         text_cut = text[:CAT_STOCK_POLICY_MAX_LEN]
-        if any(w in text_cut for w in CAT_STOCK_POLICY_VETO_WORDS):
-            self._sender.send_text(
-                target,
-                "这条方针被董事会当场否决喵：明显要把公司往死里坑的方案不会被执行。\n"
-                "换个正经点的经营方向吧。"
-            )
-            return
 
         with self._lock:
             players = self._load_stock_players()
@@ -868,15 +879,27 @@ class CatStockPlugin:
                     f"你不是 {code} 的最大股东（最大持股 {max_shares} 股），方针要由最大股东拍板喵")
                 return
 
+        # 持股资格确认后再让 AI 做合规判断，避免无关玩家消耗 AI 调用
+        verdict = self._judge_policy(text_cut)
+        if verdict == "veto":
+            self._sender.send_text(
+                target,
+                "这条方针被董事会当场否决喵：明显要把公司往死里坑的方案不会被执行。\n"
+                "换个正经点的经营方向吧。"
+            )
+            return
+
+        illegal = verdict == "illegal"
+        with self._lock:
             market = self._load_market()
             comp = market["companies"].get(code)
             if not comp:
                 self._sender.send_text(target, f"{code} 已经退市了喵～")
                 return
 
-            illegal = any(w in text_cut for w in CAT_STOCK_POLICY_ILLEGAL_WORDS)
             if illegal and random.random() < CAT_STOCK_POLICY_CRIME_CHANCE:
                 # 违规操作被监察机构抓到：罚款、方针不执行，并立刻上新闻
+                players = self._load_stock_players()
                 st = self._stock_player(qq, players)
                 catnip = int(st.get("catnip", 0))
                 fine = min(catnip, max(CAT_STOCK_POLICY_FINE_MIN,
@@ -1419,26 +1442,6 @@ class CatStockPlugin:
             for comp in companies.values():
                 if comp["country"] != country and comp["sector"] in sectors:
                     comp["price"] = max(1.0, comp["price"] * (1 + pct * CAT_STOCK_LINK_SECTOR))
-
-    # 外部局势的新闻化表达（不照抄原文，只写局势后果）
-    _WORLD_NARRATIVES = (
-        (("战争", "战事", "战乱", "兵祸", "入侵", "冲突", "交战", "征兵", "军备"),
-         "战火未熄，军械与佣兵订单涌进交易所"),
-        (("灾变", "地震", "洪水", "瘟疫", "饥荒", "亡灵", "魔物", "龙潮", "火灾"),
-         "灾情牵动供应，药草与重建物资被抢购"),
-        (("贸易", "商路", "繁荣", "丰收", "通商", "市集"),
-         "商路畅通，港口与货栈的生意明显回暖"),
-        (("萧条", "制裁", "封锁", "断商路", "禁运"),
-         "制裁与封锁落地，外贸链条开始紧绷"),
-        (("王权", "王室", "新政", "加冕", "政变", "王位"),
-         "新政权尘埃落定，宫廷与礼制的订单随之而来"),
-    )
-
-    def _world_narrative(self, text: str) -> Optional[str]:
-        for keywords, line in self._WORLD_NARRATIVES:
-            if any(k in text for k in keywords):
-                return line
-        return None
 
     def _big_holding_pressure(self, companies: dict, players: dict) -> List[dict]:
         """大额持仓可能被空头狙击：概率低、幅度有限，只影响一只股票"""
@@ -2004,13 +2007,10 @@ class CatStockPlugin:
         picks = random.sample(_FALLBACK_EVENTS, k=random.randint(2, 4))
         news = []
         effects = []
-        # AI 不可用时，局势设定仍要体现在新闻和盘面上（写成事件后果，不照抄原文）
+        # AI 不可用时，用一句中性快讯兜底，不做任何关键词判断
         if world:
-            for text in world[-1:]:
-                line = self._world_narrative(text)
-                if line:
-                    news.append({"title": line,
-                                 "detail": "市场正在消化这场变故带来的连锁反应"})
+            news.append({"title": "局势变动持续发酵，相关行业开始重新定价",
+                         "detail": "市场正在消化这场变故带来的连锁反应"})
         for title, targets in picks:
             news.append({"title": title, "detail": "本消息由喵股市编辑部整理"})
             for code, pct in targets:

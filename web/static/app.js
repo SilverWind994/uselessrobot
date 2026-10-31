@@ -3741,7 +3741,7 @@ function renderStock(data) {
       <td>${Number(c.price).toFixed(1)}</td>
       ${stockPctCell(c.pct)}
       <td class="stock-holders">${(c.holders || []).length
-        ? c.holders.map((h, i) => `<div>${i + 1}. ${esc(h.nick)} <span class="stock-holder-shares">${stockMoney(h.shares)} 股</span></div>`).join('')
+        ? c.holders.map((h, i) => `<div>${h.rank || i + 1}. ${esc(h.nick)} <span class="stock-holder-shares">${stockMoney(h.shares)} 股</span></div>`).join('')
         : '<span class="stock-empty-cell">暂无股东</span>'}</td>
       <td>
         <div class="stock-trade">
@@ -3924,7 +3924,7 @@ function openStockDetail(code) {
     <div class="stock-detail-holders">
       <div class="section-title">前三大股东</div>
       ${holders.length
-        ? holders.map((h, i) => `<div class="stock-detail-holder"><span>${i + 1}. ${esc(h.nick)}</span><span>${stockMoney(h.shares)} 股</span></div>`).join('')
+        ? holders.map((h, i) => `<div class="stock-detail-holder"><span>${h.rank || i + 1}. ${esc(h.nick)}</span><span>${stockMoney(h.shares)} 股</span></div>`).join('')
         : '<p class="room-empty">暂无股东喵</p>'}
     </div>`;
   stockModalEl.classList.remove('hidden');

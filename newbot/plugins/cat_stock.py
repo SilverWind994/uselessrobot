@@ -1033,17 +1033,26 @@ class CatStockPlugin:
         # 各公司的前三大股东（同一玩家多笔持仓合并计算）
         players = self._load_stock_players()
         cat_players = self._cat._load_players()
-        ranks: Dict[str, List[Tuple[int, str]]] = {}
+        ranks: Dict[str, List[Tuple[int, float, str, str]]] = {}
         for key, st in players.items():
             nick = (cat_players.get(str(key)) or {}).get("nick") or f"玩家{key}"
             for code, lots in (st.get("holdings") or {}).items():
                 shares = self._shares_of(lots)
                 if shares > 0:
-                    ranks.setdefault(code, []).append((shares, nick))
+                    # 持股相同则先买入者优先，再按 QQ 升序，保证每次排序结果稳定
+                    first_ts = min((float(lot.get("ts", 0) or 0) for lot in lots), default=0.0)
+                    ranks.setdefault(code, []).append((shares, first_ts, str(key), nick))
         for row in rows:
-            top = sorted(ranks.get(row["code"], []), key=lambda x: x[0], reverse=True)[:3]
-            row["holders"] = [{"nick": nick, "shares": int(shares)}
-                              for shares, nick in top]
+            entries = sorted(ranks.get(row["code"], []),
+                             key=lambda x: (-x[0], x[1], x[2]))[:3]
+            holders = []
+            last_shares = None
+            last_rank = 0
+            for idx, (shares, _ts, _qq, nick) in enumerate(entries, 1):
+                rank = last_rank if shares == last_shares else idx
+                last_shares, last_rank = shares, rank
+                holders.append({"nick": nick, "shares": int(shares), "rank": rank})
+            row["holders"] = holders
 
         news = [{"time": item.get("time", ""),
                  "title": item.get("title", ""),

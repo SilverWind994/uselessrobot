@@ -3688,6 +3688,10 @@ const stockRankSubEl = document.getElementById('stock-rank-sub');
 const stockRankBestEl = document.getElementById('stock-rank-best');
 const stockRankWorstEl = document.getElementById('stock-rank-worst');
 const stockNewsEl = document.getElementById('stock-news');
+let stockLastData = null;
+const stockModalEl = document.getElementById('stock-modal');
+const stockModalBodyEl = document.getElementById('stock-modal-body');
+const stockModalTitleEl = document.getElementById('stock-modal-title');
 
 function stockMoney(n) {
   return Number(n || 0).toLocaleString('zh-CN');
@@ -3704,6 +3708,7 @@ function stockPctCell(pct) {
 }
 
 function renderStock(data) {
+  stockLastData = data;
   const r = data.rules || {};
   const p = data.portfolio || {};
   const companies = data.companies || [];
@@ -3729,22 +3734,29 @@ function renderStock(data) {
 
   stockMarketBodyEl.innerHTML = companies.map((c) => `
     <tr>
-      <td>${esc(c.code)}</td>
+      <td><button class="stock-detail-btn" type="button" data-code="${esc(c.code)}" title="查看最近走势">${esc(c.code)}</button></td>
       <td>${esc(c.name)}${c.policy ? `<div class="stock-policy">方针：${esc(c.policy)}</div>` : ''}</td>
       <td>${esc(c.country_name)}</td>
       <td>${esc(c.sector)}</td>
       <td>${Number(c.price).toFixed(1)}</td>
       ${stockPctCell(c.pct)}
+      <td class="stock-holders">${(c.holders || []).length
+        ? c.holders.map((h, i) => `<div>${i + 1}. ${esc(h.nick)} <span class="stock-holder-shares">${stockMoney(h.shares)} 股</span></div>`).join('')
+        : '<span class="stock-empty-cell">暂无股东</span>'}</td>
       <td>
         <div class="stock-trade">
           <input class="stock-trade-shares" type="number" min="10" step="1" placeholder="股数" data-code="${esc(c.code)}">
           <button class="btn btn-primary btn-sm stock-buy" type="button" data-code="${esc(c.code)}">买</button>
           <button class="btn btn-ghost btn-sm stock-sell" type="button" data-code="${esc(c.code)}">卖</button>
         </div>
+        <div class="stock-trade-max">
+          <button class="stock-max-buy" type="button" data-code="${esc(c.code)}">最大买入</button>
+          <button class="stock-max-sell" type="button" data-code="${esc(c.code)}">最大卖出</button>
+        </div>
       </td>
     </tr>`).join('');
   if (!companies.length) {
-    stockMarketBodyEl.innerHTML = '<tr><td colspan="7" class="room-empty">暂无行情喵</td></tr>';
+    stockMarketBodyEl.innerHTML = '<tr><td colspan="8" class="room-empty">暂无行情喵</td></tr>';
   }
   stockMarketSubEl.textContent = `${data.status_line}｜行情每个整点更新`;
 
@@ -3850,7 +3862,131 @@ async function stockAction(path, body, actionName) {
 
 document.getElementById('btn-stock-refresh').addEventListener('click', () => loadStock());
 
+function closeStockModal() {
+  stockModalEl.classList.add('hidden');
+  stockModalBodyEl.innerHTML = '';
+}
+
+document.getElementById('stock-modal-close').addEventListener('click', closeStockModal);
+document.getElementById('stock-modal-mask').addEventListener('click', closeStockModal);
+
+function stockTrendChart(history) {
+  const pts = (history || []).map((h) => ({ t: String(h.t || ''), p: Number(h.p || 0) }));
+  if (!pts.length) return '<p class="room-empty">还没有历史行情喵，等下一个整点再看看</p>';
+  const W = 640, H = 220, L = 46, R = 14, T = 14, B = 28;
+  const raw = pts.map((x) => x.p);
+  let lo = Math.min(...raw);
+  let hi = Math.max(...raw);
+  if (hi - lo < 0.05) { hi += 0.5; lo -= 0.5; }
+  const pad = (hi - lo) * 0.1;
+  lo -= pad;
+  hi += pad;
+  const plotW = W - L - R;
+  const plotH = H - T - B;
+  const px = (i) => (pts.length === 1 ? L + plotW / 2 : L + (i / (pts.length - 1)) * plotW);
+  const py = (p) => T + ((hi - p) / (hi - lo)) * plotH;
+  const color = pts[pts.length - 1].p >= pts[0].p ? '#d3564d' : '#4fbf7a';
+  const line = pts.map((pt, i) => `${i ? 'L' : 'M'}${px(i).toFixed(1)},${py(pt.p).toFixed(1)}`).join('');
+  const grid = [0, 0.5, 1].map((f) => {
+    const v = hi - f * (hi - lo);
+    const yy = T + f * plotH;
+    return `<line x1="${L}" y1="${yy}" x2="${W - R}" y2="${yy}" stroke="#3a3128" stroke-width="1" stroke-dasharray="3 4"/>`
+      + `<text x="${L - 8}" y="${yy + 4}" text-anchor="end" fill="#a89b8a" font-size="11">${v.toFixed(1)}</text>`;
+  }).join('');
+  const firstLabel = pts[0].t ? `<text x="${L}" y="${H - 8}" fill="#a89b8a" font-size="11">${esc(pts[0].t)}</text>` : '';
+  const lastLabel = pts[pts.length - 1].t
+    ? `<text x="${W - R}" y="${H - 8}" text-anchor="end" fill="#a89b8a" font-size="11">${esc(pts[pts.length - 1].t)}</text>`
+    : '';
+  const dot = `<circle cx="${px(pts.length - 1).toFixed(1)}" cy="${py(pts[pts.length - 1].p).toFixed(1)}" r="3.5" fill="${color}"/>`;
+  return `<svg class="stock-chart" viewBox="0 0 ${W} ${H}" role="img">
+    ${grid}
+    <path d="${line}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+    ${dot}${firstLabel}${lastLabel}
+  </svg>`;
+}
+
+function openStockDetail(code) {
+  const c = ((stockLastData || {}).companies || []).find((x) => x.code === code);
+  if (!c) return;
+  const holders = c.holders || [];
+  const hist = c.history || [];
+  const pct = Number(c.pct || 0);
+  stockModalTitleEl.textContent = `${c.name}（${c.code}）`;
+  stockModalBodyEl.innerHTML = `
+    <div class="stock-detail-meta">
+      <span>${esc(c.country_name)} · ${esc(c.sector)}</span>
+      <span>现价 ${Number(c.price).toFixed(1)}</span>
+      <span class="${pct >= 0 ? 'stock-up' : 'stock-down'}">${pct >= 0 ? '▲' : '▼'}${Math.abs(pct).toFixed(1)}%</span>
+    </div>
+    ${c.policy ? `<p class="stock-detail-policy">当前方针：${esc(c.policy)}</p>` : ''}
+    ${stockTrendChart(hist)}
+    <p class="hint">最近 ${hist.length} 个整点的收盘价走势，每个整点更新</p>
+    <div class="stock-detail-holders">
+      <div class="section-title">前三大股东</div>
+      ${holders.length
+        ? holders.map((h, i) => `<div class="stock-detail-holder"><span>${i + 1}. ${esc(h.nick)}</span><span>${stockMoney(h.shares)} 股</span></div>`).join('')
+        : '<p class="room-empty">暂无股东喵</p>'}
+    </div>`;
+  stockModalEl.classList.remove('hidden');
+}
+
+function fillMaxShares(btn) {
+  const code = btn.dataset.code || '';
+  const data = stockLastData || {};
+  const p = data.portfolio || {};
+  const rules = data.rules || {};
+  const row = btn.closest('tr');
+  const input = row && row.querySelector('.stock-trade-shares');
+  if (!input) return;
+  const isBuy = btn.classList.contains('stock-max-buy');
+  let max = 0;
+  if (isBuy) {
+    const company = (data.companies || []).find((c) => c.code === code) || {};
+    const price = Number(company.price || 0);
+    const fee = Number(rules.buy_fee || 0);
+    const catnip = Number(p.catnip || 0);
+    let byCash = price > 0 ? Math.floor(catnip / (price * (1 + fee))) : 0;
+    // 手续费有「最低 1 猫薄荷」保底，逐股回退到真正买得起的股数
+    let guard = 0;
+    while (byCash > 0 && guard < 1000) {
+      const cost = Math.round(byCash * price);
+      const realFee = Math.max(1, Math.round(cost * fee));
+      if (cost + realFee <= catnip) break;
+      byCash -= 1;
+      guard += 1;
+    }
+    max = Math.min(byCash, Number(rules.max_shares || byCash));
+    if (max < 10) max = 0;
+  } else {
+    const holding = (p.holdings || []).find((h) => h.code === code);
+    max = holding ? Number(holding.sellable || 0) : 0;
+  }
+  input.value = max > 0 ? String(max) : '';
+  stockMsgEl.classList.remove('ok');
+  if (max > 0) {
+    stockMsgEl.textContent = isBuy
+      ? `已填入买入上限 ${stockMoney(max)} 股`
+      : `已填入可卖上限 ${stockMoney(max)} 股`;
+    input.focus();
+    input.select();
+  } else {
+    stockMsgEl.textContent = isBuy
+      ? '猫薄荷不足，买不起 10 股喵'
+      : '没有可卖的股份喵（可能还在锁定中）';
+  }
+}
+
 stockMarketBodyEl.addEventListener('click', (e) => {
+  const detailBtn = e.target.closest('.stock-detail-btn');
+  if (detailBtn) {
+    openStockDetail(detailBtn.dataset.code || '');
+    return;
+  }
+  const maxBtn = e.target.closest('.stock-max-buy, .stock-max-sell');
+  if (maxBtn) {
+    fillMaxShares(maxBtn);
+    return;
+  }
   const btn = e.target.closest('.stock-buy, .stock-sell');
   if (!btn) return;
   const code = btn.dataset.code || '';

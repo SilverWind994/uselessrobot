@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>串子小车 · 网页端</title>
-  <link rel="stylesheet" href="/static/style.css?v=18">
+  <link rel="stylesheet" href="/static/style.css?v=19">
 </head>
 <body>
   <div class="bg-glow"></div>
@@ -371,7 +371,7 @@
             <table class="stock-table">
               <thead>
                 <tr>
-                  <th>代码</th><th>名称</th><th>国家</th><th>行业</th><th>现价</th><th>涨跌</th><th>交易</th>
+                  <th>代码</th><th>名称</th><th>国家</th><th>行业</th><th>现价</th><th>涨跌</th><th>前三大股东</th><th>交易</th>
                 </tr>
               </thead>
               <tbody id="stock-market-body"></tbody>
@@ -907,8 +907,20 @@
     </div>
   </div>
 
+  <!-- 股票详情弹层 -->
+  <div id="stock-modal" class="modal hidden">
+    <div id="stock-modal-mask" class="modal-mask"></div>
+    <div class="modal-card">
+      <div class="modal-head">
+        <div id="stock-modal-title" class="panel-title">股票详情</div>
+        <button id="stock-modal-close" class="btn btn-ghost btn-sm" type="button">关闭</button>
+      </div>
+      <div id="stock-modal-body"></div>
+    </div>
+  </div>
+
   <footer class="foot">串子小车 · 网页端</footer>
 
-  <script src="/static/app.js?v=18"></script>
+  <script src="/static/app.js?v=19"></script>
 </body>
 </html>

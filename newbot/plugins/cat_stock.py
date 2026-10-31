@@ -51,6 +51,19 @@ CAT_STOCK_BIG_HOLDING_CHANCE = 0.04  # 每个整点针对大额持仓的概率
 CAT_STOCK_NEWS_MAX = 200             # 新闻最多保留条数（需覆盖统计天数）
 CAT_STOCK_POLICY_MIN_SHARES = 1000   # 改公司方针所需的最低持股数
 CAT_STOCK_POLICY_MAX_LEN = 24        # 方针文本最大长度
+CAT_STOCK_POLICY_VETO_WORDS = (      # 明显在坑公司的离谱方针：直接否决，不执行
+    "解散", "清算", "破产", "倒闭", "停产", "关停", "注销", "跑路", "卷款",
+    "私吞", "纵火", "炸毁", "摧毁", "烧毁", "卖光", "送人", "自爆", "掏空",
+    "搞垮", "毁掉", "摆烂", "枪毙",
+)
+CAT_STOCK_POLICY_ILLEGAL_WORDS = (   # 违规操作：可以提交，但有概率被监察机构查处
+    "内幕交易", "内幕", "操纵股价", "操纵市场", "洗钱", "贿赂", "行贿",
+    "走私", "偷税", "逃税", "造假", "做假账", "财务造假", "欺诈", "垄断",
+    "非法", "黑市", "回扣", "侵吞", "挪用", "暗箱", "违规", "违法",
+)
+CAT_STOCK_POLICY_CRIME_CHANCE = 0.35 # 违规方针被监察机构发现的概率
+CAT_STOCK_POLICY_FINE_RATE = 0.15    # 被查处时按当前猫薄荷比例罚款
+CAT_STOCK_POLICY_FINE_MIN = 500      # 最低罚款
 CAT_STOCK_COUNTRY_MIN_LISTED = 2     # 每个国家尽量维持的上市公司数
 CAT_STOCK_COMPANY_MIN = 35           # 市场最少保持的上市公司数
 CAT_STOCK_COMPANY_MAX = 70           # 市场最多容纳的上市公司数
@@ -811,7 +824,8 @@ class CatStockPlugin:
                 target,
                 "用法：喵股市 方针 <股票代码> <方针内容>\n"
                 f"条件：持有该公司 ≥{CAT_STOCK_POLICY_MIN_SHARES} 股，且是该公司最大股东\n"
-                "示例：喵股市 方针 FRS 稳健经营，优先交付长期军备订单"
+                "示例：喵股市 方针 FRS 稳健经营，优先交付长期军备订单\n"
+                "董事会会否决明显坑公司的离谱方针；违规操作可能被监察机构查处并罚款喵。"
             )
             return
         comp = self._resolve_company(self._load_market(), rest[0])
@@ -824,6 +838,15 @@ class CatStockPlugin:
         if not text:
             self._sender.send_text(
                 target, f"{comp['name']}（{code}）当前方针：{comp.get('policy') or '暂无'}")
+            return
+
+        text_cut = text[:CAT_STOCK_POLICY_MAX_LEN]
+        if any(w in text_cut for w in CAT_STOCK_POLICY_VETO_WORDS):
+            self._sender.send_text(
+                target,
+                "这条方针被董事会当场否决喵：明显要把公司往死里坑的方案不会被执行。\n"
+                "换个正经点的经营方向吧。"
+            )
             return
 
         with self._lock:
@@ -850,14 +873,42 @@ class CatStockPlugin:
             if not comp:
                 self._sender.send_text(target, f"{code} 已经退市了喵～")
                 return
-            comp["policy"] = text[:CAT_STOCK_POLICY_MAX_LEN]
+
+            illegal = any(w in text_cut for w in CAT_STOCK_POLICY_ILLEGAL_WORDS)
+            if illegal and random.random() < CAT_STOCK_POLICY_CRIME_CHANCE:
+                # 违规操作被监察机构抓到：罚款、方针不执行，并立刻上新闻
+                st = self._stock_player(qq, players)
+                catnip = int(st.get("catnip", 0))
+                fine = min(catnip, max(CAT_STOCK_POLICY_FINE_MIN,
+                                       int(round(catnip * CAT_STOCK_POLICY_FINE_RATE))))
+                st["catnip"] = catnip - fine
+                self._save_stock_players(players)
+                stamp = datetime.now().strftime("%m-%d %H:%M")
+                market.setdefault("news", []).insert(0, {
+                    "time": stamp,
+                    "ts": time.time(),
+                    "title": f"监察机构突查{comp['name']}，控股股东违规操作被立案",
+                    "detail": (f"{comp['name']}（{code}）控股股东因「{text_cut}」涉嫌违规经营，"
+                               f"被监察机构处以 {fine} 猫薄荷罚款，相关方针被冻结。"),
+                })
+                market["news"] = self._recent_news(market["news"])[:CAT_STOCK_NEWS_MAX]
+                self._save_market(market)
+                self._sender.send_text(
+                    target,
+                    f"监察机构发现了你的违规操作喵！\n"
+                    f"「{comp['name']}」的方针「{text_cut}」被冻结，罚款 {fine} 猫薄荷。"
+                )
+                return
+
+            comp["policy"] = text_cut
             comp["policy_owner"] = qq
             comp["policy_set_at"] = datetime.now().strftime("%Y-%m-%d")
             self._save_market(market)
 
+        note = "（这次没人发现喵……）\n" if illegal else ""
         self._sender.send_text(
             target,
-            f"【{comp['name']}】方针已更新为：{comp['policy']}\n"
+            f"【{comp['name']}】方针已更新为：{comp['policy']}\n" + note +
             "接下来的整点快报里，AI 会参考这条方针来写新闻与调整市场情绪喵～"
         )
 

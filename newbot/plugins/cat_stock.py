@@ -187,41 +187,7 @@ _FALLBACK_EVENTS = [
      [("DRG", 0.31), ("SKL", -0.20), ("LUX", 0.27)]),
 ]
 
-# 每个整点随机抽几条喂给 AI 做灵感，AI 自行改编成新闻与涨跌（不直接照抄）
-_RANDOM_EVENT_SEEDS = [
-    ("边境哨所遭到不明骑兵袭击，两国开始互相指责", ("军备", "安保", "重工"), ("贸易", "物流")),
-    ("某个王国的王位继承出现争议，宫廷陷入内斗", ("奢侈", "圣器", "学术"), ("贸易",)),
-    ("沿海港口出现成群深海巨兽，多条航线被迫绕行", ("安保", "航运"), ("渔猎", "物流")),
-    ("一处古老矿脉突然塌陷，矿石供应中断", ("矿业", "重工"), ("矿脉", "精密")),
-    ("森林里爆发诡异的枯萎病，草药产量骤减", ("医药", "草药"), ("木工", "渔猎")),
-    ("盛大的丰收节开幕，各地商队涌向市集", ("贸易", "消费", "交通"), ("安保",)),
-    ("魔法学院公布颠覆性的新研究成果", ("学术", "占星", "精密"), ("传统",)),
-    ("一连串亡灵在深夜游荡，居民要求加强守备", ("安保", "圣器"), ("服务", "地产")),
-    ("干旱持续，绿洲水利工程超负荷运转", ("水利", "能源"), ("农业", "渔猎")),
-    ("某位传奇工匠宣布收徒，工艺订单暴增", ("木工", "奢侈", "精密"), ()),
-    ("雪山突然崩塌，通往北方的商路被阻断", ("交通", "物流"), ("贸易", "矿脉")),
-    ("夜色中出现神秘的走私船队，黑市生意火爆", ("贸易", "奢侈"), ("安保",)),
-    ("新式飞行器试飞成功，长距离运输成本骤降", ("航运", "交通"), ("物流", "陆运")),
-    ("疫病在边境营地蔓延，各国封锁关口", ("医药", "草药"), ("贸易", "航运")),
-    ("王室婚礼即将举行，珠宝与礼器需求暴涨", ("奢侈", "圣器"), ("军备",)),
-    ("火山灰覆盖农田，粮食价格开始上涨", ("农业", "水利"), ("渔猎", "轻工")),
-    ("佣兵公会接到大宗护航订单，人手严重不足", ("安保", "服务"), ("贸易",)),
-    ("遗迹考古队挖出会发光的古代装置", ("学术", "占星", "炼金"), ()),
-    ("龙群迁徙经过领空，飞行航线全面停飞", ("航运",), ("物流", "交通")),
-    ("某国宣布新的关税壁垒，外贸企业哀嚎", ("贸易", "走私"), ("物流", "航运")),
-    ("银行体系出现挤兑风波，金融股人人自危", ("金融",), ("贸易", "奢侈")),
-    ("一批冒险者带回稀有药材，药房连夜排队", ("医药", "草药", "贸易"), ()),
-    ("风暴摧毁了沿海仓库，重建订单接踵而至", ("重工", "木工", "圣器"), ("物流", "渔猎")),
-    ("神秘商人在交易所大量扫货，引发跟风", ("贸易", "金融"), ()),
-    ("两国使团秘密会晤，市场猜测即将结盟", ("贸易", "交通"), ("军备",)),
-    ("古老的预言被证实，占星行业声名大噪", ("占星", "学术"), ("矿业",)),
-    ("兽潮逼近边境村镇，守备与武器需求上升", ("军备", "安保"), ("农牧", "渔猎")),
-    ("灯塔熄灭导致货船连环触礁，航运信誉受损", ("航运", "保险"), ("物流",)),
-    ("某座城市举办竞技大会，旅游业一夜爆满", ("娱乐", "服务", "消费"), ("安保",)),
-    ("炼金术士意外合成新材料，工业界蠢蠢欲动", ("炼金", "制造", "能源"), ("传统",)),
-    ("连续阴雨让木料发霉，家具工期全面延误", ("木工",), ("轻工", "奢侈")),
-    ("幽灵房产传闻四起，居民连夜搬迁", ("地产", "服务"), ("消费",)),
-]
+# 世界故事线：由 AI 每整点自行推进并持久化，不使用任何预设事件模板
 
 
 def _load_json(path: str) -> dict:
@@ -348,7 +314,7 @@ class CatStockPlugin:
         state.setdefault("catalog", list(_LISTING_CATALOG))
         state.setdefault("last_tick", "")
         state.setdefault("day", "")
-        state.setdefault("world", {"arc": "", "relations": []})
+        state.setdefault("world", {"arc": "", "story": "", "relations": []})
         state.setdefault("world_directives", [])
         return state
 
@@ -1786,10 +1752,11 @@ class CatStockPlugin:
                 line += f"｜方针:{policy}"
             lines.append(line)
         cat_seed = self._cat_news_seed()
-        recent_news = (market.get("news") or [])[:5]
+        recent_news = (market.get("news") or [])[:10]
         recent_block = ""
         if recent_news:
-            recent_block = ("\n最近几小时的新闻（供你延续事件线索，新新闻可以和它们呼应或升级）：\n"
+            recent_block = ("\n最近十小时的新闻（这是同一条故事线的最新篇章，新新闻必须接着写，"
+                            "可以呼应、升级、反转或写后果）：\n"
                             + "\n".join(f"- {n.get('title', '')}" for n in recent_news if n.get("title"))
                             + "\n")
         world_block = ""
@@ -1805,33 +1772,30 @@ class CatStockPlugin:
         state = market.get("world") or {}
         state_block = ""
         arc = str(state.get("arc") or "").strip()
+        story = str(state.get("story") or "").strip()
         relations = state.get("relations") or []
-        if arc or relations:
-            state_block = "\n当前世界格局（必须延续，不要与已有关系自相矛盾）：\n"
+        if arc or story or relations:
+            state_block = "\n当前世界故事线（必须延续，不要与已有设定自相矛盾）：\n"
+            if story:
+                state_block += f"- 世界发展脉络：{story}\n"
             if arc:
-                state_block += f"- 长期主线：{arc}\n"
+                state_block += f"- 当前主线：{arc}\n"
             for rel in relations[:10]:
                 state_block += (f"- {self._country_name(rel.get('a', ''))}"
                                 f" ↔ {self._country_name(rel.get('b', ''))}："
                                 f"{rel.get('state', '')}\n")
-            state_block += ("各国存在合纵连横：盟友可能因共同敌人靠拢，敌对国可能互相制裁、"
-                            "断商路、边境摩擦；新闻要顺着这些关系发展，而不是每个小时另起炉灶。\n")
-        seeds = random.sample(_RANDOM_EVENT_SEEDS,
-                              k=min(len(_RANDOM_EVENT_SEEDS), random.randint(3, 5)))
-        seed_lines = []
-        for seed_text, up, down in seeds:
-            hint = f"（偏向利好：{'、'.join(up) or '无'}；偏向利空：{'、'.join(down) or '无'}）"
-            seed_lines.append(f"- {seed_text}{hint}")
-        random_block = ("\n本小时可供取材的随机事件（只是灵感，严禁直接照抄原文；"
-                        "挑选其中 2~4 条改编成新闻，也可以顺着它们自由发挥出新的连锁事件；"
-                        "行业倾向只是参考，请优先落到现有企业所属的行业上）：\n"
-                        + "\n".join(seed_lines) + "\n")
+            state_block += ("这是同一部连续剧，不是每个小时独立的小故事：新新闻要接着主线往下写，"
+                            "可以推进主线、写主线造成的连锁反应、或开辟与主线相关的支线，"
+                            "至少有一条新闻要真正推动主线发展。"
+                            "不要使用任何预设事件模板，所有事件都由你根据故事线、国家关系和企业现状自由创作。"
+                            "各国存在合纵连横：盟友可能因共同敌人靠拢，敌对国可能互相制裁、"
+                            "断商路、边境摩擦；新闻要顺着这些关系发展，而不是每小时另起炉灶。\n")
         prompt = (
             "你是一个奇幻世界的财经新闻主编，世界背景是《猫猫远征队》的 if 线："
             "各国之间存在战争、魔物袭击、魔法灾变、王室更替、龙潮、亡灵复苏等事件。\n"
             f"现在是 {now.strftime('%H:%M')}，股市开市。\n"
             "以下是当前上市企业（代码｜名称｜国家｜行业｜现价｜近1小时涨跌）：\n"
-            + "\n".join(lines) + recent_block + world_block + state_block + random_block
+            + "\n".join(lines) + recent_block + world_block + state_block
             + self._geography_prompt() +
             f"\n\n请生成 {CAT_STOCK_NEWS_MIN}~{CAT_STOCK_NEWS_MAX} 条本小时的世界新闻，"
             "不要每次都只写三两条。新闻要有长有短：既有影响盘面的重头消息，"
@@ -1854,12 +1818,14 @@ class CatStockPlugin:
             "只输出一个 JSON 对象，不要解释，格式：\n"
             '{"news":[{"title":"新闻标题","detail":"一句话详情",'
             '"effects":[{"code":"股票代码","pct":0.15},{"country":"国家代码","pct":-0.1}]}],'
-            '"world":{"arc":"当前世界局势主线（一句话）",'
+            '"world":{"story":"世界发展脉络（150字以内，在原有基础上延续推进，不要重写世界观）",'
+            '"arc":"当前世界局势主线（一句话）",'
             '"relations":[{"a":"国家代码","b":"国家代码","state":"同盟/敌对/贸易往来/边境摩擦"}]}}\n'
             "pct 是小数涨跌幅，范围 -0.18 ~ 0.22（重大事件可到 ±0.22），正数为涨；"
             "code 和 country 二选一；每条新闻给 1~2 条 effects。"
-            "world 是可选的：如果本小时局势有推进，就给出更新后的完整长期主线"
-            "（不超过一句话）和仍然成立的完整国家关系列表（最多 10 条，没有变化可省略）。"
+            "world 是可选的：如果本小时故事有推进，就给出更新后的世界发展脉络"
+            "（150字以内，要接着上一版写、不要推翻已有历史）、当前主线（一句话）"
+            "和仍然成立的完整国家关系列表（最多 10 条，没有变化可省略）。"
             "\n如果上面的局势设定明确要求某个产业兴起、或局势催生全新行业，可以额外返回 listings"
             "（最多 2 家，没有就省略）："
             '{"code":"三位大写字母代码","name":"企业名","country":"国家代码",'
@@ -1933,9 +1899,11 @@ class CatStockPlugin:
                 news.append({"title": "市场突传未署名消息，交易所正在核实",
                              "detail": "多家机构已暂停报价"})
                 effects = top_effects
-        return (news, effects,
-                self._parse_world(data, company_countries=country_codes),
-                self._parse_actions(data))
+        world_update = self._parse_world(data, company_countries=country_codes)
+        if world_update and not world_update.get("story"):
+            # AI 没写新的发展脉络时，沿用上一版，避免故事线被清空
+            world_update["story"] = str((market.get("world") or {}).get("story") or "")
+        return (news, effects, world_update, self._parse_actions(data))
 
     def _parse_actions(self, data: dict) -> Optional[dict]:
         """收集 AI 提出的新产业上市 / 产业下市，具体校验在落地时进行"""
@@ -1950,6 +1918,7 @@ class CatStockPlugin:
         raw = data.get("world")
         if not isinstance(raw, dict):
             return None
+        story = str(raw.get("story") or "").strip()[:200]
         arc = str(raw.get("arc") or "").strip()[:120]
         relations = []
         for item in raw.get("relations") or []:
@@ -1963,9 +1932,9 @@ class CatStockPlugin:
                 relations.append({"a": a, "b": b, "state": state})
             if len(relations) >= 10:
                 break
-        if not arc and not relations:
+        if not arc and not story and not relations:
             return None
-        return {"arc": arc, "relations": relations,
+        return {"story": story, "arc": arc, "relations": relations,
                 "updated": datetime.now().strftime("%m-%d %H:%M")}
 
     def _fallback_news(self, market: dict,

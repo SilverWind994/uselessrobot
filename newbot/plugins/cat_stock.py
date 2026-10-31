@@ -1229,6 +1229,8 @@ class CatStockPlugin:
             forced_listing = self._apply_world_listing(market, ai_actions)
             if forced_listing:
                 event_news.append(forced_listing)
+            # 4.3) 历史新闻里提过挂牌、但市场上查不到对应企业的，逐小时重试补上
+            event_news.extend(self._repair_listing_news(market))
 
             # 5) 价格上下限，并记录本小时走势供下一小时延续
             for comp in companies.values():
@@ -1428,6 +1430,7 @@ class CatStockPlugin:
 
     # 世界走向里出现这些词，视为“要求本小时要有企业挂牌”
     _LISTING_WORDS = ("上市", "挂牌", "新股", "首次公开募股")
+    _LISTING_NEWS_TRIES = 3   # 历史新闻漏挂牌时，每条最多重试几次
 
     def _wants_listing(self, text: str) -> bool:
         return any(word in text for word in self._LISTING_WORDS)
@@ -1466,6 +1469,48 @@ class CatStockPlugin:
         active[0]["listing_done"] = True
         return news[0]
 
+    def _repair_listing_news(self, market: dict) -> List[dict]:
+        """历史新闻提到挂牌、但市场里没有对应企业时，补做上市。
+
+        每条新闻最多重试 _LISTING_NEWS_TRIES 次；每整点最多补一家，避免连环调 AI。
+        """
+        if not self._ai:
+            return []
+        news = market.get("news") or []
+        companies = market.get("companies", {})
+        if not news or len(companies) >= CAT_STOCK_COMPANY_MAX:
+            return []
+        codes = {c["code"] for c in companies.values()}
+        names = {c["name"] for c in companies.values()}
+
+        for entry in news[:10]:
+            if not isinstance(entry, dict) or entry.get("listing_ok"):
+                continue
+            title = str(entry.get("title") or "")
+            detail = str(entry.get("detail") or "")
+            text = f"{title} {detail}"
+            # 我们自己播报过的上市新闻，说明企业当时已真实挂牌
+            if title.startswith(("新上市：", "新产业上市：")):
+                entry["listing_ok"] = True
+                continue
+            if not self._wants_listing(text):
+                continue
+            # 新闻点名的企业已经在市场上（退市企业则允许重新上市）
+            if any(code in text for code in codes) or any(n and n in text for n in names):
+                entry["listing_ok"] = True
+                continue
+            tries = int(entry.get("list_tries", 0))
+            if tries >= self._LISTING_NEWS_TRIES:
+                continue
+            item = self._ai_design_listing(market, text)
+            created = self._apply_ai_actions(market, {}, {"listings": [item]}) if item else []
+            if created:
+                entry["listing_ok"] = True
+                return created
+            entry["list_tries"] = tries + 1
+            break   # 生成失败也只试一家，避免同一整点连环调用 AI
+        return []
+
     def _ai_design_listing(self, market: dict, world_text: str) -> Optional[dict]:
         """按世界走向设计一家全新上市企业（不占用现有候补企业）"""
         companies = market.get("companies", {})
@@ -1478,7 +1523,9 @@ class CatStockPlugin:
             f"当前世界走向：{world_text}\n"
             "请依据这个新局势设计一家刚刚诞生的企业并挂牌上市："
             "战争会催生军工、炼金、佣兵；灾变催生重建、草药、驱魔；"
-            "贸易繁荣催生航运、商会、仓储；王权更替催生典礼、谍报、铸币。\n"
+            "贸易繁荣催生航运、商会、仓储；王权更替催生典礼、谍报、铸币。"
+            "如果新闻或走向原文已经点明了企业名，就沿用那个名字；"
+            "如果原文给了三位大写代码，也沿用该代码。\n"
             "可用的国家：\n" + countries +
             "\n已有企业（名称与代码都不能重复）：\n"
             + ("\n".join(f"{c['code']}｜{c['name']}" for c in companies.values()) or "无") +

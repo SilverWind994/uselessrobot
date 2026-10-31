@@ -1225,6 +1225,10 @@ class CatStockPlugin:
                 event_news.append(listed)
             # 4.1) AI 依据世界走向提出的产业上市 / 下市
             event_news.extend(self._apply_ai_actions(market, players, ai_actions))
+            # 4.2) 世界走向明确要求「上市/挂牌」但 AI 没给出结构化清单时，强制落地一家
+            forced_listing = self._apply_world_listing(market, ai_actions)
+            if forced_listing:
+                event_news.append(forced_listing)
 
             # 5) 价格上下限，并记录本小时走势供下一小时延续
             for comp in companies.values():
@@ -1418,6 +1422,58 @@ class CatStockPlugin:
             "bad_ticks": 0,
         }
         reason = "该国暂时缺上市公司，紧急挂牌" if shortage else "扩展业务版图"
+        return {"title": f"新上市：{item['name']}（{item['code']}）挂牌交易",
+                "detail": f"来自 {self._country_name(item['country'])}，{reason}；"
+                          f"首日参考价 {self._fmt_price(price)}，行业 {item.get('sector', '综合')}"}
+
+    # 世界走向里出现这些词，视为“要求本小时要有企业挂牌”
+    _LISTING_WORDS = ("上市", "挂牌", "新股", "首次公开募股")
+
+    def _wants_listing(self, text: str) -> bool:
+        return any(word in text for word in self._LISTING_WORDS)
+
+    def _apply_world_listing(self, market: dict,
+                             actions: Optional[dict]) -> Optional[dict]:
+        """世界走向点名“挂牌上市”时保证真的有一家企业上市。
+
+        只有新闻文本、没有结构化 listings 时，AI 常把“上市”写进新闻却忘了
+        返回 listings，导致玩家只看到新闻、市场上却没有这家企业。
+        """
+        directives = market.get("world_directives") or []
+        active = [d for d in directives
+                  if int(d.get("remaining", 0)) > 0 and not d.get("listing_done")
+                  and self._wants_listing(str(d.get("text") or ""))]
+        if not active:
+            return None
+
+        # AI 已经给出结构化上市请求，只需标记世界走向已落地，不再额外上市
+        if actions and actions.get("listings"):
+            active[0]["listing_done"] = True
+            return None
+
+        companies = market.get("companies", {})
+        catalog = market.get("catalog", [])
+        if not catalog or len(companies) >= CAT_STOCK_COMPANY_MAX:
+            return None
+
+        text = str(active[0].get("text") or "")
+        # 世界走向里点了名的候补企业优先，没点名就随机补一家
+        named = next((c for c in catalog if c.get("name") and c["name"] in text), None)
+        item = named or random.choice(catalog)
+        catalog.remove(item)
+        price = float(max(10, int(item["base"] * random.uniform(0.85, 1.15))))
+        companies[item["code"]] = {
+            "code": item["code"],
+            "name": item["name"],
+            "country": item["country"],
+            "sector": item.get("sector", "综合"),
+            "base": item["base"],
+            "price": price,
+            "prev_close": price,
+            "bad_ticks": 0,
+        }
+        active[0]["listing_done"] = True
+        reason = "世界走向点名挂牌" if named else "顺应世界局势，开放新企业挂牌"
         return {"title": f"新上市：{item['name']}（{item['code']}）挂牌交易",
                 "detail": f"来自 {self._country_name(item['country'])}，{reason}；"
                           f"首日参考价 {self._fmt_price(price)}，行业 {item.get('sector', '综合')}"}

@@ -1434,11 +1434,13 @@ class CatStockPlugin:
 
     def _apply_world_listing(self, market: dict,
                              actions: Optional[dict]) -> Optional[dict]:
-        """世界走向点名“挂牌上市”时保证真的有一家企业上市。
+        """世界走向点名“挂牌上市”时，让 AI 按当前局势新建一家企业并挂牌。
 
-        只有新闻文本、没有结构化 listings 时，AI 常把“上市”写进新闻却忘了
-        返回 listings，导致玩家只看到新闻、市场上却没有这家企业。
+        AI 有时只把“上市”写进新闻文本，却不返回结构化 listings，
+        导致新闻里出现了上市公司、市场上却查不到。
         """
+        if not self._ai:
+            return None
         directives = market.get("world_directives") or []
         active = [d for d in directives
                   if int(d.get("remaining", 0)) > 0 and not d.get("listing_done")
@@ -1452,31 +1454,55 @@ class CatStockPlugin:
             return None
 
         companies = market.get("companies", {})
-        catalog = market.get("catalog", [])
-        if not catalog or len(companies) >= CAT_STOCK_COMPANY_MAX:
+        if len(companies) >= CAT_STOCK_COMPANY_MAX:
             return None
 
-        text = str(active[0].get("text") or "")
-        # 世界走向里点了名的候补企业优先，没点名就随机补一家
-        named = next((c for c in catalog if c.get("name") and c["name"] in text), None)
-        item = named or random.choice(catalog)
-        catalog.remove(item)
-        price = float(max(10, int(item["base"] * random.uniform(0.85, 1.15))))
-        companies[item["code"]] = {
-            "code": item["code"],
-            "name": item["name"],
-            "country": item["country"],
-            "sector": item.get("sector", "综合"),
-            "base": item["base"],
-            "price": price,
-            "prev_close": price,
-            "bad_ticks": 0,
-        }
+        item = self._ai_design_listing(market, str(active[0].get("text") or ""))
+        if not item:
+            return None   # 生成失败不标记，下个整点还能再试
+        news = self._apply_ai_actions(market, {}, {"listings": [item]})
+        if not news:
+            return None
         active[0]["listing_done"] = True
-        reason = "世界走向点名挂牌" if named else "顺应世界局势，开放新企业挂牌"
-        return {"title": f"新上市：{item['name']}（{item['code']}）挂牌交易",
-                "detail": f"来自 {self._country_name(item['country'])}，{reason}；"
-                          f"首日参考价 {self._fmt_price(price)}，行业 {item.get('sector', '综合')}"}
+        return news[0]
+
+    def _ai_design_listing(self, market: dict, world_text: str) -> Optional[dict]:
+        """按世界走向设计一家全新上市企业（不占用现有候补企业）"""
+        companies = market.get("companies", {})
+        catalog_codes = sorted({str(c.get("code", "")).upper()
+                                for c in market.get("catalog") or []})
+        countries = "\n".join(f"- {self._country_name(code)}（{code}）"
+                              for code in _COUNTRY_GEO)
+        prompt = (
+            "你是奇幻世界《猫猫远征队》if 线的股市主编。\n"
+            f"当前世界走向：{world_text}\n"
+            "请依据这个新局势设计一家刚刚诞生的企业并挂牌上市："
+            "战争会催生军工、炼金、佣兵；灾变催生重建、草药、驱魔；"
+            "贸易繁荣催生航运、商会、仓储；王权更替催生典礼、谍报、铸币。\n"
+            "可用的国家：\n" + countries +
+            "\n已有企业（名称与代码都不能重复）：\n"
+            + ("\n".join(f"{c['code']}｜{c['name']}" for c in companies.values()) or "无") +
+            "\n已占用代码：" + ("、".join(catalog_codes) or "无") +
+            "\n只输出一个 JSON 对象，不要解释："
+            '{"code":"三位大写字母","name":"企业名（不超过10字）",'
+            '"country":"国家代码","sector":"行业名（不超过4字）","base":20到300的整数}'
+        )
+        try:
+            text = self._ai._call_ai(
+                Config.AI_MODEL["chat"],
+                [{"role": "system", "content": "你是奇幻世界的股市与企业设定师。"},
+                 {"role": "user", "content": prompt}],
+                temperature=0.8,
+                max_retries=1,
+                max_tokens=300,
+            )
+        except Exception as e:
+            print(f"[cat_stock] design listing failed: {e}")
+            return None
+        data = _extract_json(text)
+        if not isinstance(data, dict):
+            return None
+        return data
 
     def _apply_ai_actions(self, market: dict, players: dict,
                           actions: Optional[dict]) -> List[dict]:

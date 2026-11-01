@@ -427,10 +427,27 @@ class CatStockPlugin:
         if head.isdigit():
             ticks = max(1, min(48, int(head)))
             text = tail.strip()
+
+        def is_active(item: dict) -> bool:
+            return (int(item.get("remaining", 0)) > 0
+                    and item.get("from") == CAT_STOCK_WORLD_ADMIN)
+
         with self._lock:
             market = self._load_market()
             directives = market.setdefault("world_directives", [])
-            if text:
+            active = [d for d in directives if is_active(d)]
+            if head in ("删除", "删", "delete", "del"):
+                arg = tail.strip()
+                if arg in ("全部", "所有", "all"):
+                    market["world_directives"] = [d for d in directives if not is_active(d)]
+                    message = "已删除全部生效中的世界走向。"
+                elif arg.isdigit() and 1 <= int(arg) <= len(active):
+                    victim = active[int(arg) - 1]
+                    market["world_directives"] = [d for d in directives if d is not victim]
+                    message = f"已删除第 {arg} 条：{victim.get('text', '')}"
+                else:
+                    message = "用法：世界走向 删除 <序号>；世界走向 删除 全部"
+            elif text:
                 directives.append({"text": text[:100],
                                    "ticks": ticks,
                                    "remaining": ticks,
@@ -439,17 +456,13 @@ class CatStockPlugin:
                 market["world_directives"] = directives[-20:]
                 message = (f"已记录世界走向：{text[:100]}\n"
                            f"将在接下来 {ticks} 个整点影响世界局势、新闻与股价。")
+            elif active:
+                message = "当前生效的世界走向：\n" + "\n".join(
+                    f"{i}. {d.get('text', '')}（剩 {int(d.get('remaining', 0))} 个整点）"
+                    for i, d in enumerate(active, 1)) + "\n删除：世界走向 删除 <序号> 或 世界走向 删除 全部"
             else:
-                active = [d for d in directives
-                          if int(d.get("remaining", 0)) > 0
-                          and d.get("from") == CAT_STOCK_WORLD_ADMIN]
-                if active:
-                    message = "当前生效的世界走向：\n" + "\n".join(
-                        f"- {d.get('text', '')}（剩 {int(d.get('remaining', 0))} 个整点）"
-                        for d in active)
-                else:
-                    message = ("当前没有生效中的世界走向。\n"
-                               "用法：世界走向 <窗口数> <内容>（窗口数可省略，默认 2）")
+                message = ("当前没有生效中的世界走向。\n"
+                           "用法：世界走向 <窗口数> <内容>（窗口数可省略，默认 2）")
             self._save_market(market)
         self._sender.send_text(target, message)
 
@@ -1801,13 +1814,18 @@ class CatStockPlugin:
                             + "\n")
         world_block = ""
         if world:
-            world_block = ("\n本小时的世界背景（世界观察者给出的局势设定，是这一小时盘面的绝对主轴，"
-                           "重要性高于一切日常新闻）：\n"
-                           + "\n".join(f"- {w}" for w in world)
-                           + "\n严禁把原文照搬进新闻标题或详情（不要写“设定：……”“背景：……”），"
-                             "要写出这段局势自然发展出的具体进展和后果——谁做了什么、哪国哪行业受冲击、结果如何。"
-                             "本次必须有至少两条新闻直接写这段局势及其连锁反应，"
-                             "涉及的企业可以有多家；effects 必须显著，单条可给到 ±0.35，"
+            items = list(world)
+            random.shuffle(items)
+            world_block = (f"\n本小时共有 {len(items)} 条局势设定同时生效"
+                           "（是这一小时盘面的绝对主轴，重要性高于一切日常新闻）：\n"
+                           + "\n".join(f"{i}. {w}" for i, w in enumerate(items, 1))
+                           + "\n这些设定彼此并列、同等重要：每一条都必须至少有一条新闻写它的具体进展和后果，"
+                             "不能只围绕其中一条写、也不能让后面的设定落空；"
+                             "每条都要给出明确的 effects，量级要相当，"
+                             "不要用一条压倒性的新闻吞掉其他几条。"
+                             "严禁把原文照搬进新闻标题或详情（不要写“设定：……”“背景：……”），"
+                             "要写出局势自然发展出的具体进展和后果——谁做了什么、哪国哪行业受冲击、结果如何。"
+                             "effects 必须显著，单条可给到 ±0.35，"
                              "要让相关国家和行业出现明显涨跌，不能被无关小新闻冲淡。\n")
         state = market.get("world") or {}
         state_block = ""

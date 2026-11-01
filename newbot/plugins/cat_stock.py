@@ -55,8 +55,8 @@ CAT_STOCK_COUNTRY_MIN_LISTED = 2     # 每个国家尽量维持的上市公司�
 CAT_STOCK_COMPANY_MIN = 35           # 市场最少保持的上市公司数
 CAT_STOCK_COMPANY_MAX = 70           # 市场最多容纳的上市公司数
 CAT_STOCK_AI_ACTION_CHANCE = 0.25    # 无外部设定时，AI 推动上市/摘牌被采纳的概率
-CAT_STOCK_NEWS_TICK_MIN = 3          # 每个整点最少生成几条新闻
-CAT_STOCK_NEWS_TICK_MAX = 5          # 每个整点最多生成几条新闻
+CAT_STOCK_NEWS_TICK_MIN = 4          # 每个整点最少生成几条新闻
+CAT_STOCK_NEWS_TICK_MAX = 8          # 每个整点最多生成几条新闻
 CAT_STOCK_HISTORY_KEEP = 96          # 每只股票保留多少个整点的价格记录
 CAT_STOCK_HISTORY_SHOW = 48          # 网页端展示最近多少个整点的走势
 

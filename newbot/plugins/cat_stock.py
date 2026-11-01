@@ -1094,39 +1094,33 @@ class CatStockPlugin:
 
     # ==================== 公司方针 ====================
 
-    def _judge_policy(self, text: str) -> Tuple[str, bool]:
-        """由 AI 判断方针性质与是否败露，返回 (verdict, discovered)，不做任何关键词匹配"""
+    def _judge_policy(self, text: str) -> str:
+        """由 AI 判断方针性质，返回 ok / veto / illegal，不做任何关键词匹配"""
         if not self._ai:
-            return "ok", False
+            return "ok"
         prompt = (
-            "请判断下面这条公司经营方针的性质，以及它会不会被监察机构发现：\n"
+            "请判断下面这条公司经营方针的性质：\n"
             f"方针：{text}\n"
-            "只返回 JSON：{\"verdict\":\"ok|veto|illegal\",\"discovered\":true|false,\"reason\":\"一句话理由\"}\n"
+            "只返回 JSON：{\"verdict\":\"ok|veto|illegal\",\"reason\":\"一句话理由\"}\n"
             "verdict：veto 为明显恶意、离谱、会直接毁掉公司的行为（例如解散公司、纵火、掏空资产）；"
             "illegal 为私利违法违规（例如内幕交易、操纵股价、贿赂、财务造假）；"
             "ok 为正常经营方向。\n"
-            "discovered：只有 illegal 才需要判断，true 表示当场败露，false 表示暂时瞒过去。"
-            "是否败露由你根据行为的隐蔽性、规模、涉及人数、公司受关注程度等自行权衡，"
-            "不要用固定概率，也不是所有违规都会被抓。\n"
             "拿不准时判 ok，不要冤枉正常方针。"
         )
         try:
             raw = self._ai._call_ai(
                 Config.AI_MODEL["chat"],
-                [{"role": "system", "content": "你是奇幻王国的证券监察机构，只输出 JSON。"},
+                [{"role": "system", "content": "你是奇幻王国的证券监管顾问，只输出 JSON。"},
                  {"role": "user", "content": prompt}],
                 temperature=0.2, max_retries=1, max_tokens=200,
             )
         except Exception:
-            return "ok", False
+            return "ok"
         data = _extract_json(raw) if isinstance(raw, str) else raw
         if not isinstance(data, dict):
-            return "ok", False
+            return "ok"
         verdict = str(data.get("verdict") or "").strip().lower()
-        if verdict not in ("veto", "illegal"):
-            return "ok", False
-        discovered = bool(data.get("discovered")) if verdict == "illegal" else False
-        return verdict, discovered
+        return verdict if verdict in ("veto", "illegal") else "ok"
 
     def _set_policy(self, target: Target, qq: int, rest: List[str]) -> None:
         """最大股东为公司制定方针；AI 每个整点写新闻时会参考方针"""
@@ -1136,7 +1130,7 @@ class CatStockPlugin:
                 "用法：喵股市 方针 <股票代码> <方针内容>\n"
                 f"条件：持有该公司 ≥{CAT_STOCK_POLICY_MIN_SHARES} 股，且是该公司最大股东\n"
                 "示例：喵股市 方针 FRS 稳健经营，优先交付长期军备订单\n"
-                "董事会会否决明显坑公司的离谱方针；违规操作可能被监察机构查处并罚款喵。"
+                "董事会会否决明显坑公司的离谱方针；违规操作的后果会在后续市场故事与新闻里体现喵。"
             )
             return
         comp = self._resolve_company(self._load_market(), rest[0])
@@ -1172,8 +1166,8 @@ class CatStockPlugin:
                     f"你不是 {code} 的最大股东（最大持股 {max_shares} 股），方针要由最大股东拍板喵")
                 return
 
-        # 持股资格确认后再让 AI 做合规判断，避免无关玩家消耗 AI 调用
-        verdict, discovered = self._judge_policy(text_cut)
+        # 持股资格确认后再让 AI 做性质判断，避免无关玩家消耗 AI 调用
+        verdict = self._judge_policy(text_cut)
         if verdict == "veto":
             self._sender.send_text(
                 target,
@@ -1182,7 +1176,6 @@ class CatStockPlugin:
             )
             return
 
-        illegal = verdict == "illegal"
         with self._lock:
             market = self._load_market()
             comp = market["companies"].get(code)
@@ -1190,49 +1183,12 @@ class CatStockPlugin:
                 self._sender.send_text(target, f"{code} 已经退市了喵～")
                 return
 
-            if illegal and discovered:
-                # 违规操作被监察机构抓到：股价直接跌到三分之一，
-                # 罚款按该公司全体股东持仓总市值的一半计算，不够就欠款
-                players = self._load_stock_players()
-                st = self._stock_player(qq, players)
-                price_before = float(comp["price"])
-                held_value = 0.0
-                for holder in players.values():
-                    shares = self._shares_of(holder.get("holdings", {}).get(code, []))
-                    if shares > 0:
-                        held_value += shares * price_before
-                fine = max(1, int(round(held_value * 0.5)))
-                catnip = int(st.get("catnip", 0))
-                st["catnip"] = catnip - fine
-                debt = max(0, fine - catnip)
-                self._save_stock_players(players)
-                comp["price"] = max(1.0, round(price_before / 3, 2))
-                stamp = datetime.now().strftime("%m-%d %H:%M")
-                market.setdefault("news", []).insert(0, {
-                    "time": stamp,
-                    "ts": time.time(),
-                    "title": f"监察机构突查{comp['name']}，控股股东违规操作被立案",
-                    "detail": (f"{comp['name']}（{code}）控股股东因「{text_cut}」涉嫌违规经营，"
-                               f"股价当日跌至三分之一，并被处以 {fine} 猫薄荷罚款，相关方针被冻结。"),
-                })
-                market["news"] = self._recent_news(market["news"])[:CAT_STOCK_NEWS_MAX]
-                self._save_market(market)
-                debt_line = (f"\n猫薄荷不足以缴纳罚款，欠款 {debt}，需要卖出持股补上喵。"
-                             if debt > 0 else "")
-                self._sender.send_text(
-                    target,
-                    f"监察机构发现了你的违规操作喵！\n"
-                    f"「{comp['name']}」股价跌至三分之一，方针「{text_cut}」被冻结，"
-                    f"罚款 {fine} 猫薄荷。{debt_line}"
-                )
-                return
-
             comp["policy"] = text_cut
             comp["policy_owner"] = qq
             comp["policy_set_at"] = datetime.now().strftime("%Y-%m-%d")
             self._save_market(market)
 
-        note = "（这次没人发现喵……）\n" if illegal else ""
+        note = "（该怎么收场，就看后续的市场故事了喵……）\n" if verdict == "illegal" else ""
         self._sender.send_text(
             target,
             f"【{comp['name']}】方针已更新为：{comp['policy']}\n" + note +

@@ -55,8 +55,8 @@ CAT_STOCK_COUNTRY_MIN_LISTED = 2     # 每个国家尽量维持的上市公司�
 CAT_STOCK_COMPANY_MIN = 35           # 市场最少保持的上市公司数
 CAT_STOCK_COMPANY_MAX = 70           # 市场最多容纳的上市公司数
 CAT_STOCK_AI_ACTION_CHANCE = 0.25    # 无外部设定时，AI 推动上市/摘牌被采纳的概率
-CAT_STOCK_NEWS_MIN = 4               # 每个整点最少生成几条新闻
-CAT_STOCK_NEWS_MAX = 8               # 每个整点最多生成几条新闻
+CAT_STOCK_NEWS_TICK_MIN = 3          # 每个整点最少生成几条新闻
+CAT_STOCK_NEWS_TICK_MAX = 5          # 每个整点最多生成几条新闻
 CAT_STOCK_HISTORY_KEEP = 96          # 每只股票保留多少个整点的价格记录
 CAT_STOCK_HISTORY_SHOW = 48          # 网页端展示最近多少个整点的走势
 
@@ -1856,8 +1856,8 @@ class CatStockPlugin:
             "以下是当前上市企业（代码｜名称｜国家｜行业｜现价｜近1小时涨跌）：\n"
             + "\n".join(lines) + recent_block + world_block + state_block
             + self._geography_prompt() +
-            f"\n\n请生成 {CAT_STOCK_NEWS_MIN}~{CAT_STOCK_NEWS_MAX} 条本小时的世界新闻，"
-            "不要每次都只写三两条。新闻要有长有短：既有影响盘面的重头消息，"
+            f"\n\n请生成 {CAT_STOCK_NEWS_TICK_MIN}~{CAT_STOCK_NEWS_TICK_MAX} 条本小时的世界新闻，"
+            "不要写成十几条，也不要只有一条。新闻要有长有短：既有影响盘面的重头消息，"
             "也有交易所里流传的短讯、传闻、人物动向，读起来像一整个热闹的新闻流。"
             "其中至少一半的新闻必须与股市直接相关，并给出能由这条新闻解释的股价影响。"
             "新闻要参考企业最近的走势和前面的新闻，保持事件连续性，"
@@ -1949,7 +1949,7 @@ class CatStockPlugin:
             else:
                 news.append(entry)
                 effects.extend(item_effects)
-            if len(news) >= CAT_STOCK_NEWS_MAX:
+            if len(news) >= CAT_STOCK_NEWS_TICK_MAX:
                 break
 
         # 兼容模型把 effects 放在顶层的写法

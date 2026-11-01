@@ -3995,7 +3995,7 @@ function openStockBondDetail(country) {
         ? `已达门槛（持有 ${stockMoney(held)} 张），可以提交诉求；AI 会一定程度参考，不保证完全照办。`
         : `还需持有 ${stockMoney(Math.max(0, influence - held))} 张才能提交（门槛 ${stockMoney(influence)} 张）。`}</p>
       <div class="stock-bond-policy-row">
-        <input id="stock-bond-policy-input" maxlength="30" placeholder="例：优先发展矿脉与军备，加强与邻国贸易"
+        <input id="stock-bond-policy-input" maxlength="100" placeholder="例：优先发展矿脉与军备，加强与邻国贸易"
           ${canPolicy ? '' : 'disabled'}>
         <button class="btn btn-primary btn-sm stock-bond-policy-btn" type="button" ${canPolicy ? '' : 'disabled'}>提交诉求</button>
       </div>

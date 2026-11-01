@@ -38,6 +38,9 @@ CAT_STOCK_MARKET_NOISE = 0.008       # 每个整点全市场共同情绪波动
 CAT_STOCK_COUNTRY_NOISE = 0.008      # 每个整点各国家的共同波动
 CAT_STOCK_EFFECT_MAX = 0.35          # 单条新闻对单只股票的单小时影响上限
 CAT_STOCK_MOMENTUM_CARRY = 0.45      # 上一小时走势延续到下一小时的比例
+CAT_STOCK_REVERT_THRESHOLD = 0.10    # 相对上市基准偏离多少才开始机械回归
+CAT_STOCK_REVERT_COEF = 0.12         # 超出阈值后每 1 偏离度的回归力度
+CAT_STOCK_REVERT_MAX = 0.06          # 单小时机械回归上限
 CAT_STOCK_LINK_COUNTRY = 0.35        # 同国企业联动系数
 CAT_STOCK_LINK_SECTOR = 0.25         # 同行业企业联动系数
 CAT_STOCK_DELIST_BAD_RATIO = 0.6     # 股价低于基准价该比例视为持续低迷
@@ -1704,6 +1707,18 @@ class CatStockPlugin:
                         + momentum * CAT_STOCK_MOMENTUM_CARRY
                         + random.gauss(0, CAT_STOCK_TICK_NOISE))
                 comp["price"] = max(1.0, comp["price"] * (1 + move))
+
+            # 1.05) 唯一的机械平衡：股价相对上市基准偏离过大时向基准温和回归
+            for comp in companies.values():
+                base = float(comp.get("base") or 0)
+                if base <= 0:
+                    continue
+                dev = comp["price"] / base - 1
+                if abs(dev) <= CAT_STOCK_REVERT_THRESHOLD:
+                    continue
+                pull = min(CAT_STOCK_REVERT_MAX,
+                           (abs(dev) - CAT_STOCK_REVERT_THRESHOLD) * CAT_STOCK_REVERT_COEF)
+                comp["price"] = max(1.0, comp["price"] * (1 - (pull if dev > 0 else -pull)))
 
             # 1.1) 国债：波动远小于股票，缓慢向面值回归
             for bond in (market.get("bonds") or {}).values():

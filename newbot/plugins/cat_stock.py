@@ -36,7 +36,7 @@ CAT_STOCK_LIST_CHANCE = 0.02         # 每个整点的新上市概率（偶发�
 CAT_STOCK_TICK_NOISE = 0.015         # 每个整点的基础随机波动标准差
 CAT_STOCK_MARKET_NOISE = 0.008       # 每个整点全市场共同情绪波动
 CAT_STOCK_COUNTRY_NOISE = 0.008      # 每个整点各国家的共同波动
-CAT_STOCK_EFFECT_MAX = 0.22          # 单条新闻对单只股票的单小时影响上限
+CAT_STOCK_EFFECT_MAX = 0.35          # 单条新闻对单只股票的单小时影响上限
 CAT_STOCK_MOMENTUM_CARRY = 0.45      # 上一小时走势延续到下一小时的比例
 CAT_STOCK_LINK_COUNTRY = 0.35        # 同国企业联动系数
 CAT_STOCK_LINK_SECTOR = 0.25         # 同行业企业联动系数
@@ -52,8 +52,6 @@ CAT_STOCK_NEWS_MAX = 200             # 新闻最多保留条数（需覆盖统�
 CAT_STOCK_POLICY_MIN_SHARES = 1000   # 改公司方针所需的最低持股数
 CAT_STOCK_POLICY_MAX_LEN = 24        # 方针文本最大长度
 CAT_STOCK_POLICY_CRIME_CHANCE = 0.35 # 违规方针被监察机构发现的概率
-CAT_STOCK_POLICY_FINE_RATE = 0.15    # 被查处时按当前猫薄荷比例罚款
-CAT_STOCK_POLICY_FINE_MIN = 500      # 最低罚款
 CAT_STOCK_COUNTRY_MIN_LISTED = 2     # 每个国家尽量维持的上市公司数
 CAT_STOCK_COMPANY_MIN = 35           # 市场最少保持的上市公司数
 CAT_STOCK_COMPANY_MAX = 70           # 市场最多容纳的上市公司数
@@ -156,38 +154,6 @@ _LISTING_CATALOG = [
     {"code": "GRA", "name": "灰烬纸业", "country": "ci", "sector": "轻工", "base": 28},
     {"code": "NEK", "name": "夜猫快递", "country": "no", "sector": "物流", "base": 47},
     {"code": "HAU", "name": "幽灵房产", "country": "mo", "sector": "地产", "base": 68},
-]
-
-# AI 不可用时的兜底事件（奇幻世界 if 线）
-_FALLBACK_EVENTS = [
-    ("灰誓团与烬海共和国边境爆发冲突，军工订单激增",
-     [("FRS", 0.28), ("EMB", 0.22), ("OAT", -0.18)]),
-    ("魔力风暴席卷星穹议会，观星设备大面积损毁",
-     [("STR", -0.26), ("ZRO", -0.14)]),
-    ("凛霜部族突降千年寒潮，极光晶石供不应求",
-     [("AUR", 0.24), ("FRS", 0.08)]),
-    ("翡翠森庭爆发腐叶瘟疫，药材商会紧急扩产",
-     [("VND", 0.21), ("DRM", 0.12), ("LFL", -0.16)]),
-    ("沙渊苏丹国商路被魔物截断，香料价格暴涨",
-     [("SND", 0.18), ("LAV", -0.15)]),
-    ("圣辉教国宣布封圣节，圣器与钟表销量大增",
-     [("LUX", 0.19), ("PRY", 0.10)]),
-    ("潮歌联邦港口遭深海巨兽袭击，航线全面停摆",
-     [("TID", -0.27), ("PRL", -0.12), ("SKL", 0.15)]),
-    ("暮铁公国铁路被矿脉塌陷阻断，铁矿石积压",
-     [("IRN", -0.15), ("GTL", -0.19), ("DRG", 0.10)]),
-    ("雷鸣高原雷暴持续，风电产能创历史新高",
-     [("SKY", 0.23), ("THN", -0.07)]),
-    ("永夜王朝夜蝠药房研制出安神新药，销量翻倍",
-     [("BAT", 0.25), ("DRM", 0.09)]),
-    ("时砂遗国钟楼出现时间回溯，悖论学社被查",
-     [("PRD", -0.22), ("CHR", 0.17)]),
-    ("深渊王座开放黑市拍卖，虚空矿脉估值飙升",
-     [("ABY", 0.20), ("VOI", 0.26), ("MRT", -0.10)]),
-    ("骸骨圣所亡灵潮涌动，殡仪与安保需求激增",
-     [("MRT", 0.22), ("OSS", 0.24)]),
-    ("龙脊盟约与圣辉教国开战，龙甲与圣器双双大涨",
-     [("DRG", 0.31), ("SKL", -0.20), ("LUX", 0.27)]),
 ]
 
 # 世界故事线：由 AI 每整点自行推进并持久化，不使用任何预设事件模板
@@ -898,28 +864,39 @@ class CatStockPlugin:
                 return
 
             if illegal and random.random() < CAT_STOCK_POLICY_CRIME_CHANCE:
-                # 违规操作被监察机构抓到：罚款、方针不执行，并立刻上新闻
+                # 违规操作被监察机构抓到：股价直接跌到三分之一，
+                # 罚款按该公司全体股东持仓总市值的一半计算，不够就欠款
                 players = self._load_stock_players()
                 st = self._stock_player(qq, players)
+                price_before = float(comp["price"])
+                held_value = 0.0
+                for holder in players.values():
+                    shares = self._shares_of(holder.get("holdings", {}).get(code, []))
+                    if shares > 0:
+                        held_value += shares * price_before
+                fine = max(1, int(round(held_value * 0.5)))
                 catnip = int(st.get("catnip", 0))
-                fine = min(catnip, max(CAT_STOCK_POLICY_FINE_MIN,
-                                       int(round(catnip * CAT_STOCK_POLICY_FINE_RATE))))
                 st["catnip"] = catnip - fine
+                debt = max(0, fine - catnip)
                 self._save_stock_players(players)
+                comp["price"] = max(1.0, round(price_before / 3, 2))
                 stamp = datetime.now().strftime("%m-%d %H:%M")
                 market.setdefault("news", []).insert(0, {
                     "time": stamp,
                     "ts": time.time(),
                     "title": f"监察机构突查{comp['name']}，控股股东违规操作被立案",
                     "detail": (f"{comp['name']}（{code}）控股股东因「{text_cut}」涉嫌违规经营，"
-                               f"被监察机构处以 {fine} 猫薄荷罚款，相关方针被冻结。"),
+                               f"股价当日跌至三分之一，并被处以 {fine} 猫薄荷罚款，相关方针被冻结。"),
                 })
                 market["news"] = self._recent_news(market["news"])[:CAT_STOCK_NEWS_MAX]
                 self._save_market(market)
+                debt_line = (f"\n猫薄荷不足以缴纳罚款，欠款 {debt}，需要卖出持股补上喵。"
+                             if debt > 0 else "")
                 self._sender.send_text(
                     target,
                     f"监察机构发现了你的违规操作喵！\n"
-                    f"「{comp['name']}」的方针「{text_cut}」被冻结，罚款 {fine} 猫薄荷。"
+                    f"「{comp['name']}」股价跌至三分之一，方针「{text_cut}」被冻结，"
+                    f"罚款 {fine} 猫薄荷。{debt_line}"
                 )
                 return
 
@@ -1824,14 +1801,14 @@ class CatStockPlugin:
                             + "\n")
         world_block = ""
         if world:
-            world_block = ("\n本小时的世界背景（世界观察者给出的局势设定，优先级最高）：\n"
+            world_block = ("\n本小时的世界背景（世界观察者给出的局势设定，是这一小时盘面的绝对主轴，"
+                           "重要性高于一切日常新闻）：\n"
                            + "\n".join(f"- {w}" for w in world)
-                           + "\n这段内容只作为你理解局势的背景，"
-                             "严禁把原文照搬进新闻标题或详情（不要写“设定：……”“背景：……”）。"
-                             "请写出这些局势自然发展出的具体后果——哪国、哪个行业、发生了什么，"
-                             "让新闻像是在报道世界的新进展，而不是在复述设定。"
-                             "本次必须至少有一条新闻直接落地这段世界背景的具体后果，"
-                             "并给出明确的股价 effects，不能只当成氛围描写。\n")
+                           + "\n严禁把原文照搬进新闻标题或详情（不要写“设定：……”“背景：……”），"
+                             "要写出这段局势自然发展出的具体进展和后果——谁做了什么、哪国哪行业受冲击、结果如何。"
+                             "本次必须有至少两条新闻直接写这段局势及其连锁反应，"
+                             "涉及的企业可以有多家；effects 必须显著，单条可给到 ±0.35，"
+                             "要让相关国家和行业出现明显涨跌，不能被无关小新闻冲淡。\n")
         state = market.get("world") or {}
         state_block = ""
         arc = str(state.get("arc") or "").strip()
@@ -1854,8 +1831,8 @@ class CatStockPlugin:
                             "各国存在合纵连横：盟友可能因共同敌人靠拢，敌对国可能互相制裁、"
                             "断商路、边境摩擦；新闻要顺着这些关系发展，而不是每小时另起炉灶。\n")
         prompt = (
-            "你是一个奇幻世界的财经新闻主编，世界背景是《猫猫远征队》的 if 线："
-            "各国之间存在战争、魔物袭击、魔法灾变、王室更替、龙潮、亡灵复苏等事件。\n"
+            "你是一个奇幻世界的财经新闻主编，世界背景是《猫猫远征队》的 if 线，"
+            "这是一个充满魔法、魔物与列国纷争的世界。\n"
             f"现在是 {now.strftime('%H:%M')}，股市开市。\n"
             "以下是当前上市企业（代码｜名称｜国家｜行业｜现价｜近1小时涨跌）：\n"
             + "\n".join(lines) + recent_block + world_block + state_block
@@ -1863,11 +1840,11 @@ class CatStockPlugin:
             f"\n\n请生成 {CAT_STOCK_NEWS_MIN}~{CAT_STOCK_NEWS_MAX} 条本小时的世界新闻，"
             "不要每次都只写三两条。新闻要有长有短：既有影响盘面的重头消息，"
             "也有交易所里流传的短讯、传闻、人物动向，读起来像一整个热闹的新闻流。"
-            "其中至少一半的新闻必须与股市直接相关，并且给出能由这条新闻解释的股价影响"
-            "（例如战争利好军工、灾变利空产地企业、商路被切断利空物流）。"
-            "新闻要参考企业最近的走势和前面的新闻，保持事件连续性："
-            "战事可以升级、灾后可以重建、订单可以交付、政策可以落地，不要每小时都凭空冒出新事件。"
-            "涨跌可以有戏剧性，单条新闻大致 -18% ~ +22%，但必须有因果依据，"
+            "其中至少一半的新闻必须与股市直接相关，并给出能由这条新闻解释的股价影响。"
+            "新闻要参考企业最近的走势和前面的新闻，保持事件连续性，"
+            "但具体事件如何发展完全由你自由创作，不要套用固定剧情或固定行业对应关系，"
+            "也不要每小时都凭空另起炉灶。"
+            "涨跌可以有戏剧性，单条新闻大致 -25% ~ +35%，但必须有因果依据，"
             "也不要所有股票同涨同跌。"
             + ("\n有企业带着「方针」，那是最大股东制定的经营方向；"
                "请至少让一条新闻体现方针带来的实际经营变化"
@@ -1884,8 +1861,8 @@ class CatStockPlugin:
             '"world":{"story":"世界发展脉络（150字以内，在原有基础上延续推进，不要重写世界观）",'
             '"arc":"当前世界局势主线（一句话）",'
             '"relations":[{"a":"国家代码","b":"国家代码","state":"同盟/敌对/贸易往来/边境摩擦"}]}}\n'
-            "pct 是小数涨跌幅，范围 -0.18 ~ 0.22（重大事件可到 ±0.22），正数为涨；"
-            "code 和 country 二选一；每条新闻给 1~2 条 effects。"
+            "pct 是小数涨跌幅，范围 -0.25 ~ 0.35（局势设定直接引发的重大事件可到 ±0.35），"
+            "正数为涨；code 和 country 二选一；每条新闻给 1~2 条 effects。"
             "world 是可选的：如果本小时故事有推进，就给出更新后的世界发展脉络"
             "（150字以内，要接着上一版写、不要推翻已有历史）、当前主线（一句话）"
             "和仍然成立的完整国家关系列表（最多 10 条，没有变化可省略）。"
@@ -2003,35 +1980,8 @@ class CatStockPlugin:
     def _fallback_news(self, market: dict,
                        world: Optional[List[str]] = None
                        ) -> Tuple[List[dict], List[dict], None, None]:
-        companies = market["companies"]
-        picks = random.sample(_FALLBACK_EVENTS, k=random.randint(2, 4))
-        news = []
-        effects = []
-        # AI 不可用时，用一句中性快讯兜底，不做任何关键词判断
-        if world:
-            news.append({"title": "局势变动持续发酵，相关行业开始重新定价",
-                         "detail": "市场正在消化这场变故带来的连锁反应"})
-        for title, targets in picks:
-            news.append({"title": title, "detail": "本消息由喵股市编辑部整理"})
-            for code, pct in targets:
-                if code in companies:
-                    effects.append({"code": code, "pct": pct})
-        # 再加一点随机小事件，避免每次都是模板股
-        if companies and random.random() < 0.6:
-            code = random.choice(list(companies.keys()))
-            pct = random.choice([-0.22, -0.15, -0.1, 0.1, 0.15, 0.23])
-            effects.append({"code": code, "pct": pct})
-            sign = "暴涨" if pct > 0 else "跳水"
-            detail = "交易所称原因不明，坊间传闻与神秘买盘有关"
-            cats = self._notable_cats()
-            if cats and random.random() < 0.5:
-                cat = random.choice(cats)
-                detail += f"，有人目击{cat.get('name', '某位喵喵')}出入交易大厅"
-            news.append({
-                "title": f"{companies[code]['name']}（{code}）盘中突然{sign}",
-                "detail": detail,
-            })
-        return news, effects, None, None
+        # 不使用任何预设事件模板：AI 不可用时宁可不发新闻，只保留基础行情波动
+        return [], [], None, None
 
     # ==================== 整点播报 ====================
 

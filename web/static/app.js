@@ -3682,6 +3682,8 @@ const stockFishEl = document.getElementById('stock-fish-amount');
 const stockWorldEl = document.getElementById('stock-world');
 const stockMarketBodyEl = document.getElementById('stock-market-body');
 const stockMarketSubEl = document.getElementById('stock-market-sub');
+const stockBondBodyEl = document.getElementById('stock-bond-body');
+const stockBondSubEl = document.getElementById('stock-bond-sub');
 const stockHoldingsEl = document.getElementById('stock-holdings');
 const stockHoldSubEl = document.getElementById('stock-hold-sub');
 const stockRankSubEl = document.getElementById('stock-rank-sub');
@@ -3712,6 +3714,7 @@ function renderStock(data) {
   const r = data.rules || {};
   const p = data.portfolio || {};
   const companies = data.companies || [];
+  const bonds = data.bonds || [];
   const holdings = p.holdings || [];
 
   stockStatusEl.textContent =
@@ -3759,6 +3762,34 @@ function renderStock(data) {
     stockMarketBodyEl.innerHTML = '<tr><td colspan="8" class="room-empty">暂无行情喵</td></tr>';
   }
   stockMarketSubEl.textContent = `${data.status_line}｜行情每个整点更新`;
+
+  stockBondBodyEl.innerHTML = bonds.map((b) => `
+    <tr>
+      <td>${esc(b.country_name)}${b.policy ? `<div class="stock-policy">国策诉求：${esc(b.policy)}</div>` : ''}</td>
+      <td><button class="stock-detail-btn stock-bond-detail-btn" type="button" data-country="${esc(b.country)}" title="查看国债走势与国策">${esc(b.code)}</button></td>
+      <td>${Number(b.price).toFixed(2)}</td>
+      ${stockPctCell(b.pct)}
+      <td>${stockMoney(b.my_shares || 0)}</td>
+      <td class="stock-holders">${(b.holders || []).length
+        ? b.holders.map((h, i) => `<div>${h.rank || i + 1}. ${esc(h.nick)} <span class="stock-holder-shares">${stockMoney(h.shares)} 张</span></div>`).join('')
+        : '<span class="stock-empty-cell">暂无持有人</span>'}</td>
+      <td>
+        <div class="stock-trade">
+          <input class="stock-bond-shares" type="number" min="100" step="1" placeholder="张数" data-code="${esc(b.code)}">
+          <button class="btn btn-primary btn-sm stock-bond-buy" type="button" data-code="${esc(b.code)}">买</button>
+          <button class="btn btn-ghost btn-sm stock-bond-sell" type="button" data-code="${esc(b.code)}">卖</button>
+        </div>
+        <div class="stock-trade-max">
+          <button class="stock-bond-max-buy" type="button" data-code="${esc(b.code)}">最大买入</button>
+          <button class="stock-bond-max-sell" type="button" data-code="${esc(b.code)}">最大卖出</button>
+        </div>
+      </td>
+    </tr>`).join('');
+  if (!bonds.length) {
+    stockBondBodyEl.innerHTML = '<tr><td colspan="7" class="room-empty">暂无国债喵</td></tr>';
+  }
+  stockBondSubEl.textContent =
+    `共 ${bonds.length} 国国债｜波动很小｜持有 ≥${stockMoney(r.bond_influence_shares || 10000)} 张可提交国策`;
 
   const world = data.world || {};
   const relLines = (world.relations || []).map(
@@ -3848,16 +3879,17 @@ async function stockAction(path, body, actionName) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
-  if (status === 401) { homePanel.classList.add('hidden'); showLogin(); return; }
+  if (status === 401) { homePanel.classList.add('hidden'); showLogin(); return false; }
   if (status !== 200 || !data.ok) {
     stockMsgEl.textContent = data.msg || `${actionName}失败喵`;
-    return;
+    return false;
   }
   const msg = data.msg || `${actionName}完成喵`;
   stockMsgEl.textContent = msg;
   stockMsgEl.classList.toggle('ok', /成交|成功/.test(msg));
   if (data.overview) renderStock(data.overview);
   await refresh();  // 兑换会改动鱼干，同步顶部余额
+  return true;
 }
 
 document.getElementById('btn-stock-refresh').addEventListener('click', () => loadStock());
@@ -3928,6 +3960,93 @@ function openStockDetail(code) {
         : '<p class="room-empty">暂无股东喵</p>'}
     </div>`;
   stockModalEl.classList.remove('hidden');
+}
+
+function openStockBondDetail(country) {
+  const b = ((stockLastData || {}).bonds || []).find((x) => x.country === country);
+  if (!b) return;
+  const rules = (stockLastData || {}).rules || {};
+  const influence = Number(rules.bond_influence_shares || 10000);
+  const held = Number(b.my_shares || 0);
+  const canPolicy = held >= influence;
+  const holders = b.holders || [];
+  const pct = Number(b.pct || 0);
+  stockModalEl.dataset.bondCountry = country;
+  stockModalTitleEl.textContent = `${b.name}（${b.code}）`;
+  stockModalBodyEl.innerHTML = `
+    <div class="stock-detail-meta">
+      <span>${esc(b.country_name)}</span>
+      <span>现价 ${Number(b.price).toFixed(2)}</span>
+      <span class="${pct >= 0 ? 'stock-up' : 'stock-down'}">${pct >= 0 ? '▲' : '▼'}${Math.abs(pct).toFixed(1)}%</span>
+      <span>我的持有 ${stockMoney(held)} 张</span>
+    </div>
+    ${b.policy ? `<p class="stock-detail-policy">当前国策诉求：${esc(b.policy)}</p>` : ''}
+    ${stockTrendChart(b.history)}
+    <p class="hint">最近 ${(b.history || []).length} 个整点的国债价格走势，波动远小于股票</p>
+    <div class="stock-detail-holders">
+      <div class="section-title">前三大持有人</div>
+      ${holders.length
+        ? holders.map((h, i) => `<div class="stock-detail-holder"><span>${h.rank || i + 1}. ${esc(h.nick)}</span><span>${stockMoney(h.shares)} 张</span></div>`).join('')
+        : '<p class="room-empty">暂无持有人喵</p>'}
+    </div>
+    <div class="stock-bond-policy-box">
+      <div class="section-title">影响国家发展方针</div>
+      <p class="hint">${canPolicy
+        ? `已达门槛（持有 ${stockMoney(held)} 张），可以提交诉求；AI 会一定程度参考，不保证完全照办。`
+        : `还需持有 ${stockMoney(Math.max(0, influence - held))} 张才能提交（门槛 ${stockMoney(influence)} 张）。`}</p>
+      <div class="stock-bond-policy-row">
+        <input id="stock-bond-policy-input" maxlength="30" placeholder="例：优先发展矿脉与军备，加强与邻国贸易"
+          ${canPolicy ? '' : 'disabled'}>
+        <button class="btn btn-primary btn-sm stock-bond-policy-btn" type="button" ${canPolicy ? '' : 'disabled'}>提交诉求</button>
+      </div>
+    </div>`;
+  stockModalEl.classList.remove('hidden');
+}
+
+function fillMaxBondShares(btn) {
+  const code = btn.dataset.code || '';
+  const data = stockLastData || {};
+  const p = data.portfolio || {};
+  const rules = data.rules || {};
+  const row = btn.closest('tr');
+  const input = row && row.querySelector('.stock-bond-shares');
+  if (!input) return;
+  const isBuy = btn.classList.contains('stock-bond-max-buy');
+  const minShares = Number(rules.bond_min_shares || 100);
+  let max = 0;
+  if (isBuy) {
+    const bond = (data.bonds || []).find((b) => b.code === code) || {};
+    const price = Number(bond.price || 0);
+    const fee = Number(rules.buy_fee || 0);
+    const catnip = Number(p.catnip || 0);
+    let byCash = price > 0 ? Math.floor(catnip / (price * (1 + fee))) : 0;
+    let guard = 0;
+    while (byCash > 0 && guard < 1000) {
+      const cost = Math.round(byCash * price);
+      const realFee = Math.max(1, Math.round(cost * fee));
+      if (cost + realFee <= catnip) break;
+      byCash -= 1;
+      guard += 1;
+    }
+    max = Math.min(byCash, Number(rules.max_shares || byCash));
+    if (max < minShares) max = 0;
+  } else {
+    const holding = (p.bonds || []).find((b) => b.code === code);
+    max = holding ? Number(holding.sellable || 0) : 0;
+  }
+  input.value = max > 0 ? String(max) : '';
+  stockMsgEl.classList.remove('ok');
+  if (max > 0) {
+    stockMsgEl.textContent = isBuy
+      ? `已填入国债买入上限 ${stockMoney(max)} 张`
+      : `已填入国债可卖上限 ${stockMoney(max)} 张`;
+    input.focus();
+    input.select();
+  } else {
+    stockMsgEl.textContent = isBuy
+      ? `猫薄荷不足，买不起 ${minShares} 张喵`
+      : '没有可卖的国债喵（可能还在锁定中）';
+  }
 }
 
 function fillMaxShares(btn) {
@@ -4008,6 +4127,58 @@ stockMarketBodyEl.addEventListener('keydown', (e) => {
   const box = e.target.closest('.stock-trade');
   const buyBtn = box && box.querySelector('.stock-buy');
   if (buyBtn) buyBtn.click();
+});
+
+stockBondBodyEl.addEventListener('click', (e) => {
+  const detailBtn = e.target.closest('.stock-bond-detail-btn');
+  if (detailBtn) {
+    openStockBondDetail(detailBtn.dataset.country || '');
+    return;
+  }
+  const maxBtn = e.target.closest('.stock-bond-max-buy, .stock-bond-max-sell');
+  if (maxBtn) {
+    fillMaxBondShares(maxBtn);
+    return;
+  }
+  const btn = e.target.closest('.stock-bond-buy, .stock-bond-sell');
+  if (!btn) return;
+  const code = btn.dataset.code || '';
+  const input = btn.closest('.stock-trade').querySelector('input');
+  const shares = input ? input.value.trim() : '';
+  if (!shares) {
+    stockMsgEl.textContent = '先填要交易的国债张数喵';
+    stockMsgEl.classList.remove('ok');
+    return;
+  }
+  const isBuy = btn.classList.contains('stock-bond-buy');
+  stockAction(`/api/stock/${isBuy ? 'bond_buy' : 'bond_sell'}`, { code, shares },
+    isBuy ? '买入国债' : '卖出国债');
+});
+
+stockBondBodyEl.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter' || !e.target.classList.contains('stock-bond-shares')) return;
+  e.preventDefault();
+  const box = e.target.closest('.stock-trade');
+  const buyBtn = box && box.querySelector('.stock-bond-buy');
+  if (buyBtn) buyBtn.click();
+});
+
+stockModalBodyEl.addEventListener('click', async (e) => {
+  const btn = e.target.closest('.stock-bond-policy-btn');
+  if (!btn) return;
+  const country = stockModalEl.dataset.bondCountry || '';
+  const input = document.getElementById('stock-bond-policy-input');
+  const text = input ? input.value.trim() : '';
+  if (!text) {
+    stockMsgEl.textContent = '先填国家发展方针诉求喵';
+    stockMsgEl.classList.remove('ok');
+    return;
+  }
+  const ok = await stockAction('/api/stock/bond_policy', { code: country, text }, '提交国策');
+  if (ok) {
+    closeStockModal();
+    openStockBondDetail(country);
+  }
 });
 
 document.getElementById('btn-stock-deposit').addEventListener('click', () => {

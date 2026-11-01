@@ -51,6 +51,11 @@ CAT_STOCK_BIG_HOLDING_CHANCE = 0.04  # 每个整点针对大额持仓的概率
 CAT_STOCK_NEWS_MAX = 200             # 新闻最多保留条数（需覆盖统计天数）
 CAT_STOCK_POLICY_MIN_SHARES = 1000   # 改公司方针所需的最低持股数
 CAT_STOCK_POLICY_MAX_LEN = 24        # 方针文本最大长度
+CAT_STOCK_BOND_PRICE = 5.0           # 国债初始价格（每张）
+CAT_STOCK_BOND_MIN_SHARES = 100      # 单笔最少买卖多少张国债
+CAT_STOCK_BOND_INFLUENCE_SHARES = 10000  # 持有多少张国债可以影响国家发展方针
+CAT_STOCK_BOND_NOISE = 0.003         # 国债每整点基础波动（远小于股票）
+CAT_STOCK_BOND_POLICY_MAX_LEN = 30   # 国家发展方针文本最大长度
 CAT_STOCK_COUNTRY_MIN_LISTED = 2     # 每个国家尽量维持的上市公司数
 CAT_STOCK_COMPANY_MIN = 35           # 市场最少保持的上市公司数
 CAT_STOCK_COMPANY_MAX = 70           # 市场最多容纳的上市公司数
@@ -270,6 +275,7 @@ class CatStockPlugin:
             "catalog": list(_LISTING_CATALOG),
             "news": [],
             "last_tick": "",
+            "bonds": self._default_bonds(),
         }
         _save_json(MARKET_PATH, state)
 
@@ -284,7 +290,30 @@ class CatStockPlugin:
         state.setdefault("day", "")
         state.setdefault("world", {"arc": "", "story": "", "relations": []})
         state.setdefault("world_directives", [])
+        # 老存档补上各国国债（无固定国土的 ci 不发债）
+        bonds = state.setdefault("bonds", {})
+        for country in _COUNTRY_GEO:
+            if country == "ci":
+                continue
+            bonds.setdefault(country, self._bond_default(country))
         return state
+
+    def _default_bonds(self) -> dict:
+        return {c: self._bond_default(c) for c in _COUNTRY_GEO if c != "ci"}
+
+    def _bond_default(self, country: str) -> dict:
+        return {
+            "code": f"BND{country.upper()}",
+            "country": country,
+            "name": f"{self._country_name(country)}国债",
+            "base": CAT_STOCK_BOND_PRICE,
+            "price": float(CAT_STOCK_BOND_PRICE),
+            "prev_close": float(CAT_STOCK_BOND_PRICE),
+            "policy": "",
+            "policy_by": 0,
+            "policy_at": "",
+            "history": [],
+        }
 
     def _save_market(self, state: dict) -> None:
         _save_json(MARKET_PATH, state)
@@ -299,10 +328,11 @@ class CatStockPlugin:
         """取玩家股市账本，首次使用赠送初始猫薄荷"""
         key = str(qq)
         if key not in players:
-            players[key] = {"catnip": CAT_STOCK_INITIAL_CATNIP, "holdings": {}}
+            players[key] = {"catnip": CAT_STOCK_INITIAL_CATNIP, "holdings": {}, "bonds": {}}
         st = players[key]
         st.setdefault("catnip", CAT_STOCK_INITIAL_CATNIP)
         st.setdefault("holdings", {})
+        st.setdefault("bonds", {})
         return st
 
     # ==================== 小工具 ====================
@@ -361,6 +391,28 @@ class CatStockPlugin:
                 return comp
         return None
 
+    def _resolve_bond(self, market: dict, text: str) -> Optional[dict]:
+        """按国债代码、国家代码或国家名称匹配"""
+        text = (text or "").strip()
+        if not text:
+            return None
+        bonds = market.get("bonds") or {}
+        up = text.upper()
+        for bond in bonds.values():
+            if bond["code"].upper() == up or bond["country"] == text:
+                return bond
+        # 允许直接输入国家代码，例如「买国债 vo 1000」
+        for bond in bonds.values():
+            if bond["country"] == up.lower():
+                return bond
+        for bond in bonds.values():
+            if bond["name"] == text:
+                return bond
+        for bond in bonds.values():
+            if text in bond["name"]:
+                return bond
+        return None
+
     def _shares_of(self, lots: List[dict]) -> int:
         return sum(int(lot.get("shares", 0)) for lot in lots)
 
@@ -393,6 +445,14 @@ class CatStockPlugin:
             self._show_holdings(target, ctx.user_id)
         elif sub in ("排行", "榜单", "排名", "盈亏榜", "rank"):
             self._show_rank(target)
+        elif sub in ("国债", "债券", "bond"):
+            self._show_bonds(target, ctx.user_id)
+        elif sub in ("买国债", "买入国债", "购国债", "buybond"):
+            self._bond_buy(target, ctx.user_id, rest)
+        elif sub in ("卖国债", "卖出国债", "抛售国债", "sellbond"):
+            self._bond_sell(target, ctx.user_id, rest)
+        elif sub in ("国策", "国家方针", "national"):
+            self._set_country_policy(target, ctx.user_id, rest)
         elif sub in ("买", "买入", "购", "buy"):
             self._buy(target, ctx.user_id, rest)
         elif sub in ("卖", "卖出", "抛", "抛售", "sell"):
@@ -411,7 +471,7 @@ class CatStockPlugin:
             else:
                 self._sender.send_text(
                     target,
-                    "没有这个子命令喵～ 可用：大盘 / 新闻 / 持仓 / 买 / 卖 / 充值 / 提现 / 排行 / 方针\n"
+                    "没有这个子命令喵～ 可用：大盘 / 新闻 / 持仓 / 买 / 卖 / 国债 / 买国债 / 卖国债 / 国策 / 充值 / 提现 / 排行 / 方针\n"
                     "发送「喵股市 帮助」查看完整说明"
                 )
 
@@ -539,11 +599,12 @@ class CatStockPlugin:
             st = self._stock_player(qq, players)
             catnip = int(st.get("catnip", 0))
             holdings = {k: list(v) for k, v in st.get("holdings", {}).items()}
+            bond_lots = {k: list(v) for k, v in st.get("bonds", {}).items()}
             self._save_stock_players(players)
 
         lines = [f"【喵股市 · 我的持仓】{self._market_status_line()}"]
         lines.append(f"猫薄荷：{catnip}｜约合鱼干：{catnip // CAT_STOCK_CATNIP_TO_FISH}（提现 105:1）")
-        if not holdings:
+        if not holdings and not bond_lots:
             lines.append("当前空仓")
             self._sender.send_text(target, "\n".join(lines))
             return
@@ -570,6 +631,26 @@ class CatStockPlugin:
                 f"  成本 {avg:.1f}｜现价 {self._fmt_price(comp['price'])}｜"
                 f"市值 {value:.0f}｜浮动 {pnl:+.0f}{lock_text}"
             )
+        for country, lots in bond_lots.items():
+            bond = (market.get("bonds") or {}).get(country)
+            shares = self._shares_of(lots)
+            cost = sum(float(l.get("price", 0)) * int(l.get("shares", 0)) for l in lots)
+            if not bond:
+                lines.append(f"{country} 国债：{shares} 张（数据缺失）")
+                continue
+            value = shares * float(bond["price"])
+            total_value += value
+            total_cost += cost
+            sellable = sum(int(l.get("shares", 0)) for l in lots if _lot_sellable(l))
+            locked = shares - sellable
+            avg = cost / shares if shares else 0
+            pnl = value - cost
+            lock_text = f"｜可卖 {sellable}，锁定 {locked}" if locked else "｜全部可卖"
+            lines.append(
+                f"{bond['code']} {bond['name']}：{shares} 张\n"
+                f"  成本 {avg:.2f}｜现价 {self._fmt_price(bond['price'])}｜"
+                f"市值 {value:.0f}｜浮动 {pnl:+.0f}{lock_text}"
+            )
         total_pnl = total_value - total_cost
         lines.append("")
         lines.append(f"总市值：{total_value:.0f}｜总浮动：{total_pnl:+.0f}｜猫薄荷：{catnip}")
@@ -586,6 +667,7 @@ class CatStockPlugin:
         """
         market = self._load_market()
         companies = market["companies"]
+        bonds = market.get("bonds") or {}
         players = self._load_stock_players()
         cat_players = self._cat._load_players()
         rows: List[dict] = []
@@ -596,6 +678,10 @@ class CatStockPlugin:
                 comp = companies.get(code)
                 if comp:
                     value += self._shares_of(lots) * comp["price"]
+            for country, lots in st.get("bonds", {}).items():
+                bond = bonds.get(country)
+                if bond:
+                    value += self._shares_of(lots) * float(bond["price"])
             net_in = (CAT_STOCK_INITIAL_CATNIP
                       + int(st.get("deposit_catnip", 0))
                       - int(st.get("withdraw_catnip", 0)))
@@ -782,6 +868,226 @@ class CatStockPlugin:
             f"成交价 {self._fmt_price(price)}｜成交额 {proceeds}｜手续费 {fee}｜到手 {net}\n"
             f"剩余猫薄荷 {new_balance}"
         )
+
+    # ==================== 国债 ====================
+
+    def _show_bonds(self, target: Target, qq: int) -> None:
+        market = self._load_market()
+        with self._lock:
+            players = self._load_stock_players()
+            st = self._stock_player(qq, players)
+            mine = {c: self._shares_of(lots) for c, lots in st.get("bonds", {}).items()}
+            self._save_stock_players(players)
+        lines = [f"【喵股市 · 各国国债】{self._market_status_line()}"]
+        for bond in sorted(market["bonds"].values(), key=lambda b: b["country"]):
+            prev = float(bond.get("prev_close") or bond["price"] or 1)
+            pct = (float(bond["price"]) - prev) / prev * 100
+            held = mine.get(bond["country"], 0)
+            line = (f"{bond['code']} {bond['name']}：{self._fmt_price(bond['price'])}"
+                    f"（{self._fmt_pct(pct)}）｜我的 {held} 张")
+            if held >= CAT_STOCK_BOND_INFLUENCE_SHARES:
+                line += "（已达国策门槛）"
+            lines.append(line)
+            if bond.get("policy"):
+                lines.append(f"  当前国策：{bond['policy']}")
+        lines.append("")
+        lines.append(f"买卖：喵股市 买国债 <国家/代码> <张数>｜喵股市 卖国债 <国家/代码> <张数>")
+        lines.append(f"国债价格波动很小；持有 ≥{CAT_STOCK_BOND_INFLUENCE_SHARES} 张时，"
+                     f"可用「喵股市 国策 <国家/代码> <内容>」影响该国发展方针。")
+        self._sender.send_text(target, "\n".join(lines))
+
+    def _bond_buy(self, target: Target, qq: int, rest: List[str]) -> None:
+        now = datetime.now()
+        if not self._is_open(now):
+            self._sender.send_text(target, "现在是休市时间喵～ 股市每日 08:00~20:00 开市")
+            return
+        if len(rest) < 2:
+            self._sender.send_text(target, "用法：喵股市 买国债 <国家/代码> <张数>")
+            return
+        market = self._load_market()
+        bond = self._resolve_bond(market, rest[0])
+        if not bond:
+            self._sender.send_text(target, f"找不到国债「{rest[0]}」，发送「喵股市 国债」查看列表")
+            return
+        try:
+            shares = int(rest[1])
+        except ValueError:
+            self._sender.send_text(target, "张数必须是正整数喵")
+            return
+        if shares <= 0:
+            self._sender.send_text(target, "张数必须是正整数喵")
+            return
+        if shares < CAT_STOCK_BOND_MIN_SHARES:
+            self._sender.send_text(target, f"单笔最少买 {CAT_STOCK_BOND_MIN_SHARES} 张喵")
+            return
+        if shares > CAT_STOCK_MAX_SHARES:
+            self._sender.send_text(target, f"单笔最多 {CAT_STOCK_MAX_SHARES} 张喵～")
+            return
+
+        price = float(bond["price"])
+        cost = int(round(price * shares))
+        fee = max(1, int(round(cost * CAT_STOCK_BUY_FEE)))
+        total = cost + fee
+        with self._lock:
+            players = self._load_stock_players()
+            st = self._stock_player(qq, players)
+            catnip = int(st.get("catnip", 0))
+            if catnip < total:
+                self._save_stock_players(players)
+                self._sender.send_text(
+                    target,
+                    f"猫薄荷不足喵：{shares} 张 × {self._fmt_price(price)} + 手续费 {fee} = {total}，"
+                    f"你只有 {catnip}")
+                return
+            st["catnip"] = catnip - total
+            lots = st["bonds"].setdefault(bond["country"], [])
+            lots.append({"shares": shares, "price": price, "ts": time.time()})
+            held = self._shares_of(lots)
+            self._save_stock_players(players)
+            new_balance = st["catnip"]
+
+        extra = ""
+        if held >= CAT_STOCK_BOND_INFLUENCE_SHARES and held - shares < CAT_STOCK_BOND_INFLUENCE_SHARES:
+            extra = (f"\n你已持有 {held} 张国债，达到影响该国发展方针的门槛喵！\n"
+                     f"可用「喵股市 国策 {bond['country']} <内容>」提出诉求。")
+        self._sender.send_text(
+            target,
+            f"买入成交：{bond['code']} {bond['name']} {shares} 张\n"
+            f"成交价 {self._fmt_price(price)}｜成交额 {cost}｜手续费 {fee}\n"
+            f"剩余猫薄荷 {new_balance}｜当前持有 {held} 张" + extra)
+
+    def _bond_sell(self, target: Target, qq: int, rest: List[str]) -> None:
+        now = datetime.now()
+        if not self._is_open(now):
+            self._sender.send_text(target, "现在是休市时间喵～ 股市每日 08:00~20:00 开市")
+            return
+        if len(rest) < 2:
+            self._sender.send_text(target, "用法：喵股市 卖国债 <国家/代码> <张数>")
+            return
+        market = self._load_market()
+        bond = self._resolve_bond(market, rest[0])
+        if not bond:
+            self._sender.send_text(target, f"找不到国债「{rest[0]}」，发送「喵股市 国债」查看列表")
+            return
+        try:
+            shares = int(rest[1])
+        except ValueError:
+            self._sender.send_text(target, "张数必须是正整数喵")
+            return
+        if shares <= 0:
+            self._sender.send_text(target, "张数必须是正整数喵")
+            return
+
+        country = bond["country"]
+        price = float(bond["price"])
+        with self._lock:
+            players = self._load_stock_players()
+            st = self._stock_player(qq, players)
+            lots = st["bonds"].get(country, [])
+            sellable = sum(int(l.get("shares", 0)) for l in lots if _lot_sellable(l))
+            if sellable <= 0:
+                self._save_stock_players(players)
+                self._sender.send_text(
+                    target,
+                    f"{bond['code']} 当前没有可卖出的国债\n"
+                    f"买入后满 4 个交易小时才能卖出（只计算开市时间）")
+                return
+            if shares > sellable:
+                self._save_stock_players(players)
+                self._sender.send_text(
+                    target,
+                    f"可卖数量不足喵：{bond['code']} 现在只能卖 {sellable} 张"
+                    f"（其余为未满 4 个交易小时的持仓）")
+                return
+
+            remaining = shares
+            kept_lots = []
+            for lot in lots:
+                if remaining <= 0:
+                    kept_lots.append(lot)
+                    continue
+                lot_shares = int(lot.get("shares", 0))
+                if not _lot_sellable(lot) or lot_shares <= 0:
+                    kept_lots.append(lot)
+                    continue
+                take = min(remaining, lot_shares)
+                remaining -= take
+                if lot_shares > take:
+                    kept = dict(lot)
+                    kept["shares"] = lot_shares - take
+                    kept_lots.append(kept)
+            if remaining > 0:
+                self._save_stock_players(players)
+                self._sender.send_text(target, "卖出失败：可卖数量核对异常喵")
+                return
+            if kept_lots:
+                st["bonds"][country] = kept_lots
+            else:
+                st["bonds"].pop(country, None)
+
+            proceeds = int(round(price * shares))
+            fee = max(1, int(round(proceeds * CAT_STOCK_SELL_FEE)))
+            net = proceeds - fee
+            st["catnip"] = int(st.get("catnip", 0)) + net
+            self._save_stock_players(players)
+            new_balance = st["catnip"]
+            held = self._shares_of(st["bonds"].get(country, []))
+
+        self._sender.send_text(
+            target,
+            f"卖出国债成交：{bond['code']} {bond['name']} {shares} 张\n"
+            f"成交价 {self._fmt_price(price)}｜成交额 {proceeds}｜手续费 {fee}｜到手 {net}\n"
+            f"剩余猫薄荷 {new_balance}｜剩余持有 {held} 张")
+
+    def _set_country_policy(self, target: Target, qq: int, rest: List[str]) -> None:
+        """持有大量国债时，可以对该国发展方针提出诉求（AI 写新闻时参考）"""
+        if len(rest) < 2:
+            self._sender.send_text(
+                target,
+                "用法：喵股市 国策 <国家/代码> <内容>\n"
+                f"条件：持有该国国债 ≥{CAT_STOCK_BOND_INFLUENCE_SHARES} 张\n"
+                "示例：喵股市 国策 vo 优先发展矿脉与军备，加强对邻国的贸易\n"
+                "你的诉求会一定程度影响该国发展，但最终政策仍由本国议会决定喵。")
+            return
+        market = self._load_market()
+        bond = self._resolve_bond(market, rest[0])
+        if not bond:
+            self._sender.send_text(target, f"找不到国债「{rest[0]}」，发送「喵股市 国债」查看列表")
+            return
+        text = " ".join(rest[1:]).strip()
+        if not text:
+            self._sender.send_text(target, f"{bond['name']}当前国策：{bond.get('policy') or '暂无'}")
+            return
+        text_cut = text[:CAT_STOCK_BOND_POLICY_MAX_LEN]
+
+        with self._lock:
+            players = self._load_stock_players()
+            st = self._stock_player(qq, players)
+            held = self._shares_of(st["bonds"].get(bond["country"], []))
+            self._save_stock_players(players)
+            if held < CAT_STOCK_BOND_INFLUENCE_SHARES:
+                self._sender.send_text(
+                    target,
+                    f"你在 {bond['name']} 只有 {held} 张，至少持有 "
+                    f"{CAT_STOCK_BOND_INFLUENCE_SHARES} 张才能影响该国发展方针喵")
+                return
+
+            market = self._load_market()
+            target_bond = (market.get("bonds") or {}).get(bond["country"])
+            if not target_bond:
+                self._sender.send_text(target, "该国国债暂时不在市场上喵")
+                return
+            target_bond["policy"] = text_cut
+            target_bond["policy_by"] = int(qq)
+            target_bond["policy_at"] = datetime.now().strftime("%m-%d %H:%M")
+            self._save_market(market)
+
+        self._sender.send_text(
+            target,
+            f"已向{bond['name']}的议会提交发展诉求：{text_cut}\n"
+            f"你持有 {held} 张国债，这份诉求会被纳入国家决策讨论；"
+            "它只是影响，不保证完全照办喵。\n"
+            "AI 每个整点写新闻时会参考，可能体现为政策推进、受阻或妥协。")
 
     # ==================== 公司方针 ====================
 
@@ -1123,6 +1429,48 @@ class CatStockPlugin:
                 holders.append({"nick": nick, "shares": int(shares), "rank": rank})
             row["holders"] = holders
 
+        # 各国国债：价格走势 + 国债持有人 + 我的持有量
+        bonds = market.get("bonds") or {}
+        bond_ranks: Dict[str, List[Tuple[int, float, str, str]]] = {}
+        my_bonds: Dict[str, int] = {}
+        for key, st in players.items():
+            nick = (cat_players.get(str(key)) or {}).get("nick") or f"玩家{key}"
+            for country, lots in (st.get("bonds") or {}).items():
+                shares = self._shares_of(lots)
+                if shares > 0:
+                    first_ts = min((float(lot.get("ts", 0) or 0) for lot in lots), default=0.0)
+                    bond_ranks.setdefault(country, []).append((shares, first_ts, str(key), nick))
+            if qq is not None and key == str(qq):
+                my_bonds = {c: self._shares_of(lots)
+                            for c, lots in (st.get("bonds") or {}).items()}
+        bond_rows = []
+        for bond in sorted(bonds.values(), key=lambda b: b["country"]):
+            prev = float(bond.get("prev_close") or bond["price"] or 1)
+            pct = (float(bond["price"]) - prev) / prev * 100
+            entries = sorted(bond_ranks.get(bond["country"], []),
+                             key=lambda x: (-x[0], x[1], x[2]))[:3]
+            holders = []
+            last_shares = None
+            last_rank = 0
+            for idx, (shares, _ts, _qq, nick) in enumerate(entries, 1):
+                rank = last_rank if shares == last_shares else idx
+                last_shares, last_rank = shares, rank
+                holders.append({"nick": nick, "shares": int(shares), "rank": rank})
+            bond_rows.append({
+                "code": bond["code"],
+                "name": bond["name"],
+                "country": bond["country"],
+                "country_name": self._country_name(bond["country"]),
+                "base": bond["base"],
+                "price": round(float(bond["price"]), 2),
+                "pct": round(pct, 2),
+                "policy": bond.get("policy") or "",
+                "my_shares": int(my_bonds.get(bond["country"], 0)),
+                "history": ((list(bond.get("history") or [])[-CAT_STOCK_HISTORY_SHOW:])
+                            or [{"t": "当前", "p": round(float(bond["price"]), 2)}]),
+                "holders": holders,
+            })
+
         news = [{"time": item.get("time", ""),
                  "title": item.get("title", ""),
                  "detail": item.get("detail", "")}
@@ -1143,6 +1491,7 @@ class CatStockPlugin:
             "open_hour": CAT_STOCK_OPEN_HOUR,
             "close_hour": CAT_STOCK_CLOSE_HOUR,
             "companies": rows,
+            "bonds": bond_rows,
             "up": up,
             "down": len(rows) - up,
             "news": news,
@@ -1156,19 +1505,24 @@ class CatStockPlugin:
                 "lock_note": "买入后满 4 个交易小时才能卖出（休市不计）",
                 "max_shares": CAT_STOCK_MAX_SHARES,
                 "delist_rate": CAT_STOCK_DELIST_RATE,
+                "bond_min_shares": CAT_STOCK_BOND_MIN_SHARES,
+                "bond_influence_shares": CAT_STOCK_BOND_INFLUENCE_SHARES,
+                "bond_price": CAT_STOCK_BOND_PRICE,
             },
         }
         if qq is not None:
-            data["portfolio"] = self._portfolio_view(qq, companies)
+            data["portfolio"] = self._portfolio_view(qq, companies, bonds)
         return data
 
-    def _portfolio_view(self, qq: int, companies: dict) -> dict:
+    def _portfolio_view(self, qq: int, companies: dict, bonds: Optional[dict] = None) -> dict:
         """某个玩家的持仓明细（含可卖 / 锁定股数）"""
+        bonds = bonds or {}
         with self._lock:
             players = self._load_stock_players()
             st = self._stock_player(qq, players)
             catnip = int(st.get("catnip", 0))
             raw = {code: list(lots) for code, lots in st.get("holdings", {}).items()}
+            raw_bonds = {c: list(lots) for c, lots in st.get("bonds", {}).items()}
             self._save_stock_players(players)
 
         rows = []
@@ -1202,12 +1556,43 @@ class CatStockPlugin:
             })
         rows.sort(key=lambda r: r["value"], reverse=True)
 
+        bond_rows = []
+        for country, lots in raw_bonds.items():
+            bond = bonds.get(country)
+            shares = self._shares_of(lots)
+            cost = sum(float(lot.get("price", 0)) * int(lot.get("shares", 0)) for lot in lots)
+            sellable = sum(int(lot.get("shares", 0)) for lot in lots if _lot_sellable(lot))
+            if not bond:
+                bond_rows.append({"country": country, "code": f"BND{country.upper()}",
+                                  "name": country, "shares": shares, "sellable": sellable,
+                                  "locked": shares - sellable, "avg_cost": 0, "price": 0,
+                                  "value": 0, "pnl": 0})
+                continue
+            value = shares * float(bond["price"])
+            total_value += value
+            total_cost += cost
+            avg = cost / shares if shares else 0
+            bond_rows.append({
+                "country": country,
+                "code": bond["code"],
+                "name": bond["name"],
+                "shares": shares,
+                "sellable": sellable,
+                "locked": shares - sellable,
+                "avg_cost": round(avg, 2),
+                "price": round(float(bond["price"]), 2),
+                "value": round(value, 0),
+                "pnl": round(value - cost, 0),
+            })
+        bond_rows.sort(key=lambda r: r["value"], reverse=True)
+
         player = self._cat._peek_player(qq) or {}
         return {
             "catnip": catnip,
             "fish": int(player.get("fish", 0)),
             "catnip_to_fish_est": catnip // CAT_STOCK_CATNIP_TO_FISH,
             "holdings": rows,
+            "bonds": bond_rows,
             "total_value": round(total_value, 0),
             "total_pnl": round(total_value - total_cost, 0),
         }
@@ -1237,6 +1622,10 @@ class CatStockPlugin:
             "排行：喵股市 排行（收益榜 + 亏得最惨榜）\n"
             f"方针：持股 ≥{CAT_STOCK_POLICY_MIN_SHARES} 股且为该公司最大股东时，"
             "可用「喵股市 方针 <股票代码> <方针内容>」给公司定方向，AI 写新闻时会参考\n"
+            f"国债：每个国家都发行国债，价格波动很小；单笔最少 {CAT_STOCK_BOND_MIN_SHARES} 张\n"
+            "  查看：喵股市 国债｜买入：喵股市 买国债 <国家/代码> <张数>｜卖出：喵股市 卖国债 <国家/代码> <张数>\n"
+            f"  国策：持有 ≥{CAT_STOCK_BOND_INFLUENCE_SHARES} 张该国国债后，"
+            "可用「喵股市 国策 <国家/代码> <内容>」影响该国发展方针（AI 新闻会参考，但不保证完全照办）\n"
             f"（提示：大额持仓可能被空头盯上，别把猫薄荷都押在一只股上）"
         )
 
@@ -1297,6 +1686,8 @@ class CatStockPlugin:
                 # 新的一天：记下昨收作为当日涨跌幅基准
                 for comp in companies.values():
                     comp["prev_close"] = comp["price"]
+                for bond in (market.get("bonds") or {}).values():
+                    bond["prev_close"] = bond["price"]
                 market["day"] = today
             price_before = {code: comp["price"] for code, comp in companies.items()}
 
@@ -1313,6 +1704,14 @@ class CatStockPlugin:
                         + momentum * CAT_STOCK_MOMENTUM_CARRY
                         + random.gauss(0, CAT_STOCK_TICK_NOISE))
                 comp["price"] = max(1.0, comp["price"] * (1 + move))
+
+            # 1.1) 国债：波动远小于股票，缓慢向面值回归
+            for bond in (market.get("bonds") or {}).values():
+                base = float(bond.get("base") or CAT_STOCK_BOND_PRICE)
+                price = float(bond.get("price") or base)
+                move = (random.gauss(0, CAT_STOCK_BOND_NOISE)
+                        + (base - price) / base * 0.02)
+                bond["price"] = round(max(1.0, price * (1 + move)), 2)
 
             # 2) 新闻事件影响（同国/同行业会跟着联动）
             #    涨跌完全由 AI 生成的新闻及其 effects 决定，不做任何关键词机械修正
@@ -1352,6 +1751,13 @@ class CatStockPlugin:
                     hist = []
                 hist.append({"t": stamp, "p": float(comp["price"])})
                 comp["history"] = hist[-CAT_STOCK_HISTORY_KEEP:]
+
+            for bond in (market.get("bonds") or {}).values():
+                hist = bond.get("history")
+                if not isinstance(hist, list):
+                    hist = []
+                hist.append({"t": stamp, "p": float(bond["price"])})
+                bond["history"] = hist[-CAT_STOCK_HISTORY_KEEP:]
 
             stamp_ts = now.timestamp()
             news_entries = []
@@ -1805,6 +2211,16 @@ class CatStockPlugin:
                 has_policy = True
                 line += f"｜方针:{policy}"
             lines.append(line)
+        bond_lines = []
+        has_bond_policy = False
+        for bond in sorted((market.get("bonds") or {}).values(), key=lambda b: b["country"]):
+            line = (f"{bond['code']}｜{bond['name']}｜{bond['country']}"
+                    f"({self._country_name(bond['country'])})｜现价{self._fmt_price(bond['price'])}")
+            policy = str(bond.get("policy") or "").strip()
+            if policy:
+                has_bond_policy = True
+                line += f"｜国债持有人诉求:{policy}"
+            bond_lines.append(line)
         cat_seed = self._cat_news_seed()
         recent_news = (market.get("news") or [])[:10]
         recent_block = ""
@@ -1854,7 +2270,10 @@ class CatStockPlugin:
             "这是一个充满魔法、魔物与列国纷争的世界。\n"
             f"现在是 {now.strftime('%H:%M')}，股市开市。\n"
             "以下是当前上市企业（代码｜名称｜国家｜行业｜现价｜近1小时涨跌）：\n"
-            + "\n".join(lines) + recent_block + world_block + state_block
+            + "\n".join(lines)
+            + "\n\n各国国债（代码｜名称｜国家｜现价｜国债持有人诉求）：\n"
+            + "\n".join(bond_lines)
+            + recent_block + world_block + state_block
             + self._geography_prompt() +
             f"\n\n请生成 {CAT_STOCK_NEWS_TICK_MIN}~{CAT_STOCK_NEWS_TICK_MAX} 条本小时的世界新闻，"
             "不要写成十几条，也不要只有一条。新闻要有长有短：既有影响盘面的重头消息，"
@@ -1870,6 +2289,10 @@ class CatStockPlugin:
                "（新订单、扩产、招聘、政策扶持或收缩裁员），"
                "并让相关行业更容易跟着吃到订单，但方针只是倾向，不是涨跌保证。\n"
                if has_policy else "")
+            + ("\n有国家收到了「国债持有人诉求」，那是大量国债持有者对该国发展方针的影响；"
+               "请至少用一条新闻写该国对此的回应：可以采纳并推动相关产业、抬高或压低该国企业，"
+               "也可以被议会拖延、缩水或部分妥协。它只是影响，不是命令，不要每个诉求都照单全收。\n"
+               if has_bond_policy else "")
             + (cat_seed + "\n" if cat_seed else "") +
             "上面这些喵喵只是这个世界各领域的知名人物，和股票涨跌没有必然关系；"
             "新闻里可以在合适的时候顺手提到他们（比如某位大师接了大单、某位名人现身商会），"

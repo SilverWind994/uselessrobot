@@ -59,6 +59,18 @@ def sell(qq: int, code, shares) -> str:
     return _run(_plugin._sell, qq, [str(code or "").strip(), str(shares).strip()])
 
 
+def bond_buy(qq: int, code, shares) -> str:
+    return _run(_plugin._bond_buy, qq, [str(code or "").strip(), str(shares).strip()])
+
+
+def bond_sell(qq: int, code, shares) -> str:
+    return _run(_plugin._bond_sell, qq, [str(code or "").strip(), str(shares).strip()])
+
+
+def bond_policy(qq: int, code, text) -> str:
+    return _run(_plugin._set_country_policy, qq, [str(code or "").strip(), str(text or "").strip()])
+
+
 def deposit(qq: int, fish_amount) -> str:
     """鱼干 -> 猫薄荷"""
     return _run(_plugin._deposit, qq, [str(fish_amount).strip()])

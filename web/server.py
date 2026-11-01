@@ -1201,6 +1201,30 @@ def stock_sell(payload: dict, cat_token: str = Cookie(default="")) -> JSONRespon
     return _stock_action(stock_web.sell(qq, payload.get("code"), payload.get("shares")), qq)
 
 
+@app.post("/api/stock/bond_buy")
+def stock_bond_buy(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    return _stock_action(stock_web.bond_buy(qq, payload.get("code"), payload.get("shares")), qq)
+
+
+@app.post("/api/stock/bond_sell")
+def stock_bond_sell(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    return _stock_action(stock_web.bond_sell(qq, payload.get("code"), payload.get("shares")), qq)
+
+
+@app.post("/api/stock/bond_policy")
+def stock_bond_policy(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    return _stock_action(stock_web.bond_policy(qq, payload.get("code"), payload.get("text")), qq)
+
+
 @app.post("/api/stock/deposit")
 def stock_deposit(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
     """鱼干兑换猫薄荷"""

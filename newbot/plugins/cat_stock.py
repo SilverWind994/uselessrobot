@@ -1363,10 +1363,6 @@ class CatStockPlugin:
                 news_entries.append({"time": stamp, "ts": stamp_ts,
                                      "title": item.get("title", ""),
                                      "detail": item.get("detail", "")})
-            if not news_entries:
-                news_entries.append({"time": stamp, "ts": stamp_ts, "title": "世界暂时平静，大盘随资金情绪小幅波动",
-                                     "detail": ""})
-
             market["news"] = self._recent_news(
                 news_entries + market["news"])[:CAT_STOCK_NEWS_MAX]
             market["last_tick"] = key
@@ -1906,10 +1902,11 @@ class CatStockPlugin:
              {"role": "user", "content": prompt}],
             temperature=0.9,
             max_retries=1,
-            max_tokens=1600,
+            max_tokens=3000,
         )
         data = _extract_json(text)
         if not data:
+            print("[cat_stock] AI 新闻 JSON 解析失败，本小时不生成新闻")
             return [], [], None, None
 
         codes = {c["code"] for c in companies.values()}

@@ -51,7 +51,6 @@ CAT_STOCK_BIG_HOLDING_CHANCE = 0.04  # 每个整点针对大额持仓的概率
 CAT_STOCK_NEWS_MAX = 200             # 新闻最多保留条数（需覆盖统计天数）
 CAT_STOCK_POLICY_MIN_SHARES = 1000   # 改公司方针所需的最低持股数
 CAT_STOCK_POLICY_MAX_LEN = 24        # 方针文本最大长度
-CAT_STOCK_POLICY_CRIME_CHANCE = 0.35 # 违规方针被监察机构发现的概率
 CAT_STOCK_COUNTRY_MIN_LISTED = 2     # 每个国家尽量维持的上市公司数
 CAT_STOCK_COMPANY_MIN = 35           # 市场最少保持的上市公司数
 CAT_STOCK_COMPANY_MAX = 70           # 市场最多容纳的上市公司数
@@ -786,17 +785,20 @@ class CatStockPlugin:
 
     # ==================== 公司方针 ====================
 
-    def _judge_policy(self, text: str) -> str:
-        """由 AI 判断方针性质，返回 ok / veto / illegal，不做任何关键词匹配"""
+    def _judge_policy(self, text: str) -> Tuple[str, bool]:
+        """由 AI 判断方针性质与是否败露，返回 (verdict, discovered)，不做任何关键词匹配"""
         if not self._ai:
-            return "ok"
+            return "ok", False
         prompt = (
-            "请判断下面这条公司经营方针的性质：\n"
+            "请判断下面这条公司经营方针的性质，以及它会不会被监察机构发现：\n"
             f"方针：{text}\n"
-            "只返回 JSON：{\"verdict\":\"ok|veto|illegal\",\"reason\":\"一句话理由\"}\n"
-            "veto：明显恶意、离谱、会直接毁掉公司的行为（例如解散公司、纵火、掏空资产）；\n"
-            "illegal：为私利违法违规（例如内幕交易、操纵股价、贿赂、财务造假）；\n"
-            "ok：正常经营方向。\n"
+            "只返回 JSON：{\"verdict\":\"ok|veto|illegal\",\"discovered\":true|false,\"reason\":\"一句话理由\"}\n"
+            "verdict：veto 为明显恶意、离谱、会直接毁掉公司的行为（例如解散公司、纵火、掏空资产）；"
+            "illegal 为私利违法违规（例如内幕交易、操纵股价、贿赂、财务造假）；"
+            "ok 为正常经营方向。\n"
+            "discovered：只有 illegal 才需要判断，true 表示当场败露，false 表示暂时瞒过去。"
+            "是否败露由你根据行为的隐蔽性、规模、涉及人数、公司受关注程度等自行权衡，"
+            "不要用固定概率，也不是所有违规都会被抓。\n"
             "拿不准时判 ok，不要冤枉正常方针。"
         )
         try:
@@ -807,12 +809,15 @@ class CatStockPlugin:
                 temperature=0.2, max_retries=1, max_tokens=200,
             )
         except Exception:
-            return "ok"
+            return "ok", False
         data = _extract_json(raw) if isinstance(raw, str) else raw
         if not isinstance(data, dict):
-            return "ok"
+            return "ok", False
         verdict = str(data.get("verdict") or "").strip().lower()
-        return verdict if verdict in ("veto", "illegal") else "ok"
+        if verdict not in ("veto", "illegal"):
+            return "ok", False
+        discovered = bool(data.get("discovered")) if verdict == "illegal" else False
+        return verdict, discovered
 
     def _set_policy(self, target: Target, qq: int, rest: List[str]) -> None:
         """最大股东为公司制定方针；AI 每个整点写新闻时会参考方针"""
@@ -859,7 +864,7 @@ class CatStockPlugin:
                 return
 
         # 持股资格确认后再让 AI 做合规判断，避免无关玩家消耗 AI 调用
-        verdict = self._judge_policy(text_cut)
+        verdict, discovered = self._judge_policy(text_cut)
         if verdict == "veto":
             self._sender.send_text(
                 target,
@@ -876,7 +881,7 @@ class CatStockPlugin:
                 self._sender.send_text(target, f"{code} 已经退市了喵～")
                 return
 
-            if illegal and random.random() < CAT_STOCK_POLICY_CRIME_CHANCE:
+            if illegal and discovered:
                 # 违规操作被监察机构抓到：股价直接跌到三分之一，
                 # 罚款按该公司全体股东持仓总市值的一半计算，不够就欠款
                 players = self._load_stock_players()

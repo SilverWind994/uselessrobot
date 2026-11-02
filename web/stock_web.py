@@ -8,7 +8,9 @@
 既有的机器人进程负责每小时更新行情与推送快报。
 """
 
-from plugins.cat_stock import CatStockPlugin
+from config import Config
+from plugins.cat_stock import CatStockPlugin, STOCK_DIR
+from plugins.ai_functions import AIFunctionsPlugin
 from core.message_sender import MessageSender, Target
 import cat_web
 
@@ -33,14 +35,15 @@ class _CaptureSender(MessageSender):
 
 
 _sender = _CaptureSender()
+_ai = AIFunctionsPlugin(_sender, Config.ASSETS)
 # 复用远征队网页端插件实例，鱼干读写与机器人端走同一份存档
-_plugin = CatStockPlugin(_sender, cat_web._plugin, None, start_scheduler=False)
+_plugin = CatStockPlugin(_sender, cat_web._plugin, _ai, start_scheduler=False)
 
 
-def _run(func, qq: int, rest: list) -> str:
+def _run(func, qq: int, rest: list, **kwargs) -> str:
     """执行插件里的一个操作，返回它原本要发给玩家的文案"""
     _sender.texts.clear()
-    func(Target(user_id=qq), qq, rest)
+    func(Target(user_id=qq), qq, rest, **kwargs)
     return "\n".join(_sender.texts).strip()
 
 
@@ -59,6 +62,30 @@ def sell(qq: int, code, shares) -> str:
     return _run(_plugin._sell, qq, [str(code or "").strip(), str(shares).strip()])
 
 
+def short(qq: int, code, shares, hours=None) -> str:
+    """开空：押注某家企业下跌"""
+    rest = [str(code or "").strip(), str(shares).strip()]
+    if hours not in (None, ""):
+        rest.append(str(hours).strip())
+    return _run(_plugin._short, qq, rest)
+
+
+def cover(qq: int, code=None, shares=None) -> str:
+    """平空：不填代码则全部了结"""
+    rest = []
+    if code:
+        rest.append(str(code).strip())
+        if shares not in (None, ""):
+            rest.append(str(shares).strip())
+    return _run(_plugin._cover, qq, rest)
+
+
+def change_sector(qq: int, code, sectors, replace=True) -> str:
+    """最大股东调整公司的经营方向"""
+    rest = [str(code or "").strip()] + [str(s).strip() for s in (sectors or []) if str(s).strip()]
+    return _run(_plugin._change_sector, qq, rest, replace=bool(replace))
+
+
 def bond_buy(qq: int, code, shares) -> str:
     return _run(_plugin._bond_buy, qq, [str(code or "").strip(), str(shares).strip()])
 
@@ -71,11 +98,37 @@ def bond_policy(qq: int, code, text) -> str:
     return _run(_plugin._set_country_policy, qq, [str(code or "").strip(), str(text or "").strip()])
 
 
-def deposit(qq: int, fish_amount) -> str:
-    """鱼干 -> 猫薄荷"""
-    return _run(_plugin._deposit, qq, [str(fish_amount).strip()])
+def deposit(qq: int, stone_amount) -> str:
+    """猫眼石 -> 猫薄荷"""
+    return _run(_plugin._deposit, qq, [str(stone_amount).strip()])
 
 
-def withdraw(qq: int, fish_amount) -> str:
-    """猫薄荷 -> 鱼干"""
-    return _run(_plugin._withdraw, qq, [str(fish_amount).strip()])
+def withdraw(qq: int, stone_amount) -> str:
+    """猫薄荷 -> 猫眼石"""
+    return _run(_plugin._withdraw, qq, [str(stone_amount).strip()])
+
+
+# ==================== 股东大会 ====================
+
+def meeting_state(qq: int, code) -> dict:
+    return _plugin.meeting_state(qq, str(code or "").strip())
+
+
+def meeting_start(qq: int, code) -> dict:
+    return _plugin.start_meeting(qq, str(code or "").strip())
+
+
+def meeting_say(qq: int, code, text) -> dict:
+    return _plugin.meeting_say(qq, str(code or "").strip(), str(text or ""))
+
+
+def meeting_set_policy(qq: int, code, text) -> dict:
+    return _plugin.meeting_set_policy(qq, str(code or "").strip(), str(text or ""))
+
+
+def meeting_vote(qq: int, code, choice) -> dict:
+    return _plugin.meeting_vote(qq, str(code or "").strip(), choice)
+
+
+def meeting_finish(qq: int, code) -> dict:
+    return _plugin.meeting_finish(qq, str(code or "").strip())

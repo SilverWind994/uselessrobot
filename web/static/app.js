@@ -3675,10 +3675,17 @@ setInterval(async () => {
 
 const stockStatusEl = document.getElementById('stock-status');
 const stockWalletEl = document.getElementById('stock-wallet');
+const stockEraNameEl = document.getElementById('stock-era-name');
+const stockEraSubEl = document.getElementById('stock-era-sub');
+const stockEraCycleEl = document.getElementById('stock-era-cycle');
+const stockEraPathsEl = document.getElementById('stock-era-paths');
+const stockEraCountriesEl = document.getElementById('stock-era-countries');
+const stockEraMapWrapEl = document.getElementById('stock-era-map-wrap');
+const stockEraMapEl = document.getElementById('stock-era-map');
 const stockRulesEl = document.getElementById('stock-rules');
 const stockExchangeEl = document.getElementById('stock-exchange-hint');
 const stockMsgEl = document.getElementById('stock-msg');
-const stockFishEl = document.getElementById('stock-fish-amount');
+const stockStoneEl = document.getElementById('stock-stone-amount');
 const stockWorldEl = document.getElementById('stock-world');
 const stockMarketBodyEl = document.getElementById('stock-market-body');
 const stockMarketSubEl = document.getElementById('stock-market-sub');
@@ -3720,27 +3727,59 @@ function renderStock(data) {
   stockStatusEl.textContent =
     `${data.status_line}｜在市 ${companies.length} 家｜上涨 ${data.up} · 下跌 ${data.down}`;
   stockRulesEl.textContent =
-    `开市 ${data.open_hour}:00~${data.close_hour}:00｜1 鱼干 = ${r.fish_to_catnip} 猫薄荷｜`
-    + `${r.catnip_to_fish} 猫薄荷 = 1 鱼干｜手续费 ${Math.round((r.buy_fee || 0) * 100)}%｜`
-    + `买入后满 4 个交易小时才能卖（休市不计）`;
+    `开市 ${data.open_hour}:00~${data.close_hour}:00｜1 猫眼石 = ${r.stone_to_catnip} 猫薄荷｜`
+    + `${r.catnip_to_stone} 猫薄荷 = 1 猫眼石｜手续费 ${Math.round((r.buy_fee || 0) * 100)}%｜`
+    + `当天买入的股份要到第二天才能卖`;
   stockExchangeEl.textContent =
-    `充值 1 鱼干 → ${r.fish_to_catnip} 猫薄荷，提现 ${r.catnip_to_fish} 猫薄荷 → 1 鱼干；`
-    + `当前猫薄荷约可提现 ${stockMoney(p.catnip_to_fish_est)} 鱼干`;
+    `充值 1 猫眼石 → ${r.stone_to_catnip} 猫薄荷，提现 ${r.catnip_to_stone} 猫薄荷 → 1 猫眼石；`
+    + `当前猫薄荷约可提现 ${stockMoney(p.catnip_to_stone_est)} 猫眼石`;
 
   stockWalletEl.innerHTML = [
     ['猫薄荷', stockMoney(p.catnip)],
-    ['鱼干', stockMoney(p.fish)],
+    ['猫眼石', stockMoney(p.stone)],
     ['持仓市值', stockMoney(Math.round(p.total_value || 0))],
     ['总浮动', `${Number(p.total_pnl || 0) >= 0 ? '+' : ''}${stockMoney(p.total_pnl)}`],
   ].map(([label, val]) => `
     <div class="stat"><div class="stat-num">${esc(val)}</div><div class="stat-label">${label}</div></div>`).join('');
+
+  const era = data.era || {};
+  if (stockEraNameEl) {
+    stockEraNameEl.textContent = era.name
+      ? `第 ${Number(era.index || 0) + 1}/${Number(era.total || 12)} 时代 · ${era.name}`
+      : '时代';
+    stockEraSubEl.textContent = era.theme || '';
+    stockEraCycleEl.textContent = era.ends
+      ? `纪元 ${Number(era.cycle || 0) + 1}｜本时代约至 ${era.ends}` : '';
+    const paths = era.paths || [];
+    stockEraPathsEl.innerHTML = paths.map((p) => `
+      <div class="era-path">
+        <div class="era-path-head"><span>${esc(p.name)}</span><span class="era-path-kind">${esc(p.kind || '')} · ${Number(p.chance || 0)}%</span></div>
+        <div class="era-path-bar"><span style="width:${Math.max(2, Math.min(100, Number(p.progress || 0)))}%"></span></div>
+        <div class="era-path-desc">${esc(p.desc || '')}</div>
+      </div>`).join('');
+    const countries = data.countries || [];
+    const alive = countries.filter((c) => c.alive);
+    const fallen = countries.filter((c) => !c.alive);
+    stockEraCountriesEl.innerHTML = `
+      <span class="era-country-label">列国君主</span>
+      ${alive.map((c) => `<button class="era-country era-country-btn" type="button" data-country="${esc(c.code)}">${esc(c.name)} · ${esc(c.monarch)}（${esc(c.style)}）</button>`).join('')}
+      ${fallen.length ? `<span class="era-country era-country-fallen">已亡：${fallen.map((c) => esc(c.name)).join('、')}</span>` : ''}`;
+    if (stockEraMapWrapEl && stockEraMapEl) {
+      if (era.map) {
+        stockEraMapEl.src = `${era.map}?v=${encodeURIComponent(era.started || '')}`;
+        stockEraMapWrapEl.classList.remove('hidden');
+      } else {
+        stockEraMapWrapEl.classList.add('hidden');
+      }
+    }
+  }
 
   stockMarketBodyEl.innerHTML = companies.map((c) => `
     <tr>
       <td><button class="stock-detail-btn" type="button" data-code="${esc(c.code)}" title="查看最近走势">${esc(c.code)}</button></td>
       <td>${esc(c.name)}${c.policy ? `<div class="stock-policy">方针：${esc(c.policy)}</div>` : ''}</td>
       <td>${esc(c.country_name)}</td>
-      <td>${esc(c.sector)}</td>
+      <td>${esc((c.sectors && c.sectors.length ? c.sectors : [c.sector]).join('、'))}</td>
       <td>${Number(c.price).toFixed(1)}</td>
       ${stockPctCell(c.pct)}
       <td class="stock-holders">${(c.holders || []).length
@@ -3748,7 +3787,7 @@ function renderStock(data) {
         : '<span class="stock-empty-cell">暂无股东</span>'}</td>
       <td>
         <div class="stock-trade">
-          <input class="stock-trade-shares" type="number" min="10" step="1" placeholder="股数" data-code="${esc(c.code)}">
+          <input class="stock-trade-shares" type="number" min="1" step="1" placeholder="股数" data-code="${esc(c.code)}">
           <button class="btn btn-primary btn-sm stock-buy" type="button" data-code="${esc(c.code)}">买</button>
           <button class="btn btn-ghost btn-sm stock-sell" type="button" data-code="${esc(c.code)}">卖</button>
         </div>
@@ -3826,6 +3865,31 @@ function renderStock(data) {
             </tr>
           </thead>
           <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+  }
+
+  const shorts = p.shorts || [];
+  if (shorts.length) {
+    const shortRows = shorts.map((s) => `
+      <tr>
+        <td>${esc(s.code)}</td>
+        <td>${esc(s.name)}</td>
+        <td>${s.shares}</td>
+        <td>${Number(s.entry).toFixed(1)}</td>
+        <td>${Number(s.price).toFixed(1)}</td>
+        <td>${stockPnlCell(s.pnl)}</td>
+        <td>${s.remaining} 小时</td>
+        <td><button class="btn btn-ghost btn-sm stock-cover-btn" type="button" data-code="${esc(s.code)}">平空</button></td>
+      </tr>`).join('');
+    stockHoldingsEl.innerHTML += `
+      <div class="section-title" style="margin-top:12px;">空头仓位（到期自动结算）</div>
+      <div class="stock-table-wrap">
+        <table class="stock-table">
+          <thead>
+            <tr><th>代码</th><th>名称</th><th>做空股数</th><th>入场价</th><th>现价</th><th>浮动</th><th>剩余</th><th>操作</th></tr>
+          </thead>
+          <tbody>${shortRows}</tbody>
         </table>
       </div>`;
   }
@@ -3946,11 +4010,20 @@ function openStockDetail(code) {
   stockModalTitleEl.textContent = `${c.name}（${c.code}）`;
   stockModalBodyEl.innerHTML = `
     <div class="stock-detail-meta">
-      <span>${esc(c.country_name)} · ${esc(c.sector)}</span>
+      <span>${esc(c.country_name)} · ${esc((c.sectors && c.sectors.length ? c.sectors : [c.sector]).join('、'))}</span>
       <span>现价 ${Number(c.price).toFixed(1)}</span>
       <span class="${pct >= 0 ? 'stock-up' : 'stock-down'}">${pct >= 0 ? '▲' : '▼'}${Math.abs(pct).toFixed(1)}%</span>
     </div>
+    ${c.intro ? `<p class="stock-detail-policy">来历：${esc(c.intro)}</p>` : ''}
     ${c.policy ? `<p class="stock-detail-policy">当前方针：${esc(c.policy)}</p>` : ''}
+    ${(c.board || []).length ? `
+    <div class="stock-detail-holders">
+      <div class="section-title">常驻董事</div>
+      ${c.board.map((b, i) => `<div class="stock-detail-holder">
+        <span>${i + 1}. ${esc(b.name)} <span class="era-path-kind">${esc(b.tag || '')}</span></span>
+        <span>${stockMoney(b.shares)} 股</span></div>
+        ${b.persona ? `<div class="hint">${esc(b.persona)}</div>` : ''}`).join('')}
+    </div>` : ''}
     ${stockTrendChart(hist)}
     <p class="hint">最近 ${hist.length} 个整点的收盘价走势，每个整点更新</p>
     <div class="stock-detail-holders">
@@ -3958,7 +4031,66 @@ function openStockDetail(code) {
       ${holders.length
         ? holders.map((h, i) => `<div class="stock-detail-holder"><span>${h.rank || i + 1}. ${esc(h.nick)}</span><span>${stockMoney(h.shares)} 股</span></div>`).join('')
         : '<p class="room-empty">暂无股东喵</p>'}
+    </div>
+    <div class="stock-detail-meeting">
+      ${c.meeting_status
+        ? `<button class="btn btn-primary btn-sm stock-meeting-open" type="button" data-code="${esc(c.code)}" data-mode="enter">进入股东大会</button>`
+        : c.can_start_meeting
+          ? `<button class="btn btn-primary btn-sm stock-meeting-open" type="button" data-code="${esc(c.code)}" data-mode="start">召集股东大会</button>`
+          : `<p class="hint">要成为持股最多、且股份足够多的那位股东，才能敲钟召集董事会喵。</p>`}
+    </div>
+    <div class="stock-short-box">
+      <div class="section-title">押它下跌（做空）</div>
+      <p class="hint">先付五成保证金与 1% 手续费，约定 ${Number((((stockLastData || {}).rules || {}).short_min_hours) || 12)}~${Number((((stockLastData || {}).rules || {}).short_max_hours) || 36)} 个开市小时，到期按现价自动了结。</p>
+      <div class="stock-short-row">
+        <input id="stock-short-shares" class="stock-short-shares" type="number" min="1" step="1" placeholder="股数" data-code="${esc(c.code)}">
+        <input id="stock-short-hours" class="stock-short-hours" type="number" min="12" max="36" step="1" placeholder="周期(小时)">
+        <button class="btn btn-primary btn-sm stock-short-btn" type="button" data-code="${esc(c.code)}">开空</button>
+        <button class="btn btn-ghost btn-sm stock-cover-btn" type="button" data-code="${esc(c.code)}">平空</button>
+      </div>
+    </div>
+    <div class="stock-short-box">
+      <div class="section-title">改换经营方向</div>
+      <p class="hint">持有 ≥${stockMoney((((stockLastData || {}).rules || {}).meeting_min_shares) || 1000)} 股且为最大股东，可在开市时段操作；方向用两到四个字，多个方向用空格隔开。</p>
+      <div class="stock-short-row">
+        <input id="stock-sector-input" class="stock-sector-input" maxlength="20" placeholder="例：物流 航运">
+        <button class="btn btn-primary btn-sm stock-sector-replace" type="button" data-code="${esc(c.code)}">改营</button>
+        <button class="btn btn-ghost btn-sm stock-sector-expand" type="button" data-code="${esc(c.code)}">拓展</button>
+      </div>
     </div>`;
+  stockModalEl.classList.remove('hidden');
+}
+
+function openStockCountry(code) {
+  const info = ((stockLastData || {}).countries || []).find((x) => x.code === code);
+  if (!info) return;
+  stockModalEl.dataset.bondCountry = '';
+  stockModalTitleEl.textContent = info.name || code;
+  const listed = ((stockLastData || {}).companies || []).filter((c) => c.country === code);
+  stockModalBodyEl.innerHTML = `
+    <div class="stock-detail-meta">
+      <span>${info.alive ? '存国' : '已亡'}</span>
+      <span>${esc(info.system || '集权')}</span>
+      <span>${esc(info.style || '')}</span>
+    </div>
+    ${info.alive ? `
+      <div class="stock-detail-holders">
+        <div class="section-title">君主</div>
+        <div class="stock-detail-holder"><span>${esc(info.monarch || '未知')}</span><span>${esc(info.style || '性情难测')}</span></div>
+        ${info.persona ? `<div class="hint">${esc(info.persona)}</div>` : ''}
+      </div>
+      <div class="stock-detail-holders">
+        <div class="section-title">起源</div>
+        <p class="hint">${esc(info.origin || '记载散佚')}</p>
+      </div>
+      <div class="stock-detail-holders">
+        <div class="section-title">在册企业 ${listed.length} 家</div>
+        ${listed.length ? listed.map((c) => `<div class="stock-detail-holder"><span>${esc(c.code)} ${esc(c.name)}</span><span>${esc((c.sectors || [c.sector]).join('、'))}</span></div>`).join('') : '<p class="room-empty">暂无企业喵</p>'}
+      </div>`
+    : `<div class="stock-detail-holders">
+        <div class="section-title">国祚已绝</div>
+        <p class="hint">${esc(info.fall_reason || '王庭倾覆，国号从地图上抹去')}</p>
+      </div>`}`;
   stockModalEl.classList.remove('hidden');
 }
 
@@ -4129,6 +4261,17 @@ stockMarketBodyEl.addEventListener('keydown', (e) => {
   if (buyBtn) buyBtn.click();
 });
 
+stockEraCountriesEl.addEventListener('click', (e) => {
+  const btn = e.target.closest('.era-country-btn');
+  if (btn) openStockCountry(btn.dataset.country || '');
+});
+
+stockHoldingsEl.addEventListener('click', (e) => {
+  const btn = e.target.closest('.stock-cover-btn');
+  if (!btn) return;
+  stockAction('/api/stock/cover', { code: btn.dataset.code || '' }, '平空');
+});
+
 stockBondBodyEl.addEventListener('click', (e) => {
   const detailBtn = e.target.closest('.stock-bond-detail-btn');
   if (detailBtn) {
@@ -4164,6 +4307,57 @@ stockBondBodyEl.addEventListener('keydown', (e) => {
 });
 
 stockModalBodyEl.addEventListener('click', async (e) => {
+  const shortBtn = e.target.closest('.stock-short-btn');
+  if (shortBtn) {
+    const code = shortBtn.dataset.code || '';
+    const sharesEl = document.getElementById('stock-short-shares');
+    const hoursEl = document.getElementById('stock-short-hours');
+    const shares = sharesEl ? sharesEl.value.trim() : '';
+    if (!shares) {
+      stockMsgEl.textContent = '先填要做空的股数喵';
+      stockMsgEl.classList.remove('ok');
+      return;
+    }
+    const hours = hoursEl ? hoursEl.value.trim() : '';
+    const ok = await stockAction('/api/stock/short',
+      hours ? { code, shares, hours } : { code, shares }, '开空');
+    if (ok) closeStockModal();
+    return;
+  }
+  const coverBtn = e.target.closest('.stock-cover-btn');
+  if (coverBtn) {
+    const ok = await stockAction('/api/stock/cover', { code: coverBtn.dataset.code || '' }, '平空');
+    if (ok) closeStockModal();
+    return;
+  }
+  const sectorBtn = e.target.closest('.stock-sector-replace, .stock-sector-expand');
+  if (sectorBtn) {
+    const code = sectorBtn.dataset.code || '';
+    const input = document.getElementById('stock-sector-input');
+    const raw = input ? input.value.trim() : '';
+    if (!raw) {
+      stockMsgEl.textContent = '先填新的经营方向喵';
+      stockMsgEl.classList.remove('ok');
+      return;
+    }
+    const sectors = raw.split(/[\s,，、/]+/).filter(Boolean);
+    const replace = sectorBtn.classList.contains('stock-sector-replace');
+    const ok = await stockAction('/api/stock/sector', { code, sectors, replace }, replace ? '改营' : '拓展');
+    if (ok) {
+      closeStockModal();
+      openStockDetail(code);
+    }
+    return;
+  }
+  const meetingBtn = e.target.closest('.stock-meeting-open');
+  if (meetingBtn) {
+    const code = meetingBtn.dataset.code || '';
+    const mode = meetingBtn.dataset.mode || 'enter';
+    closeStockModal();
+    if (mode === 'start') await stockMeetingStart(code);
+    else await openStockMeeting(code);
+    return;
+  }
   const btn = e.target.closest('.stock-bond-policy-btn');
   if (!btn) return;
   const country = stockModalEl.dataset.bondCountry || '';
@@ -4182,21 +4376,279 @@ stockModalBodyEl.addEventListener('click', async (e) => {
 });
 
 document.getElementById('btn-stock-deposit').addEventListener('click', () => {
-  const fish = stockFishEl.value.trim();
-  if (!fish) {
-    stockMsgEl.textContent = '先填要兑换的鱼干数量喵';
+  const stone = stockStoneEl.value.trim();
+  if (!stone) {
+    stockMsgEl.textContent = '先填要兑换的猫眼石数量喵';
     stockMsgEl.classList.remove('ok');
     return;
   }
-  stockAction('/api/stock/deposit', { fish }, '充值');
+  stockAction('/api/stock/deposit', { stone }, '充值');
 });
 
 document.getElementById('btn-stock-withdraw').addEventListener('click', () => {
-  const fish = stockFishEl.value.trim();
-  if (!fish) {
-    stockMsgEl.textContent = '先填要兑换的鱼干数量喵';
+  const stone = stockStoneEl.value.trim();
+  if (!stone) {
+    stockMsgEl.textContent = '先填要兑换的猫眼石数量喵';
     stockMsgEl.classList.remove('ok');
     return;
   }
-  stockAction('/api/stock/withdraw', { fish }, '提现');
+  stockAction('/api/stock/withdraw', { stone }, '提现');
 });
+
+// ==================== 股东大会（董事会） ====================
+
+const stockMeetingModalEl = document.getElementById('stock-meeting-modal');
+const stockMeetingTitleEl = document.getElementById('stock-meeting-title');
+const stockMeetingSubEl = document.getElementById('stock-meeting-sub');
+const stockMeetingTimerEl = document.getElementById('stock-meeting-timer');
+const stockMeetingLogEl = document.getElementById('stock-meeting-log');
+const stockMeetingDraftEl = document.getElementById('stock-meeting-draft');
+const stockMeetingVotesEl = document.getElementById('stock-meeting-votes');
+const stockMeetingResultEl = document.getElementById('stock-meeting-result');
+const stockMeetingComposeEl = document.getElementById('stock-meeting-compose');
+const stockMeetingInputEl = document.getElementById('stock-meeting-input');
+const stockMeetingSendEl = document.getElementById('stock-meeting-send');
+const stockMeetingHostEl = document.getElementById('stock-meeting-host');
+const stockMeetingHostInputEl = document.getElementById('stock-meeting-host-input');
+const stockMeetingHostSaveEl = document.getElementById('stock-meeting-host-save');
+const stockMeetingOptionsEl = document.getElementById('stock-meeting-options');
+const stockMeetingFinishEl = document.getElementById('stock-meeting-finish');
+
+const MEETING_ROLE_LABEL = { system: '书记员', host: '召集人', holder: '股东', ai: '老股东' };
+let stockMeetingCode = '';
+let stockMeetingTimer = null;
+let stockMeetingBusy = false;
+
+function stopStockMeetingPolling() {
+  if (stockMeetingTimer) {
+    clearInterval(stockMeetingTimer);
+    stockMeetingTimer = null;
+  }
+}
+
+function closeStockMeeting() {
+  stopStockMeetingPolling();
+  stockMeetingCode = '';
+  stockMeetingModalEl.classList.add('hidden');
+}
+
+async function stockMeetingStart(code) {
+  const { status, data } = await api('/api/stock/meeting/start', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code }),
+  });
+  if (status === 401) { homePanel.classList.add('hidden'); showLogin(); return; }
+  if (status !== 200 || !data.ok) {
+    stockMsgEl.textContent = data.msg || '钟没敲响喵';
+    stockMsgEl.classList.remove('ok');
+    return;
+  }
+  if (data.overview) renderStock(data.overview);
+  stockMeetingCode = code;
+  stockMeetingModalEl.classList.remove('hidden');
+  stopStockMeetingPolling();
+  stockMeetingTimer = setInterval(refreshStockMeeting, 2000);
+  await refreshStockMeeting();
+}
+
+async function openStockMeeting(code) {
+  stockMeetingCode = code;
+  stockMeetingModalEl.classList.remove('hidden');
+  stockMeetingTitleEl.textContent = '董事会';
+  stockMeetingSubEl.textContent = '书记员正在准备纸笔…';
+  stopStockMeetingPolling();
+  stockMeetingTimer = setInterval(refreshStockMeeting, 2000);
+  await refreshStockMeeting();
+}
+
+async function refreshStockMeeting() {
+  const code = stockMeetingCode;
+  if (!code) return;
+  const { status, data } = await api(`/api/stock/meeting?code=${encodeURIComponent(code)}`);
+  if (code !== stockMeetingCode) return;  // 已经换场/离席，丢弃迟到响应
+  if (status === 401) { closeStockMeeting(); homePanel.classList.add('hidden'); showLogin(); return; }
+  if (status !== 200 || !data.ok) {
+    stockMeetingSubEl.textContent = data.msg || '这场会议暂时进不去喵';
+    return;
+  }
+  if (!data.active) {
+    stopStockMeetingPolling();
+    stockMeetingTitleEl.textContent = '董事会散会了';
+    stockMeetingSubEl.textContent = data.msg || '这场会议已经结束喵';
+    stockMeetingTimerEl.textContent = '';
+    stockMeetingComposeEl.classList.add('hidden');
+    stockMeetingHostEl.classList.add('hidden');
+    stockMeetingOptionsEl.classList.add('hidden');
+    stockMeetingFinishEl.classList.add('hidden');
+    stockMeetingVotesEl.classList.add('hidden');
+    if (data.overview) renderStock(data.overview);
+    return;
+  }
+  renderStockMeeting(data.meeting || {});
+  if ((data.meeting || {}).status === 'closed') stopStockMeetingPolling();
+}
+
+function renderStockMeeting(m) {
+  const status = m.status || 'open';
+  const logWasBottom = stockMeetingLogEl.scrollTop + stockMeetingLogEl.clientHeight
+    >= stockMeetingLogEl.scrollHeight - 40;
+
+  stockMeetingTitleEl.textContent = `${m.company || ''} · 股东大会`;
+  stockMeetingSubEl.textContent =
+    `${(m.sectors || []).join('、') || '综合'}｜`
+    + `${m.is_host ? '你是本次召集人' : `召集人是 ${m.host_name || '另一位股东'}`}｜`
+    + `你的持股 ${stockMoney(m.my_shares)} 股`;
+
+  const remain = Number(m.remaining || 0);
+  if (status === 'open') {
+    stockMeetingTimerEl.textContent = remain > 0 ? `讨论剩余 ${remain}s` : '时间到，书记员落笔中…';
+  } else if (status === 'confirm') {
+    stockMeetingTimerEl.textContent = remain > 0 ? `确认剩余 ${remain}s` : '确认时间到，正在定案…';
+  } else {
+    stockMeetingTimerEl.textContent = '会议已结束';
+  }
+
+  stockMeetingLogEl.innerHTML = (m.messages || []).map((msg) => {
+    const role = MEETING_ROLE_LABEL[msg.role] ? msg.role : 'holder';
+    return `<div class="meeting-msg meeting-msg-${role}">
+      <div class="meeting-msg-head">${esc(msg.name)}<span>${MEETING_ROLE_LABEL[role]}</span></div>
+      <div class="meeting-msg-text">${esc(msg.text)}</div>
+    </div>`;
+  }).join('') || '<p class="room-empty">还没有人开口喵</p>';
+  if (logWasBottom) stockMeetingLogEl.scrollTop = stockMeetingLogEl.scrollHeight;
+
+  const options = Array.isArray(m.options) ? m.options : [];
+  if (status === 'open') {
+    stockMeetingDraftEl.classList.remove('hidden');
+    stockMeetingDraftEl.innerHTML = `
+      <div class="section-title">当前方针</div>
+      <p>${esc(m.current_policy || '暂无，仍按老规矩营生')}</p>
+      ${m.host_policy ? `<div class="section-title">大股东定稿</div><p>${esc(m.host_policy)}</p>` : ''}
+      <p class="hint">散会前书记员会另拟一份汇总方针，连同旧方针一起交股东确认。</p>`;
+  } else if (status === 'confirm' || status === 'closed') {
+    stockMeetingDraftEl.classList.remove('hidden');
+    stockMeetingDraftEl.innerHTML = `
+      <div class="section-title">三套方针</div>
+      ${options.map((o) => `<div class="meeting-option">
+        <div class="meeting-option-label">${esc(o.label || o.key)}</div>
+        <p>${esc(o.policy || '')}</p>
+        ${(o.sectors || []).length
+          ? `<p class="hint">经营范围：${esc(o.sectors.join('、'))}</p>` : ''}
+      </div>`).join('')}`;
+  } else {
+    stockMeetingDraftEl.classList.add('hidden');
+  }
+
+  const votes = m.votes || {};
+  if (status === 'confirm' || status === 'closed') {
+    const humanLine = (votes.human || []).map((x) => {
+      const label = x.choice === 'ai' ? '书记员汇总'
+        : x.choice === 'host' ? '大股东方针' : '沿用旧方针';
+      return `${esc(x.name)} ${label}`;
+    }).join('｜');
+    stockMeetingVotesEl.classList.remove('hidden');
+    stockMeetingVotesEl.innerHTML = `
+      <div class="section-title">${status === 'confirm' ? '股东确认中' : '确认结果'}</div>
+      <p>书记员汇总 ${votes.ai || 0} · 大股东方针 ${votes.host || 0} · 沿用旧方针 ${votes.old || 0}</p>
+      <p class="hint">已确认 ${votes.total || 0} / ${votes.eligible || 0} 人，未表态者按沿用旧方针计</p>
+      ${humanLine ? `<p class="hint">在场股东：${humanLine}</p>` : ''}`;
+  } else {
+    stockMeetingVotesEl.classList.add('hidden');
+  }
+
+  if (status === 'closed') {
+    const changed = !!m.result_choice && m.result_choice !== 'old';
+    const rc = m.result_counts || {};
+    stockMeetingResultEl.classList.remove('hidden');
+    stockMeetingResultEl.classList.toggle('ok', changed);
+    stockMeetingResultEl.innerHTML = `
+      <p>${esc(m.result || '会议结束')}</p>
+      ${rc.eligible
+        ? `<p class="hint">确认票数：书记员汇总 ${rc.ai || 0} · 大股东方针 ${rc.host || 0} · 沿用旧方针 ${rc.old || 0}（共 ${rc.eligible} 人）</p>`
+        : ''}
+      ${m.policy ? `<p class="hint">当前方针：${esc(m.policy)}</p>` : ''}`;
+  } else {
+    stockMeetingResultEl.classList.add('hidden');
+  }
+
+  stockMeetingComposeEl.classList.toggle('hidden', status !== 'open');
+  stockMeetingInputEl.disabled = !m.can_speak;
+  stockMeetingSendEl.disabled = !m.can_speak;
+  stockMeetingInputEl.placeholder = m.can_speak ? '说点什么…' : '股份还不够，只能旁听喵';
+
+  const canHostEdit = status === 'open' && !!m.can_set_policy;
+  stockMeetingHostEl.classList.toggle('hidden', !canHostEdit);
+  stockMeetingHostSaveEl.disabled = !canHostEdit;
+  if (canHostEdit && document.activeElement !== stockMeetingHostInputEl) {
+    stockMeetingHostInputEl.value = m.host_policy || '';
+  }
+
+  stockMeetingOptionsEl.classList.toggle('hidden', status !== 'confirm' || !options.length);
+  stockMeetingOptionsEl.innerHTML = status === 'confirm'
+    ? options.map((o) => `<button class="btn btn-ghost btn-sm${m.my_vote === o.key ? ' is-active' : ''}"
+        type="button" data-choice="${esc(o.key)}"${m.can_vote ? '' : ' disabled'}>${esc(o.label || o.key)}</button>`).join('')
+    : '';
+
+  stockMeetingFinishEl.classList.toggle('hidden', !m.can_finish);
+  stockMeetingFinishEl.textContent = status === 'confirm' ? '提前结束确认' : '宣布进入确认';
+}
+
+async function stockMeetingAct(path, body, label) {
+  const code = stockMeetingCode;
+  if (!code || stockMeetingBusy) return false;
+  stockMeetingBusy = true;
+  stockMeetingSubEl.textContent = `${label}…`;
+  const { status, data } = await api(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code, ...body }),
+  });
+  stockMeetingBusy = false;
+  if (code !== stockMeetingCode) return false;
+  if (status === 401) { closeStockMeeting(); homePanel.classList.add('hidden'); showLogin(); return false; }
+  if (status !== 200 || !data.ok) {
+    stockMeetingSubEl.textContent = data.msg || `${label}失败喵`;
+    return false;
+  }
+  if (data.overview) renderStock(data.overview);
+  if (data.active) renderStockMeeting(data.meeting || {});
+  else refreshStockMeeting();
+  return true;
+}
+
+async function stockMeetingSay() {
+  const text = stockMeetingInputEl.value.trim();
+  if (!text) {
+    stockMeetingSubEl.textContent = '先说点什么，书记员才好记下来喵';
+    return;
+  }
+  const ok = await stockMeetingAct('/api/stock/meeting/say', { text }, '记录中');
+  if (ok) stockMeetingInputEl.value = '';
+}
+
+async function stockMeetingSetPolicy() {
+  const text = stockMeetingHostInputEl.value.trim();
+  await stockMeetingAct('/api/stock/meeting/policy', { text }, '定稿方针');
+}
+
+stockMeetingSendEl.addEventListener('click', stockMeetingSay);
+stockMeetingInputEl.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter') return;
+  e.preventDefault();
+  stockMeetingSay();
+});
+stockMeetingHostSaveEl.addEventListener('click', stockMeetingSetPolicy);
+stockMeetingHostInputEl.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter') return;
+  e.preventDefault();
+  stockMeetingSetPolicy();
+});
+stockMeetingOptionsEl.addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-choice]');
+  if (!btn || btn.disabled) return;
+  stockMeetingAct('/api/stock/meeting/vote', { choice: btn.dataset.choice }, '提交确认');
+});
+stockMeetingFinishEl.addEventListener('click', () => stockMeetingAct('/api/stock/meeting/finish', {}, '请书记员收尾'));
+document.getElementById('stock-meeting-close').addEventListener('click', closeStockMeeting);
+document.getElementById('stock-meeting-mask').addEventListener('click', closeStockMeeting);

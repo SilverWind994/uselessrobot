@@ -1,4 +1,5 @@
 import json
+import math
 import os
 import random
 import re
@@ -6,6 +7,13 @@ import threading
 import time
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
+
+try:
+    from PIL import Image, ImageDraw, ImageFont
+except ImportError:   # 没有 Pillow 时只是不画世界地图，不影响行情
+    Image = None
+    ImageDraw = None
+    ImageFont = None
 
 from config import Config
 from core.message_sender import MessageSender, Target
@@ -20,16 +28,16 @@ MARKET_PATH = os.path.join(STOCK_DIR, "market.json")
 STOCK_PLAYERS_PATH = os.path.join(STOCK_DIR, "players.json")
 
 # ==================== 经济数值 ====================
-CAT_STOCK_INITIAL_CATNIP = 10000     # 每位玩家初始猫薄荷
-CAT_STOCK_FISH_TO_CATNIP = 95        # 1 鱼干 -> 95 猫薄荷
-CAT_STOCK_CATNIP_TO_FISH = 105       # 105 猫薄荷 -> 1 鱼干
+CAT_STOCK_INITIAL_CATNIP = 1000      # 新玩家开户即领 1000 猫薄荷，方便先熟悉盘面
+CAT_STOCK_STONE_TO_CATNIP = 95       # 1 猫眼石 -> 95 猫薄荷
+CAT_STOCK_CATNIP_TO_STONE = 105      # 105 猫薄荷 -> 1 猫眼石
+CAT_STOCK_MIGRATE_RATE = 95          # 旧资产结算：95 猫薄荷 -> 1 鱼干
 CAT_STOCK_BUY_FEE = 0.01             # 买入手续费 1%
 CAT_STOCK_SELL_FEE = 0.01            # 卖出手续费 1%
 CAT_STOCK_OPEN_HOUR = 8              # 每日 08:00 开市
 CAT_STOCK_CLOSE_HOUR = 20            # 每日 20:00 收市
-CAT_STOCK_LOCK_HOURS = 4             # 买入后需满 4 个开市小时才能卖出
 CAT_STOCK_MAX_SHARES = 1_000_000     # 单笔最大股数
-CAT_STOCK_MIN_SHARES = 10            # 单笔买入最少股数
+CAT_STOCK_MIN_SHARES = 1             # 不设最小购入限制，单笔至少 1 股即可
 CAT_STOCK_DELIST_RATE = 0.7          # 退市清算按最新价的 70% 赔付
 CAT_STOCK_DELIST_CHANCE = 0.02       # 每个整点的退市概率（偶发，不要太频繁）
 CAT_STOCK_LIST_CHANCE = 0.02         # 每个整点的新上市概率（偶发，不要太频繁）
@@ -60,6 +68,18 @@ CAT_STOCK_BOND_MIN_SHARES = 100      # 单笔最少买卖多少张国债
 CAT_STOCK_BOND_INFLUENCE_SHARES = 10000  # 持有多少张国债可以影响国家发展方针
 CAT_STOCK_BOND_NOISE = 0.003         # 国债每整点基础波动（远小于股票）
 CAT_STOCK_BOND_POLICY_MAX_LEN = 100  # 国家发展方针文本最大长度
+CAT_STOCK_HOURLY_CAP = 0.02          # 每小时最多相对上一整点浮动 2%
+CAT_STOCK_DAILY_CAP = 0.10           # 当日累计涨跌幅上限（多空可互相抵消）
+CAT_STOCK_SMALL_HOLDING_MAX = 100    # 非重点持股公司的持股上限
+CAT_STOCK_MAJOR_COMPANIES_MAX = 2    # 最多深度持股几家公司
+CAT_STOCK_MEETING_MIN_SHARES = 100   # 可参与股东大会的最低持股
+CAT_STOCK_MEETING_HOST_SHARES = 1000 # 可召开股东大会的最低持股
+CAT_STOCK_MEETING_MINUTES = 10       # 股东大会讨论时长（分钟）
+CAT_STOCK_MEETING_VOTE_MINUTES = 30  # 讨论结束后给股东确认三套方针的时长（分钟）
+CAT_STOCK_MEETING_AI_PASS = 0.5      # AI 方针得票超过一半才采用
+CAT_STOCK_MEETING_HOST_PASS = 2 / 3  # 大股东方针得票超过三分之二才采用
+CAT_STOCK_MEETING_MAX_LEN = 80       # 单条发言最大长度
+CAT_STOCK_AUTO_POLICY_MAX = 2        # 收市时 AI 自行制定方针的公司数量上限
 CAT_STOCK_COUNTRY_MIN_LISTED = 2     # 每个国家尽量维持的上市公司数
 CAT_STOCK_COMPANY_MIN = 35           # 市场最少保持的上市公司数
 CAT_STOCK_COMPANY_MAX = 70           # 市场最多容纳的上市公司数
@@ -68,6 +88,22 @@ CAT_STOCK_NEWS_TICK_MIN = 4          # 每个整点最少生成几条新闻
 CAT_STOCK_NEWS_TICK_MAX = 8          # 每个整点最多生成几条新闻
 CAT_STOCK_HISTORY_KEEP = 96          # 每只股票保留多少个整点的价格记录
 CAT_STOCK_HISTORY_SHOW = 48          # 网页端展示最近多少个整点的走势
+CAT_STOCK_WORLD_BIAS = 0.03          # 局势设定对全盘每整点的收紧/抬升力度
+CAT_STOCK_COMPANY_BIAS = 0.03        # 掌管者扶持/打压单个企业时每整点的推拉力度
+CAT_STOCK_SETTLE_COEF = 0.10         # 持仓浮盈超过起点后，每整点回收的力度
+CAT_STOCK_SETTLE_MAX = 0.012         # 每整点回收浮盈的上限
+CAT_STOCK_SETTLE_GAP = 0.03          # 浮盈达到该比例后才开始回收
+CAT_STOCK_ERA_DAYS = 30              # 每个时代固定延续的自然日，到期按可能性随机翻页
+CAT_STOCK_ERA_COLLAPSE_RATE = 0.5    # 亡国时该国企业持仓的清算比例
+CAT_STOCK_ERA_COUNTRY_MIN = 3        # 至少保留多少个尚存国家
+CAT_STOCK_ERA_WAR_CHANCE = 0.08      # 战事升级为亡国的概率
+CAT_STOCK_SHORT_MIN_HOURS = 12       # 做空最短持有一个开市小时数
+CAT_STOCK_SHORT_MAX_HOURS = 36       # 做空最长持有一个开市小时数
+CAT_STOCK_SHORT_MARGIN = 0.5         # 开空所需保证金比例
+CAT_STOCK_SHORT_FEE = 0.01           # 开空手续费
+CAT_STOCK_SHORT_MIN_SHARES = 1       # 做空也不设最小股数限制
+CAT_STOCK_ERA_MAP_PATH = os.path.join(STOCK_DIR, "era_map.png")
+CAT_STOCK_ERA_MAP_META = os.path.join(STOCK_DIR, "era_map.meta.json")
 
 # ==================== 世界地理 ====================
 # 依据世界地图整理：land 为陆上邻国，sea 为海上/天空可达国家
@@ -91,80 +127,439 @@ _COUNTRY_GEO = {
     "ci": {"land": [], "sea": [], "note": "无固定国土，仅在各国雇佣据点活动"},
 }
 
-# ==================== 初始上市公司 ====================
-# code / name / country / sector / base
-_INITIAL_COMPANIES = [
-    {"code": "FRS", "name": "霜牙兵器工坊", "country": "vo", "sector": "军备", "base": 86},
-    {"code": "AUR", "name": "极光晶石行", "country": "vo", "sector": "矿脉", "base": 120},
-    {"code": "EMB", "name": "余烬铸造厂", "country": "ig", "sector": "重工", "base": 64},
-    {"code": "LAV", "name": "熔流运输团", "country": "ig", "sector": "物流", "base": 48},
-    {"code": "VND", "name": "翠庭药材商会", "country": "sy", "sector": "草药", "base": 55},
-    {"code": "LFL", "name": "叶语木工坊", "country": "sy", "sector": "木工", "base": 32},
-    {"code": "SND", "name": "流沙商队", "country": "za", "sector": "贸易", "base": 70},
-    {"code": "DUN", "name": "沙渊绿洲水利", "country": "za", "sector": "水利", "base": 41},
-    {"code": "LUX", "name": "圣辉圣器坊", "country": "au", "sector": "圣器", "base": 150},
-    {"code": "PRY", "name": "晨祷钟表行", "country": "au", "sector": "精密", "base": 92},
-    {"code": "TID", "name": "潮歌航海公会", "country": "ma", "sector": "航运", "base": 78},
-    {"code": "PRL", "name": "珍珠贝艺坊", "country": "ma", "sector": "奢侈", "base": 110},
-    {"code": "IRN", "name": "暮铁矿务", "country": "du", "sector": "矿业", "base": 60},
-    {"code": "GTL", "name": "灰门铁路", "country": "du", "sector": "交通", "base": 45},
-    {"code": "THN", "name": "雷鸣锻锤行", "country": "ta", "sector": "军备", "base": 105},
-    {"code": "SKY", "name": "高岭风电场", "country": "ta", "sector": "能源", "base": 88},
-    {"code": "STR", "name": "星穹观星台", "country": "as", "sector": "占星", "base": 180},
-    {"code": "ZRO", "name": "零重力船坞", "country": "as", "sector": "航运", "base": 210},
-    {"code": "WND", "name": "长风风筝行", "country": "ze", "sector": "轻工", "base": 38},
-    {"code": "GRF", "name": "疾风信使团", "country": "ze", "sector": "物流", "base": 52},
-    {"code": "NOC", "name": "永夜影卫", "country": "no", "sector": "安保", "base": 96},
-    {"code": "BAT", "name": "夜蝠药房", "country": "no", "sector": "医药", "base": 66},
-    {"code": "CHR", "name": "时砂钟楼", "country": "ch", "sector": "精密", "base": 165},
-    {"code": "PRD", "name": "悖论学社", "country": "ch", "sector": "学术", "base": 140},
-    {"code": "DRM", "name": "梦沼安眠药房", "country": "so", "sector": "医药", "base": 58},
-    {"code": "MST", "name": "雾沼渔获", "country": "so", "sector": "渔猎", "base": 29},
-    {"code": "ABY", "name": "深渊黑市", "country": "ab", "sector": "贸易", "base": 75},
-    {"code": "VOI", "name": "虚空回声矿", "country": "ab", "sector": "矿业", "base": 130},
-    {"code": "MRT", "name": "骸骨殡仪社", "country": "mo", "sector": "服务", "base": 44},
-    {"code": "OSS", "name": "白骨骷髅兵团", "country": "mo", "sector": "安保", "base": 84},
-    {"code": "DRG", "name": "龙脊鳞甲坊", "country": "dr", "sector": "重工", "base": 175},
-    {"code": "SKL", "name": "龙骨飞空团", "country": "dr", "sector": "航运", "base": 240},
-    {"code": "OAT", "name": "灰誓雇佣团", "country": "ci", "sector": "服务", "base": 72},
-    {"code": "CGY", "name": "灰烬熔炉", "country": "ci", "sector": "能源", "base": 63},
-]
-
-# 退市后可以重新上市的候补企业（行情激烈时补充新面孔）
-_LISTING_CATALOG = [
-    {"code": "MRC", "name": "魔物赏金所", "country": "ci", "sector": "服务", "base": 60},
-    {"code": "ELX", "name": "元素炼金行", "country": "au", "sector": "炼金", "base": 128},
-    {"code": "WYR", "name": "巨龙保险行", "country": "dr", "sector": "金融", "base": 90},
-    {"code": "POT", "name": "药水速递", "country": "sy", "sector": "物流", "base": 35},
-    {"code": "HRL", "name": "英雄招募处", "country": "ze", "sector": "服务", "base": 70},
-    {"code": "GEM", "name": "魔晶交易所", "country": "as", "sector": "矿业", "base": 155},
-    {"code": "FAE", "name": "妖精纺织", "country": "sy", "sector": "轻工", "base": 45},
-    {"code": "RUN", "name": "符文刻印社", "country": "ch", "sector": "制造", "base": 102},
-    {"code": "TAV", "name": "酒馆联盟", "country": "du", "sector": "消费", "base": 30},
-    {"code": "SWD", "name": "断剑回收行", "country": "ci", "sector": "回收", "base": 25},
-    {"code": "MNA", "name": "魔力供给所", "country": "as", "sector": "能源", "base": 80},
-    {"code": "COF", "name": "棺材连锁店", "country": "mo", "sector": "服务", "base": 55},
-    {"code": "PEG", "name": "飞马航空", "country": "ze", "sector": "航运", "base": 140},
-    {"code": "LIC", "name": "地精银行", "country": "du", "sector": "金融", "base": 200},
-    {"code": "BEA", "name": "巨兽牧场", "country": "ta", "sector": "农牧", "base": 45},
-    {"code": "ICH", "name": "炼金试剂公司", "country": "au", "sector": "炼金", "base": 65},
-    {"code": "VAM", "name": "吸血鬼诊所", "country": "no", "sector": "医药", "base": 88},
-    {"code": "SIR", "name": "海妖歌剧院", "country": "ma", "sector": "娱乐", "base": 50},
-    {"code": "RAT", "name": "鼠人巡逻队", "country": "ci", "sector": "安保", "base": 40},
-    {"code": "FRO", "name": "霜冻保险公司", "country": "vo", "sector": "金融", "base": 95},
-    {"code": "SAL", "name": "盐晶矿场", "country": "za", "sector": "矿业", "base": 58},
-    {"code": "WEB", "name": "蛛丝纺织", "country": "so", "sector": "轻工", "base": 36},
-    {"code": "ORC", "name": "兽人角斗场", "country": "ab", "sector": "娱乐", "base": 72},
-    {"code": "ARC", "name": "古遗迹考古所", "country": "ch", "sector": "学术", "base": 115},
-    {"code": "THR", "name": "雷石电池", "country": "ta", "sector": "能源", "base": 160},
-    {"code": "FEL", "name": "妖精租车行", "country": "sy", "sector": "交通", "base": 42},
-    {"code": "DRF", "name": "龙焰燃料", "country": "dr", "sector": "能源", "base": 135},
-    {"code": "GRA", "name": "灰烬纸业", "country": "ci", "sector": "轻工", "base": 28},
-    {"code": "NEK", "name": "夜猫快递", "country": "no", "sector": "物流", "base": 47},
-    {"code": "HAU", "name": "幽灵房产", "country": "mo", "sector": "地产", "base": 68},
-]
-
 # 世界故事线：由 AI 每整点自行推进并持久化，不使用任何预设事件模板
+
+# 常驻董事人选池：每家公司从池里抽三位固定董事，不同公司面孔不同。
+# 按时代下标取用；某个时代想单独换一批面孔时往 _BOARD_CASTS 里加一项即可，
+# 没有单独配置的时代统一沿用 _BOARD_CAST_DEFAULT，不限制时代总数。
+_BOARD_CASTS: Dict[int, List[dict]] = {}
+
+_BOARD_CASTS[0] = [
+    {"name": "石婆婆", "tag": "谨慎",
+     "persona": "把每一块燧石都数过三遍的老妇人，最怕有人把过冬的兽肉换出去。"},
+    {"name": "火塘守夜人·灰", "tag": "守旧",
+     "persona": "守着火塘不肯挪窝，认定祖辈怎么过日子，后辈就该照着过。"},
+    {"name": "骨签巫祝·鸦", "tag": "信仰",
+     "persona": "看兽骨裂纹断吉凶，凡事先问神意，再问收成。"},
+    {"name": "猎首·塔卡", "tag": "冒险",
+     "persona": "身上伤疤比部落里的石头还多，总觉得不冒一次险就算白活。"},
+    {"name": "陶轮阿姆", "tag": "务实",
+     "persona": "只信手上捏得出来的东西，听人讲远景就打哈欠。"},
+    {"name": "拾荒者·灰羽", "tag": "悲观",
+     "persona": "总觉得明天会更糟，却因此很少吃亏。"},
+    {"name": "哑石匠", "tag": "寡言",
+     "persona": "一整天说不了三句话，开口就是要石料和工夫。"},
+    {"name": "嚼根的老倌", "tag": "憨直",
+     "persona": "嘴里总嚼着草根，说话直来直去，听不懂绕弯子的话。"},
+    {"name": "涂脸的鼓手", "tag": "搞怪",
+     "persona": "每逢开会先敲鼓，提案里常有把祭典办成生意之类的主意。"},
+    {"name": "牧羊女·铃", "tag": "人情",
+     "persona": "记得每一户人家的名字和难处，投票时先看人，再看账。"},
+    {"name": "喊山的人", "tag": "浮夸",
+     "persona": "嗓门最大，任何小事都能说成开天辟地的头一件。"},
+    {"name": "数骨头的孩子", "tag": "精算",
+     "persona": "拿骨片摆加减，年纪最小，却总能把账算得清清楚楚。"},
+]
+
+# 未单独配置董事人选的时代默认沿用这一批
+_BOARD_CAST_DEFAULT = [
+    {"name": "老账房·算盘", "tag": "谨慎",
+     "persona": "做了三百年账的老账房，算盘珠子一响就要皱眉。"},
+    {"name": "铜板爵士", "tag": "浮夸",
+     "persona": "自称爵士的鼹鼠，礼帽比身体还大，满嘴宏大蓝图。"},
+    {"name": "泡泡·梦游喵", "tag": "搞怪",
+     "persona": "永远半睡半醒的梦游猫，会认真讨论把公司开在云上。"},
+    {"name": "铁算盘·伍德", "tag": "精算",
+     "persona": "把每一枚铜板都拆成四瓣来算的账房先生，最恨模糊的数目。"},
+    {"name": "灰羽", "tag": "悲观",
+     "persona": "一只总在预言下一场灾祸的乌鸦，偏偏每次都能说中几分。"},
+    {"name": "醉船长·莫罗", "tag": "冒险",
+     "persona": "满身海盐味的船长，觉得不压上全部身家的生意不算生意。"},
+    {"name": "沉默的石匠", "tag": "寡言",
+     "persona": "只关心地基打得牢不牢，别人谈一个月，他回一句话。"},
+    {"name": "花婶", "tag": "人情",
+     "persona": "街坊里人缘最好的婶子，做生意先看人脸色再谈价钱。"},
+    {"name": "秃鹫·维恩", "tag": "投机",
+     "persona": "专盯别人跌价时出手的投机客，笑起来露出一颗金牙。"},
+    {"name": "守钟人·珂", "tag": "守旧",
+     "persona": "几十年来只按老钟点办事，任何新花样都要先搁上一年。"},
+    {"name": "小满", "tag": "憨直",
+     "persona": "脑子一根筋的伙计，听不懂反话，也从不拐弯抹角。"},
+    {"name": "夜莺·苏", "tag": "浪漫",
+     "persona": "爱把生意说成诗的女伶，常为了一个好听的名号放弃利润。"},
+]
+
+
+# ==================== 时代更迭 ====================
+# 世界按十二个时代徐徐推进，每个时代固定延续 30 天，到期按可能性随机选一条走向。
+# 每个时代的 companies/catalog 都是手写名录，后续时代直接继承来路的产业与商号。
+# 三阶时代只写 name/theme/parent，其余字段由 _era_base 从 parent 继承。
+_ERAS = [
+    {
+        "name": "初蒙时代",
+        "theme": "火塘边的石桌上摆着几块燧石，谁分得多，谁就是王",
+        "sectors": ["石作", "火种", "狩猎", "采集", "皮货", "陶土"],
+        "companies": [
+            {"name": "火塘守夜社", "country": "vo", "sectors": ["火种", "守夜"], "base": 24},
+            {"name": "燧石打火铺", "country": "du", "sectors": ["石作", "火种"], "base": 18},
+            {"name": "兽骨针作坊", "country": "mo", "sectors": ["皮货", "骨器"], "base": 21},
+            {"name": "巨兽狩猎队", "country": "za", "sectors": ["狩猎", "皮货"], "base": 30},
+            {"name": "藤蔓采集团", "country": "sy", "sectors": ["采集", "陶土"], "base": 15},
+            {"name": "图腾祭所", "country": "ta", "sectors": ["图腾", "祭仪"], "base": 36},
+            {"name": "岩画记事棚", "country": "vo", "sectors": ["岩画", "采集"], "tags": ["图腾"], "base": 20},
+            {"name": "灰烬陶轮坊", "country": "du", "sectors": ["陶土", "火种"], "base": 26},
+            {"name": "溪畔渔梁队", "country": "sy", "sectors": ["渔获", "采集"], "tags": ["洪水"], "base": 19},
+            {"name": "兽皮鞣制棚", "country": "mo", "sectors": ["皮货", "石作"], "base": 23},
+            {"name": "骨哨猎队", "country": "za", "sectors": ["狩猎", "骨器"], "base": 28},
+            {"name": "火种换物摊", "country": "ta", "sectors": ["火种", "贸易"], "base": 22},
+            {"name": "燧石矿坑", "country": "vo", "sectors": ["石作", "采矿"], "base": 32},
+            {"name": "泥陶晒场", "country": "du", "sectors": ["陶土", "储粮"], "base": 17},
+            {"name": "藤篮编织社", "country": "sy", "sectors": ["采集", "编具"], "base": 16},
+            {"name": "灰岩磨石坊", "country": "mo", "sectors": ["石作", "磨具"], "base": 25},
+            {"name": "沙丘根茎队", "country": "za", "sectors": ["采集", "储粮"], "base": 18},
+            {"name": "祭火守坛人", "country": "ta", "sectors": ["祭仪", "火种"], "base": 27},
+            {"name": "幼兽驯养圈", "country": "vo", "sectors": ["畜牧", "狩猎"], "base": 21},
+            {"name": "骨签记账处", "country": "du", "sectors": ["骨器", "记账"], "base": 24},
+            {"name": "林间采蜜人", "country": "sy", "sectors": ["采集", "蜜食"], "base": 20},
+            {"name": "芦席搭棚队", "country": "mo", "sectors": ["编具", "居所"], "base": 15},
+            {"name": "绿洲储水瓮", "country": "za", "sectors": ["储粮", "陶土"], "tags": ["洪水"], "base": 22},
+            {"name": "雷石取火会", "country": "ta", "sectors": ["火种", "雷石"], "base": 34},
+            {"name": "寒霜兽骨铺", "country": "vo", "sectors": ["骨器", "皮货"], "base": 26},
+            {"name": "灰谷拾荒团", "country": "du", "sectors": ["采集", "回收"], "base": 14},
+            {"name": "夜巡火把队", "country": "mo", "sectors": ["守夜", "火种"], "base": 19},
+            {"name": "沙路驮兽行", "country": "za", "sectors": ["畜牧", "运输"], "base": 29},
+            {"name": "蕨根磨粉社", "country": "sy", "sectors": ["采集", "储粮"], "base": 17},
+            {"name": "石砧敲打铺", "country": "ta", "sectors": ["石作", "骨器"], "base": 23},
+            {"name": "火塘陶罐社", "country": "vo", "sectors": ["陶土", "火种"], "base": 25},
+            {"name": "兽血染布棚", "country": "du", "sectors": ["皮货", "染布"], "base": 18},
+            {"name": "雾林菌菇队", "country": "sy", "sectors": ["采集", "菌菇"], "base": 16},
+            {"name": "骸骨饰物坊", "country": "mo", "sectors": ["骨器", "祭仪"], "tags": ["图腾"], "base": 22},
+            {"name": "荒坡牧羊圈", "country": "za", "sectors": ["畜牧", "皮货"], "base": 24},
+        ],
+        "catalog": [
+            {"name": "石镰收割队", "country": "za", "sectors": ["石作", "采集"], "base": 20},
+            {"name": "骨笛传讯社", "country": "sy", "sectors": ["骨器", "传信"], "base": 22},
+            {"name": "火塘盐交换站", "country": "du", "sectors": ["火种", "贸易"], "base": 26},
+            {"name": "兽皮冬衣棚", "country": "vo", "sectors": ["皮货", "制衣"], "base": 24},
+            {"name": "陶土水瓮窑", "country": "mo", "sectors": ["陶土", "储粮"], "base": 18},
+            {"name": "燧石取火会", "country": "ta", "sectors": ["火种", "聚众"], "base": 30},
+            {"name": "溪鱼熏制坊", "country": "sy", "sectors": ["渔获", "储粮"], "base": 21},
+            {"name": "岩洞壁画社", "country": "vo", "sectors": ["岩画", "祭仪"], "base": 23},
+            {"name": "藤索捆扎队", "country": "za", "sectors": ["编具", "运输"], "base": 19},
+            {"name": "灰烬肥田棚", "country": "du", "sectors": ["火耕", "沃土"], "base": 28},
+            {"name": "兽骨骰子摊", "country": "mo", "sectors": ["骨器", "娱乐"], "base": 17},
+            {"name": "祭火巡游队", "country": "ta", "sectors": ["祭仪", "火种"], "base": 25},
+        ],
+        "paths": [
+            {"name": "驯火之术", "kind": "科技", "tag": "火种", "desc": "第一次把火种关进石膛，从此不再靠天吃饭", "next": 1},
+            {"name": "筑城立祀", "kind": "信仰", "tag": "图腾", "desc": "祭司借着兽骨裂纹发号施令，部落开始有了王", "next": 2},
+            {"name": "长夜洪水", "kind": "灾变", "tag": "洪水", "desc": "水位一夜涨过山顶，旧营地全被卷走", "next": 3, "fate": "deluge"},
+        ],
+    },
+    {
+        "name": "火耕聚落时代",
+        "theme": "火烧过的坡地长出谷子，固定下来的村落第一次有了边墙",
+        "sectors": ["火耕", "陶器", "畜牧", "石砌", "储粮", "治水"],
+        "companies": [
+            {"name": "火耕农社", "country": "vo", "sectors": ["火耕", "储粮"], "base": 26},
+            {"name": "灰田陶窑", "country": "du", "sectors": ["陶器", "火耕"], "base": 19},
+            {"name": "蓄水石渠", "country": "mo", "sectors": ["石砌", "治水"], "base": 23},
+            {"name": "畜栏牧坊", "country": "za", "sectors": ["畜牧", "皮货"], "base": 31},
+            {"name": "篝火粮仓", "country": "sy", "sectors": ["储粮", "火耕"], "base": 16},
+            {"name": "定居木栅营", "country": "ta", "sectors": ["定居", "石砌"], "base": 28},
+            {"name": "火烧坡田队", "country": "vo", "sectors": ["火耕", "采集"], "base": 21},
+            {"name": "泥坯陶瓮坊", "country": "du", "sectors": ["陶器", "储粮"], "base": 24},
+            {"name": "草坡放牧圈", "country": "za", "sectors": ["畜牧", "储粮"], "base": 27},
+            {"name": "石垒田埂社", "country": "ta", "sectors": ["石砌", "治水"], "base": 25},
+            {"name": "稻穗晾晒场", "country": "sy", "sectors": ["储粮", "火耕"], "base": 18},
+            {"name": "溪渠引水队", "country": "mo", "sectors": ["治水", "石砌"], "base": 22},
+            {"name": "陶轮车作坊", "country": "du", "sectors": ["陶器", "运输"], "base": 26},
+            {"name": "灰烬肥田社", "country": "vo", "sectors": ["火耕", "沃土"], "base": 20},
+            {"name": "木栅畜栏行", "country": "ta", "sectors": ["畜牧", "木作"], "base": 23},
+            {"name": "谷仓守夜人", "country": "za", "sectors": ["储粮", "守夜"], "base": 17},
+            {"name": "陶片记账所", "country": "sy", "sectors": ["陶器", "记账"], "base": 15},
+            {"name": "石磨谷粉坊", "country": "mo", "sectors": ["石砌", "储粮"], "base": 21},
+            {"name": "火种借给站", "country": "vo", "sectors": ["火种", "火耕"], "base": 19},
+            {"name": "芦苇编席社", "country": "sy", "sectors": ["编具", "居所"], "base": 14},
+            {"name": "驮兽运输队", "country": "za", "sectors": ["畜牧", "运输"], "base": 24},
+            {"name": "灰陶灯盏窑", "country": "du", "sectors": ["陶器", "照明"], "base": 20},
+            {"name": "土埂护田队", "country": "ta", "sectors": ["治水", "石砌"], "base": 22},
+            {"name": "牧犬训养棚", "country": "mo", "sectors": ["畜牧", "守夜"], "base": 18},
+            {"name": "烟熏储肉坊", "country": "vo", "sectors": ["储粮", "烟熏"], "base": 21},
+            {"name": "陶埙乐坊", "country": "sy", "sectors": ["陶器", "祭仪"], "base": 16},
+            {"name": "渠闸看守所", "country": "du", "sectors": ["治水", "守夜"], "base": 23},
+            {"name": "草绳编织社", "country": "za", "sectors": ["编具", "储粮"], "base": 13},
+            {"name": "石臼舂米铺", "country": "ta", "sectors": ["石砌", "储粮"], "base": 17},
+            {"name": "火耕换工盟", "country": "vo", "sectors": ["火耕", "互助"], "base": 15},
+            {"name": "灰土陶印坊", "country": "du", "sectors": ["陶器", "印记"], "base": 18},
+            {"name": "牧草晒干队", "country": "za", "sectors": ["畜牧", "储粮"], "base": 19},
+            {"name": "供火巡夜组", "country": "mo", "sectors": ["火种", "守夜"], "base": 16},
+            {"name": "陶罐换盐摊", "country": "sy", "sectors": ["陶器", "贸易"], "base": 22},
+            {"name": "石渠修补队", "country": "ta", "sectors": ["治水", "石砌"], "base": 20},
+        ],
+        "catalog": [
+            {"name": "水车提水社", "country": "mo", "sectors": ["治水", "水利"], "base": 24},
+            {"name": "陶范铸铃坊", "country": "du", "sectors": ["陶器", "铸铃"], "base": 21},
+            {"name": "苜蓿种籽行", "country": "za", "sectors": ["畜牧", "种籽"], "base": 19},
+            {"name": "火耕换工所", "country": "vo", "sectors": ["火耕", "互助"], "base": 22},
+            {"name": "谷仓防鼠队", "country": "sy", "sectors": ["储粮", "守夜"], "base": 18},
+            {"name": "石埂圈地队", "country": "ta", "sectors": ["石砌", "田界"], "base": 23},
+            {"name": "陶轮课徒棚", "country": "du", "sectors": ["陶器", "授艺"], "base": 20},
+            {"name": "牧栏围建社", "country": "za", "sectors": ["畜牧", "木作"], "base": 25},
+            {"name": "溪渠清淤队", "country": "mo", "sectors": ["治水", "清淤"], "base": 22},
+            {"name": "黍米蒸尝社", "country": "sy", "sectors": ["储粮", "食肆"], "base": 17},
+            {"name": "火塘陶灯铺", "country": "vo", "sectors": ["陶器", "照明"], "base": 19},
+            {"name": "山坡梯田队", "country": "ta", "sectors": ["火耕", "石砌"], "base": 26},
+        ],
+        "paths": [
+            {"name": "沟渠引水", "kind": "科技", "tag": "治水",
+             "desc": "土沟把溪水牵到田里，一年能收两季", "next": 4},
+            {"name": "牧群成风", "kind": "社会", "tag": "畜牧",
+             "desc": "草坡上的畜群越赶越大，牧人比农人更阔气", "next": 5},
+            {"name": "陶轮成市", "kind": "经济", "tag": "陶器",
+             "desc": "陶轮一转，多余的罐子换了别人家的盐", "next": 6},
+        ],
+    },
+    {
+        "name": "神权城邦时代",
+        "theme": "兽骨裂纹里读出神意，祭司坐在石殿正中发号施令",
+        "sectors": ["祭仪", "城垣", "神谕", "石殿", "图腾", "巫祝"],
+        "companies": [
+            {"name": "骨卜神谕所", "country": "vo", "sectors": ["神谕", "巫祝"], "base": 30},
+            {"name": "石柱城垣", "country": "ta", "sectors": ["城垣", "石殿"], "base": 35},
+            {"name": "图腾祭火盟", "country": "sy", "sectors": ["图腾", "祭仪"], "base": 22},
+            {"name": "巫祝骨坊", "country": "mo", "sectors": ["巫祝", "骨器"], "base": 25},
+            {"name": "祭火石殿", "country": "za", "sectors": ["石殿", "祭仪"], "base": 28},
+            {"name": "城邦守卫所", "country": "du", "sectors": ["城垣", "守卫"], "base": 20},
+            {"name": "骨裂纹解读堂", "country": "vo", "sectors": ["神谕", "卜骨"], "base": 27},
+            {"name": "祭司袍服坊", "country": "sy", "sectors": ["祭仪", "织造"], "base": 21},
+            {"name": "石殿钟楼所", "country": "ta", "sectors": ["石殿", "钟鸣"], "base": 26},
+            {"name": "城垣雉堞队", "country": "du", "sectors": ["城垣", "石作"], "base": 24},
+            {"name": "巫舞面具铺", "country": "mo", "sectors": ["巫祝", "面具"], "base": 19},
+            {"name": "圣火长明坛", "country": "za", "sectors": ["祭仪", "圣火"], "base": 23},
+            {"name": "神谕抄写院", "country": "vo", "sectors": ["神谕", "抄录"], "base": 25},
+            {"name": "分坛祭司盟", "country": "ta", "sectors": ["祭仪", "盟约"], "tags": ["分权"], "base": 22},
+            {"name": "骨片占卜摊", "country": "sy", "sectors": ["神谕", "卜骨"], "base": 17},
+            {"name": "石阶朝圣道", "country": "mo", "sectors": ["石殿", "朝圣"], "base": 18},
+            {"name": "图腾柱雕刻坊", "country": "za", "sectors": ["图腾", "雕作"], "base": 21},
+            {"name": "城邦税吏所", "country": "du", "sectors": ["城垣", "税赋"], "base": 23},
+            {"name": "圣战旗幡坊", "country": "ta", "sectors": ["军旗", "织造"], "tags": ["圣战"], "base": 26},
+            {"name": "巫祝草药房", "country": "sy", "sectors": ["巫祝", "草药"], "base": 19},
+            {"name": "祭仪铜铃坊", "country": "vo", "sectors": ["祭仪", "铸铃"], "base": 24},
+            {"name": "石殿地宫看守", "country": "mo", "sectors": ["石殿", "守夜"], "base": 22},
+            {"name": "神谕信鸽棚", "country": "za", "sectors": ["神谕", "传信"], "base": 16},
+            {"name": "城垣夯土队", "country": "du", "sectors": ["城垣", "土作"], "base": 21},
+            {"name": "图腾纹身铺", "country": "ta", "sectors": ["图腾", "刺青"], "base": 17},
+            {"name": "祭司仲裁所", "country": "vo", "sectors": ["祭仪", "裁断"], "base": 23},
+            {"name": "圣城旅舍", "country": "sy", "sectors": ["朝圣", "食宿"], "base": 20},
+            {"name": "巫祝骨针坊", "country": "mo", "sectors": ["巫祝", "骨器"], "base": 16},
+            {"name": "石殿壁画队", "country": "za", "sectors": ["石殿", "壁画"], "base": 19},
+            {"name": "神谕梦解所", "country": "du", "sectors": ["神谕", "解梦"], "base": 21},
+            {"name": "圣战担架队", "country": "ta", "sectors": ["医护", "担架"], "tags": ["圣战"], "base": 15},
+            {"name": "分权城邦盟", "country": "sy", "sectors": ["盟约", "城垣"], "tags": ["分权"], "base": 22},
+            {"name": "祭火灰烬收存坊", "country": "vo", "sectors": ["祭仪", "火种"], "base": 18},
+            {"name": "城垣瞭望队", "country": "mo", "sectors": ["城垣", "瞭望"], "base": 20},
+            {"name": "石柱铭文社", "country": "za", "sectors": ["石殿", "铭文"], "base": 19},
+        ],
+        "catalog": [
+            {"name": "骨签律法所", "country": "vo", "sectors": ["神谕", "律法"], "base": 26},
+            {"name": "石殿献祭队", "country": "ta", "sectors": ["石殿", "祭仪"], "base": 28},
+            {"name": "巫祝药囊铺", "country": "sy", "sectors": ["巫祝", "草药"], "base": 22},
+            {"name": "城垣烽燧台", "country": "du", "sectors": ["城垣", "烽火"], "base": 27},
+            {"name": "图腾碑林社", "country": "za", "sectors": ["图腾", "碑刻"], "base": 24},
+            {"name": "祭司斋戒所", "country": "mo", "sectors": ["祭仪", "斋戒"], "base": 20},
+            {"name": "神谕信物铺", "country": "vo", "sectors": ["神谕", "信物"], "base": 23},
+            {"name": "圣城香火行", "country": "sy", "sectors": ["祭仪", "香火"], "base": 25},
+            {"name": "分坛唱诗班", "country": "ta", "sectors": ["祭仪", "唱诵"], "tags": ["分权"], "base": 21},
+            {"name": "城邦铸币坊", "country": "du", "sectors": ["城垣", "铸币"], "base": 29},
+            {"name": "巫舞傩面队", "country": "za", "sectors": ["巫祝", "傩戏"], "base": 19},
+            {"name": "骨灰安灵社", "country": "mo", "sectors": ["祭仪", "殡葬"], "base": 22},
+        ],
+        "paths": [
+            {"name": "神谕独尊", "kind": "信仰", "tag": "神谕",
+             "desc": "所有城邦只认同一座石殿的裂纹，祭司的话就是律法", "next": 7},
+            {"name": "祭司分权", "kind": "政治", "tag": "分权",
+             "desc": "各城祭司各据一方，谁也不肯替谁传话", "next": 8},
+            {"name": "圣城远征", "kind": "战争", "tag": "圣战",
+             "desc": "信徒背起石矛，向传说中神迹最盛的那座城出发", "next": 9},
+        ],
+    },
+    {
+        "name": "洪水泽国时代",
+        "theme": "水退不下去，村落搬上木筏，渡口比路口更热闹",
+        "sectors": ["舟渡", "渔获", "泽耕", "浮屋", "治水", "芦苇"],
+        "companies": [
+            {"name": "浮舟渡社", "country": "vo", "sectors": ["舟渡", "渔获"], "base": 22},
+            {"name": "芦苇浮屋营", "country": "sy", "sectors": ["浮屋", "芦苇"], "base": 19},
+            {"name": "泽畔治水队", "country": "za", "sectors": ["治水", "泽耕"], "base": 28},
+            {"name": "渔火水寨", "country": "ta", "sectors": ["渔获", "水寨"], "base": 32},
+            {"name": "泥堤工坊", "country": "du", "sectors": ["治水", "舟渡"], "base": 24},
+            {"name": "泽市交换所", "country": "mo", "sectors": ["泽耕", "渡口"], "base": 17},
+            {"name": "撑篙摆渡队", "country": "vo", "sectors": ["舟渡", "运输"], "base": 20},
+            {"name": "芦席晒鱼场", "country": "sy", "sectors": ["渔获", "芦苇"], "base": 18},
+            {"name": "浮木搭桥社", "country": "za", "sectors": ["浮屋", "治水"], "base": 21},
+            {"name": "水寨哨船队", "country": "ta", "sectors": ["舟渡", "巡逻"], "base": 27},
+            {"name": "淤泥肥田社", "country": "du", "sectors": ["泽耕", "沃土"], "tags": ["淤肥"], "base": 23},
+            {"name": "泽畔陶罐窑", "country": "mo", "sectors": ["泽耕", "陶器"], "base": 16},
+            {"name": "木筏修造坊", "country": "vo", "sectors": ["舟渡", "木作"], "base": 22},
+            {"name": "芦苇纸浆铺", "country": "sy", "sectors": ["芦苇", "造纸"], "base": 15},
+            {"name": "堤坝夯土队", "country": "za", "sectors": ["治水", "土作"], "base": 24},
+            {"name": "水寨渔网坊", "country": "ta", "sectors": ["渔获", "编具"], "base": 20},
+            {"name": "泽国粮船队", "country": "du", "sectors": ["泽耕", "运输"], "base": 21},
+            {"name": "沉陆观测棚", "country": "mo", "sectors": ["观测", "水文"], "tags": ["沉陆"], "base": 18},
+            {"name": "渡口茶棚", "country": "vo", "sectors": ["渡口", "食宿"], "base": 14},
+            {"name": "浮屋骨架行", "country": "sy", "sectors": ["浮屋", "木作"], "base": 19},
+            {"name": "渔汛瞭望台", "country": "ta", "sectors": ["渔获", "瞭望"], "base": 17},
+            {"name": "泥沼采藕队", "country": "za", "sectors": ["泽耕", "采集"], "base": 16},
+            {"name": "小舟赁出行", "country": "du", "sectors": ["舟渡", "赁借"], "base": 15},
+            {"name": "水退播种社", "country": "mo", "sectors": ["泽耕", "播种"], "tags": ["淤肥"], "base": 20},
+            {"name": "芦苇帘编坊", "country": "sy", "sectors": ["芦苇", "编具"], "base": 13},
+            {"name": "堤上巡夜队", "country": "za", "sectors": ["治水", "守夜"], "base": 18},
+            {"name": "水寨灶房", "country": "ta", "sectors": ["渔获", "食宿"], "base": 19},
+            {"name": "浮屋灯油铺", "country": "vo", "sectors": ["浮屋", "照明"], "base": 16},
+            {"name": "泽畔药草棚", "country": "du", "sectors": ["泽耕", "草药"], "base": 17},
+            {"name": "沉船打捞队", "country": "mo", "sectors": ["舟渡", "打捞"], "tags": ["沉陆"], "base": 21},
+            {"name": "芦根磨粉社", "country": "sy", "sectors": ["芦苇", "储粮"], "base": 14},
+            {"name": "浅滩插秧队", "country": "za", "sectors": ["泽耕", "播种"], "base": 15},
+            {"name": "渡口水文所", "country": "ta", "sectors": ["治水", "观测"], "base": 22},
+            {"name": "浮木粮囤", "country": "vo", "sectors": ["浮屋", "储粮"], "base": 17},
+            {"name": "陆沉迁居团", "country": "mo", "sectors": ["迁居", "浮屋"], "tags": ["沉陆"], "base": 19},
+        ],
+        "catalog": [
+            {"name": "浮桥架设队", "country": "vo", "sectors": ["舟渡", "桥梁"], "base": 21},
+            {"name": "泽畔渔网社", "country": "sy", "sectors": ["渔获", "编具"], "base": 19},
+            {"name": "水寨鼓角台", "country": "ta", "sectors": ["渔获", "传信"], "base": 22},
+            {"name": "泥堤加高队", "country": "za", "sectors": ["治水", "土作"], "base": 24},
+            {"name": "浮屋漆作坊", "country": "du", "sectors": ["浮屋", "漆作"], "base": 20},
+            {"name": "芦苇火绒铺", "country": "mo", "sectors": ["芦苇", "火种"], "base": 15},
+            {"name": "渡口验船所", "country": "vo", "sectors": ["舟渡", "检验"], "base": 23},
+            {"name": "泽生菱角队", "country": "sy", "sectors": ["泽耕", "采集"], "base": 16},
+            {"name": "水退田界队", "country": "za", "sectors": ["泽耕", "田界"], "tags": ["淤肥"], "base": 19},
+            {"name": "渔汛占候所", "country": "ta", "sectors": ["渔获", "占候"], "base": 20},
+            {"name": "沉陆迁居社", "country": "mo", "sectors": ["迁居", "食宿"], "tags": ["沉陆"], "base": 18},
+            {"name": "浮木筏屋坊", "country": "du", "sectors": ["浮屋", "木作"], "base": 18},
+        ],
+        "paths": [
+            {"name": "舟渡出海", "kind": "科技", "tag": "舟渡",
+             "desc": "木筏顺着水线漂出了熟悉的海湾，再没有回来", "next": 10},
+            {"name": "泽土淤肥", "kind": "经济", "tag": "淤肥",
+             "desc": "退水留下的淤泥肥得发亮，泽畔人第一次囤起了余粮", "next": 11},
+            {"name": "陆沉再临", "kind": "灾变", "tag": "沉陆",
+             "desc": "地面一段段沉进水里，旧地图上的地名被抹平", "next": 12, "fate": "deluge"},
+        ],
+    },
+    {
+        "name": "火种燎原时代",
+        "theme": "火耕的村落连成一片，夜里的烟柱成了新的路标",
+        "parent": 1,
+    },
+    {
+        "name": "牧野长风时代",
+        "theme": "畜群漫过草坡，牧人赶着牲口走出一条比田埂更宽的路",
+        "parent": 1,
+    },
+    {
+        "name": "陶纹集市时代",
+        "theme": "陶罐上刻着纹路，纹路成了记账的方式，集市第一次有了价",
+        "parent": 1,
+    },
+    {
+        "name": "神谕鼎盛时代",
+        "theme": "神谕从石殿传遍列城，巫祝的每一句话都被当作律法抄写",
+        "parent": 2,
+    },
+    {
+        "name": "祭司列邦时代",
+        "theme": "祭司各据一城，神坛互不往来，列邦只剩名义上的共主",
+        "parent": 2,
+    },
+    {
+        "name": "圣城远征时代",
+        "theme": "石矛与担架一同向北，圣城的墙下堆满了许愿的骨头",
+        "parent": 2,
+    },
+    {
+        "name": "泽国舟渡时代",
+        "theme": "整片国土浮在水上，船坞比耕地还多，孩子先学会撑篙",
+        "parent": 3,
+    },
+    {
+        "name": "洪痕沃土时代",
+        "theme": "洪水退去，留下最肥的一层泥，田界重新按水痕画过",
+        "parent": 3,
+    },
+    {
+        "name": "沉陆余波时代",
+        "theme": "地势一沉再沉，剩下的人把家安在木筏上，坟都漂走了",
+        "parent": 3,
+    },
+]
+
+# 各国君主：均为集权体制，由 AI 智能体扮演，性格各不相同
+_MONARCHS = {
+    "vo": {"name": "霜冕·凛", "style": "铁腕", "persona": "把严寒当作律法，议事厅里只容一个声音"},
+    "du": {"name": "灰冠·杜兰", "style": "守成", "persona": "谨慎节俭，喜欢把每一块铁都记进账"},
+    "ta": {"name": "雷喉·腾", "style": "狂热", "persona": "喉咙比雷还响，坚信远征能解决一切"},
+    "ze": {"name": "风绫·采", "style": "狡黠", "persona": "笑意盈盈，账本里永远藏着三套说法"},
+    "as": {"name": "星阶·远", "style": "孤高", "persona": "住在星穹高台，看众生如看一盘未下完的棋"},
+    "au": {"name": "圣冕·曜", "style": "虔诚", "persona": "开口必引经卷，把圣辉视作天授之权"},
+    "ig": {"name": "熔心·焰", "style": "暴躁", "persona": "一点就着，最恨别人在他面前拖沓"},
+    "ma": {"name": "潮汐·澜", "style": "享乐", "persona": "喜欢珍珠与歌会，治国像在连办三个月宴席"},
+    "dr": {"name": "龙裔·傲", "style": "傲慢", "persona": "自认血统最高贵，从不向任何人低头"},
+    "sy": {"name": "翠庭·蕨", "style": "慈悲", "persona": "心软得见不得任何一只猫挨饿"},
+    "za": {"name": "沙律·卡尔", "style": "务实", "persona": "只信绿洲与商路，谈什么都先问能换多少水"},
+    "no": {"name": "夜影·无", "style": "多疑", "persona": "不信任何人，连自己的影子都要审问"},
+    "ch": {"name": "沙漏·罔", "style": "学者", "persona": "把治国当成一道需要反复验算的方程"},
+    "mo": {"name": "枯骨·寂", "style": "阴郁", "persona": "说话像念悼词，却把殡葬生意经营得井井有条"},
+    "so": {"name": "雾语·眠", "style": "慵懒", "persona": "常在梦与醒之间下诏，政策全靠灵光一现"},
+    "ab": {"name": "深渊·噬", "style": "贪婪", "persona": "什么都要抽成，连呼吸都想收税"},
+    "ci": {"name": "灰誓·契", "style": "无根", "persona": "没有国土的雇佣之主，只认契约与价码"},
+}
+
+# 第一世代只有六国：它们在同一片大陆上连成一气，彼此都能走陆路往来
+_ERA0_COUNTRIES = ["vo", "du", "ta", "sy", "za", "mo"]
+
+# 地图上只写短国名，免得全称把色块挤满
+_ERA0_SHORT_NAMES = {
+    "vo": "沃尔加德",
+    "du": "杜尔卡姆",
+    "ta": "塔尔贡",
+    "sy": "西尔瓦尼斯",
+    "za": "扎哈拉",
+    "mo": "莫尔塔",
+}
+
+# 第一世代的六位开国之主，名字比后世那些冕号更粗粝
+_ERA0_MONARCHS = {
+    "vo": {"name": "守火者·赤", "style": "铁腕", "persona": "守着那堆不肯熄的火，谁想借火种都得先低头"},
+    "du": {"name": "敲石者·杜兰", "style": "守成", "persona": "认得每一块石头的纹路，宁可少打一件也不肯浪费边角"},
+    "ta": {"name": "吼雷·腾", "style": "狂热", "persona": "雷雨天站在坡顶大喊，认定声音大就是道理大"},
+    "sy": {"name": "采蕨·蕨", "style": "慈悲", "persona": "把林子里能吃的都记在心里，见谁饿着都要分一把"},
+    "za": {"name": "引水·卡尔", "style": "务实", "persona": "只关心水往哪边流，谈什么都先问能浇几亩地"},
+    "mo": {"name": "埋骨·寂", "style": "阴郁", "persona": "说起死人像说邻居，把祖辈的骨头摆得整整齐齐"},
+}
+
+# 各国起源：制度一律为集权，君主由各自的智能体扮演
+_COUNTRY_LORE = {
+    "vo": {"system": "集权",
+           "origin": "大陆最北的霜线之外，一年里有半年见不到太阳。最早的几户人家靠着一座不灭的火塘熬过长夜，"
+                     "守火的人渐渐成了说话最算数的人，部族也就围着那堆火长了出来。"},
+    "du": {"system": "集权",
+           "origin": "山腹被雨水冲开，露出第一层能敲出刃口的青石。以石为业的人在山口聚居，"
+                     "把废石堆成了墙，墙又圈出了城，敲石的手艺成了这片地方最早的规矩。"},
+    "ta": {"system": "集权",
+           "origin": "雷雨最密的高地，草木长得矮，人却长得壮。先民靠吼声在雨里传话，"
+                     "能把一整片坡上的人喊齐的那一个，就被推到了最前面。"},
+    "sy": {"system": "集权",
+           "origin": "林冠遮住天光，地面上一年到头都是湿的。先民顺着藤蔓找果子，"
+                     "在最大的那棵树下分食，树荫之下渐渐有了不出林的规矩。"},
+    "za": {"system": "集权",
+           "origin": "沙河每隔几年就改一次道，谁先挖出引水的沟，谁的庄稼就能活。"
+                     "会看水痕的人被推为首领，绿洲也就一座座连成了国。"},
+    "mo": {"system": "集权",
+           "origin": "这片地方的人把先人的骨头砌进祭台，认为亡者仍坐在上头看着活人。"
+                     "能听懂骨头意思的人守着祭台，活人的事最后都要问他一句。"},
+}
 
 
 def _load_json(path: str) -> dict:
@@ -197,31 +592,40 @@ def _extract_json(text: str):
     return data if isinstance(data, dict) else None
 
 
-def _market_hours_between(start: datetime, end: datetime) -> float:
-    """计算两段时间内落在开市时段（08:00~20:00）的小时数，休市时间不计入"""
-    if end <= start:
-        return 0.0
-    total = 0.0
-    day = start.date()
-    last = end.date()
-    while day <= last:
-        open_at = datetime(day.year, day.month, day.day, CAT_STOCK_OPEN_HOUR)
-        close_at = datetime(day.year, day.month, day.day, CAT_STOCK_CLOSE_HOUR)
-        seg_start = max(start, open_at)
-        seg_end = min(end, close_at)
-        if seg_end > seg_start:
-            total += (seg_end - seg_start).total_seconds() / 3600.0
-        day += timedelta(days=1)
-    return total
-
-
 def _lot_sellable(lot: dict) -> bool:
-    """买入后满 4 个开市小时才能卖出，休市时间不计入"""
+    """T+1：当天买入的股份要到第二天才能卖出"""
     try:
         bought = datetime.fromtimestamp(float(lot.get("ts", 0)))
     except (OSError, ValueError, OverflowError):
         return True
-    return _market_hours_between(bought, datetime.now()) >= CAT_STOCK_LOCK_HOURS
+    return bought.date() < datetime.now().date()
+
+
+_WORLD_BEARISH = (
+    "危机", "崩盘", "崩溃", "股灾", "萧条", "衰退", "灾荒", "饥荒",
+    "瘟疫", "疫病", "战争", "开战", "战乱", "叛乱", "革命", "制裁", "封锁",
+    "屠城", "灭国", "末日", "陨石", "洪灾", "旱灾", "地震", "海啸", "龙灾",
+    "魔潮", "破产潮", "挤兑", "恐慌",
+)
+_WORLD_BULLISH = (
+    "繁荣", "兴盛", "盛世", "黄金时代", "复兴", "丰收", "和平", "停战",
+    "通商", "大发现", "奇迹", "神迹", "联姻", "暴富", "横财", "大捷",
+    "矿脉", "宝库", "加冕",
+)
+
+
+def _world_tone(texts: List[str]) -> int:
+    """把生效中的局势设定折算成全盘基调：负为收紧、正为抬升"""
+    score = 0
+    for text in texts:
+        raw = str(text or "")
+        bear = sum(1 for word in _WORLD_BEARISH if word in raw)
+        bull = sum(1 for word in _WORLD_BULLISH if word in raw)
+        if bear > bull:
+            score -= 1
+        elif bull > bear:
+            score += 1
+    return max(-3, min(3, score))
 
 
 class CatStockPlugin:
@@ -235,6 +639,8 @@ class CatStockPlugin:
         self._lock = threading.Lock()
         os.makedirs(STOCK_DIR, exist_ok=True)
         self._ensure_market()
+        self._migrate_economy()
+        self._migrate_era()
         # 网页端复用同一个插件时不需要再起一条调度线程，避免整点重复跑 tick
         if start_scheduler:
             self._start_scheduler()
@@ -251,7 +657,7 @@ class CatStockPlugin:
         router.register(
             ["世界走向", "world"],
             self.cmd_world,
-            description="外部局势",
+            description="[隐藏] 外部局势（仅掌管者可用）",
             permission_check=lambda ctx: ctx.is_private
             and int(ctx.user_id) == CAT_STOCK_WORLD_ADMIN
         )
@@ -259,29 +665,92 @@ class CatStockPlugin:
     # ==================== 行情存档 ====================
 
     def _ensure_market(self) -> None:
-        """首次运行时用静态企业表生成行情文件"""
+        """首次运行时按第一时代生成行情文件"""
         if os.path.exists(MARKET_PATH):
             return
-        companies = {}
-        for c in _INITIAL_COMPANIES:
-            companies[c["code"]] = {
-                "code": c["code"],
-                "name": c["name"],
-                "country": c["country"],
-                "sector": c["sector"],
-                "base": c["base"],
-                "price": float(c["base"]),
-                "prev_close": float(c["base"]),
-            }
+        countries = self._default_countries()
+        companies = {c["code"]: c for c in self._era_pool(0, countries)}
         state = {
             "day": "",
             "companies": companies,
-            "catalog": list(_LISTING_CATALOG),
+            "catalog": self._era_catalog(0, countries),
+            "countries": countries,
+            "era": self._new_era_state({}, 0),
+            "era_version": 2,
             "news": [],
             "last_tick": "",
             "bonds": self._default_bonds(),
+            "meetings": {},
         }
         _save_json(MARKET_PATH, state)
+        self._ensure_era_map()
+
+    def _migrate_economy(self) -> None:
+        """旧股市一次性结算：持仓按现价折成猫薄荷，95:1 换成鱼干，余数留作新市场启动资金"""
+        state = self._load_market()
+        if int(state.get("economy_version", 1) or 1) >= 2:
+            return
+        lock_path = MARKET_PATH + ".migrating"
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            return
+        try:
+            state = self._load_market()
+            if int(state.get("economy_version", 1) or 1) >= 2:
+                return
+            companies = state.get("companies", {})
+            bonds = state.get("bonds", {})
+            players = self._load_stock_players()
+            for key, st in players.items():
+                total = float(st.get("catnip", 0) or 0)
+                for code, lots in (st.get("holdings") or {}).items():
+                    comp = companies.get(code)
+                    if comp:
+                        total += self._shares_of(lots) * float(comp.get("price", 0))
+                for country, lots in (st.get("bonds") or {}).items():
+                    bond = bonds.get(country)
+                    if bond:
+                        total += self._shares_of(lots) * float(bond.get("price", 0))
+                total = max(0, int(round(total)))
+                fish_gain = total // CAT_STOCK_MIGRATE_RATE
+                st["catnip"] = total - fish_gain * CAT_STOCK_MIGRATE_RATE
+                st["holdings"] = {}
+                st["bonds"] = {}
+                # 余额视作初始投入，避免在盈亏排行里被算成赚到的钱
+                st["deposit_catnip"] = st["catnip"]
+                st["withdraw_catnip"] = 0
+                if fish_gain > 0:
+                    try:
+                        qq = int(key)
+                    except (TypeError, ValueError):
+                        continue
+                    player = self._cat._get_player(qq)
+                    if player:
+                        player["fish"] = int(player.get("fish", 0)) + fish_gain
+                        self._cat._update_player(qq, player)
+            self._save_stock_players(players)
+            # 新股市从基准价重新开盘
+            for comp in companies.values():
+                comp["price"] = float(comp.get("base", comp.get("price", 0)))
+                comp["prev_close"] = comp["price"]
+                comp["bad_ticks"] = 0
+                comp["history"] = []
+            for bond in bonds.values():
+                bond["price"] = float(bond.get("base", bond.get("price", 0)))
+                bond["prev_close"] = bond["price"]
+                bond["history"] = []
+            state["economy_version"] = 2
+            self._save_market(state)
+        finally:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            try:
+                os.remove(lock_path)
+            except OSError:
+                pass
 
     def _load_market(self) -> dict:
         state = _load_json(MARKET_PATH)
@@ -289,21 +758,34 @@ class CatStockPlugin:
             self._ensure_market()
             state = _load_json(MARKET_PATH)
         state.setdefault("news", [])
-        state.setdefault("catalog", list(_LISTING_CATALOG))
+        state.setdefault("catalog", [])
         state.setdefault("last_tick", "")
         state.setdefault("day", "")
         state.setdefault("world", {"arc": "", "story": "", "relations": []})
         state.setdefault("world_directives", [])
-        # 老存档补上各国国债（无固定国土的 ci 不发债）
+        state.setdefault("meetings", {})
+        state.setdefault("countries", self._default_countries())
+        state.setdefault("era", self._new_era_state({}, 0))
+        state.setdefault("era_version", 0)
+        # 老企业只记了一个行业，补齐为多行业列表
+        for comp in (state.get("companies") or {}).values():
+            sectors = comp.get("sectors")
+            if not isinstance(sectors, list) or not sectors:
+                sectors = [str(comp.get("sector") or "综合")]
+                comp["sectors"] = sectors
+            comp["sectors"] = [str(s).strip()[:4] for s in sectors if str(s).strip()][:4] or ["综合"]
+            comp["sector"] = comp["sectors"][0]
+        # 老存档补上各国国债（当前只有地图上的六国发债）
         bonds = state.setdefault("bonds", {})
-        for country in _COUNTRY_GEO:
-            if country == "ci":
-                continue
+        for country in list(bonds):
+            if country not in _ERA0_COUNTRIES:
+                bonds.pop(country, None)
+        for country in _ERA0_COUNTRIES:
             bonds.setdefault(country, self._bond_default(country))
         return state
 
     def _default_bonds(self) -> dict:
-        return {c: self._bond_default(c) for c in _COUNTRY_GEO if c != "ci"}
+        return {c: self._bond_default(c) for c in _ERA0_COUNTRIES}
 
     def _bond_default(self, country: str) -> dict:
         return {
@@ -322,6 +804,978 @@ class CatStockPlugin:
     def _save_market(self, state: dict) -> None:
         _save_json(MARKET_PATH, state)
 
+    # ==================== 时代更迭 ====================
+
+    def _default_countries(self) -> dict:
+        """开局列国：初蒙时代只有六国，均为集权体制，君主由各自的智能体扮演"""
+        result = {}
+        for code in _ERA0_COUNTRIES:
+            info = (_ERA0_MONARCHS.get(code)
+                    or _MONARCHS.get(code)
+                    or {"name": f"{code}君主", "style": "集权", "persona": "行事难以捉摸"})
+            lore = _COUNTRY_LORE.get(code) or {}
+            result[code] = {
+                "code": code,
+                "name": self._country_name(code) or code,
+                "alive": True,
+                "system": lore.get("system") or "集权",
+                "origin": lore.get("origin") or "",
+                "monarch": info.get("name") or f"{code}君主",
+                "style": info.get("style") or "集权",
+                "persona": info.get("persona") or "行事难以捉摸",
+                "aggression": round(random.uniform(0.2, 0.8), 2),
+                "power": random.randint(40, 100),
+                "fallen_at": "",
+                "fall_reason": "",
+            }
+        return result
+
+    @staticmethod
+    def _countries_of(countries: Optional[dict] = None) -> List[str]:
+        """当前世界地图上真正存在的国家代码（第一世代六国，灭国后从列国中移除）"""
+        countries = countries or {}
+        codes = [c for c in _ERA0_COUNTRIES if (countries.get(c) or {}).get("alive", True)]
+        return codes or list(_ERA0_COUNTRIES)
+
+    @staticmethod
+    def _era_base(index: int) -> dict:
+        """取某个时代真正使用的设定：三阶时代只写了名字，产业词库从它的来路继承"""
+        idx = index % len(_ERAS)
+        data = _ERAS[idx]
+        parent = data.get("parent")
+        if parent is None:
+            return data
+        base = dict(_ERAS[int(parent) % len(_ERAS)])
+        merged = dict(base)
+        merged.update({k: v for k, v in data.items() if k in ("name", "theme")})
+        merged["index"] = idx
+        merged["parent"] = int(parent)
+        merged.pop("paths", None)
+        return merged
+
+    def _new_era_state(self, era: Optional[dict], index: int) -> dict:
+        era = era if isinstance(era, dict) else {}
+        data = self._era_base(index)
+        start = datetime.now()
+        return {
+            "index": index % len(_ERAS),
+            "name": data["name"],
+            "theme": data["theme"],
+            "parent": data.get("parent"),
+            "started": start.strftime("%Y-%m-%d"),
+            "ends": (start + timedelta(days=CAT_STOCK_ERA_DAYS)).strftime("%Y-%m-%d"),
+            "points": {p["name"]: 0 for p in (data.get("paths") or [])},
+            "techs": list(era.get("techs") or []),
+            "fate": str(era.get("fate") or ""),
+            "history": list(era.get("history") or []),
+            "cycle": int(era.get("cycle", 0) or 0),
+        }
+
+    @staticmethod
+    def _era_expired(era: dict) -> bool:
+        """时代是否真的走满自然日：同时核对起始日与终止日，防住任何提前翻页"""
+        started = str(era.get("started") or "")
+        ends = str(era.get("ends") or "")
+        try:
+            started_dt = datetime.strptime(started, "%Y-%m-%d")
+        except ValueError:
+            return False
+        if (datetime.now().date() - started_dt.date()).days < CAT_STOCK_ERA_DAYS:
+            return False
+        return bool(ends) and datetime.now().strftime("%Y-%m-%d") >= ends
+
+    @staticmethod
+    def _era_code(index: int, seq: int) -> str:
+        """给每个时代的企业编三位大写代码：首字母标记时代，后两位区分企业"""
+        return (chr(65 + (index % 26))
+                + chr(65 + (seq // 26) % 26)
+                + chr(65 + seq % 26))
+
+    def _board_for(self, code: str, index: int) -> List[dict]:
+        """每家公司常驻三位 AI 董事：抽签固定，份额 900/700/500，不同公司面孔不同"""
+        cast = _BOARD_CASTS.get(index) or _BOARD_CAST_DEFAULT
+        rnd = random.Random(sum(ord(ch) for ch in str(code)) * 31 + index * 7)
+        picked = rnd.sample(cast, 3)
+        return [dict(person, shares=shares)
+                for person, shares in zip(picked, (900, 700, 500))]
+
+    def _era_company(self, code: str, name: str, country: str, sectors, base,
+                     index: int = 0, intro: str = "",
+                     tags: Optional[List[str]] = None) -> dict:
+        base = int(max(20, min(300, base or 20)))
+        price = float(max(10, int(base * random.uniform(0.95, 1.05))))
+        if isinstance(sectors, (list, tuple)):
+            secs = [str(s).strip()[:4] for s in sectors if str(s).strip()][:4] or ["综合"]
+        else:
+            secs = [str(sectors).strip()[:4] or "综合"]
+        cname = self._country_name(country) or country
+        if not intro:
+            if index <= 0:
+                # 初蒙时代的商号还没有字号、行会这些说法，来历要写得粗粝一些
+                intro = (f"{cname}地界上最早凑成一伙的一批人，起先只围着{secs[0]}打转，"
+                         f"后来把{'、'.join(secs[1:]) if secs[1:] else '左近的零碎活计'}也一并揽下，"
+                         "章程全靠火塘边一句一句说定。")
+            else:
+                intro = (f"{cname}地界上的老字号，起先只做{secs[0]}，"
+                         f"后来把手伸向{'、'.join(secs[1:]) if secs[1:] else '左近的零碎营生'}。")
+        return {
+            "code": code,
+            "name": name,
+            "country": country,
+            "sector": secs[0],
+            "sectors": secs,
+            "tags": [str(t).strip()[:4] for t in (tags or []) if str(t).strip()][:4],
+            "intro": intro,
+            "board": self._board_for(code, index),
+            "base": base,
+            "price": price,
+            "prev_close": price,
+            "bad_ticks": 0,
+            "momentum": 0.0,
+            "history": [],
+        }
+
+    def _era_pool(self, index: int, countries: Optional[dict] = None) -> List[dict]:
+        """用该时代手写好的企业名录铺出企业池，不再用前后缀临时拼名字"""
+        data = self._era_base(index)
+        countries = countries or self._default_countries()
+        alive = self._countries_of(countries)
+        pool: List[dict] = []
+        for seq, item in enumerate(data.get("companies") or []):
+            country = item.get("country") if item.get("country") in alive else random.choice(alive)
+            secs = item.get("sectors") or item.get("sector") or "综合"
+            pool.append(self._era_company(
+                self._era_code(index, seq), str(item.get("name") or "无名商号")[:10],
+                country, secs, item.get("base") or 30, index,
+                item.get("intro") or "", item.get("tags")))
+        return pool
+
+    def _era_catalog(self, index: int, countries: Optional[dict] = None,
+                     size: int = 0) -> List[dict]:
+        """同时代后期可以补位上市的企业，代码段与在池企业错开"""
+        data = self._era_base(index)
+        countries = countries or self._default_countries()
+        alive = self._countries_of(countries)
+        catalog: List[dict] = []
+        items = list(data.get("catalog") or [])
+        if size > 0:
+            items = items[:size]
+        for seq, item in enumerate(items):
+            country = item.get("country") if item.get("country") in alive else random.choice(alive)
+            secs = item.get("sectors") or item.get("sector") or "综合"
+            code = self._era_code(index, 60 + seq)
+            catalog.append(self._era_company(
+                code, str(item.get("name") or "无名商号")[:10],
+                country, secs, item.get("base") or 30, index,
+                item.get("intro") or "", item.get("tags")))
+        return catalog
+
+    def _ensure_era_map(self, codes: Optional[List[str]] = None) -> str:
+        """随机绘制大陆地图，首次生成后固定；参与的国家变多时重新铺图"""
+        codes = [str(c) for c in (codes or _ERA0_COUNTRIES)]
+        if os.path.exists(CAT_STOCK_ERA_MAP_PATH):
+            meta = _load_json(CAT_STOCK_ERA_MAP_META)
+            if list(meta.get("codes") or []) == codes:
+                return CAT_STOCK_ERA_MAP_PATH
+        if Image is None:
+            return ""
+        os.makedirs(STOCK_DIR, exist_ok=True)
+
+        width, height = 900, 600
+        sw, sh = 450, 300            # 先在小图上算轮廓，再放大，省时间
+
+        # 大陆外轮廓：以画布中心为原点，半径由几条正弦叠加，长出海湾与半岛
+        base_r = random.uniform(0.27, 0.30)
+        harmonics = ((3, 0.050), (5, 0.030), (7, 0.020), (9, 0.013), (13, 0.009), (19, 0.006))
+        phases = [random.uniform(0, math.tau) for _ in harmonics]
+
+        def coast_r(theta: float) -> float:
+            radius = base_r
+            for (k, amp), ph in zip(harmonics, phases):
+                radius += amp * math.sin(k * theta + ph)
+            return max(0.16, radius)
+
+        ocean_dark = (26, 50, 78)
+        ocean_light = (54, 94, 128)
+        coast = (74, 108, 140)
+        rng = random.Random(random.randint(0, 99999))
+        palette = {
+            "vo": (196, 224, 238),
+            "du": (168, 156, 128),
+            "ta": (214, 170, 118),
+            "sy": (150, 186, 142),
+            "za": (222, 208, 150),
+            "mo": (176, 160, 176),
+        }
+        for code in codes:
+            if code not in palette:
+                # 后续世代新增的国家用柔和大地色，避免与已有国色撞车
+                palette[code] = tuple(rng.randint(108, 214) for _ in range(3))
+
+        def is_land(nx: float, ny: float) -> bool:
+            dx, dy = nx - 0.5, ny - 0.5
+            return math.hypot(dx, dy) < coast_r(math.atan2(dy, dx))
+
+        # 先算海陆，再从真正的陆地上随机挑几处作为列国都城
+        seeds: List[Tuple[float, float]] = []
+        gap = min(0.14, max(0.06, 0.34 / math.sqrt(len(codes))))
+        for _ in range(8000):
+            if len(seeds) >= len(codes):
+                break
+            sx = random.uniform(0.22, 0.78)
+            sy = random.uniform(0.22, 0.78)
+            if not is_land(sx, sy):
+                continue
+            if any((sx - ax) ** 2 + (sy - ay) ** 2 < gap ** 2 for ax, ay in seeds):
+                continue
+            seeds.append((sx, sy))
+        # 万一挤不下，就退化成绕中心均匀分布
+        while len(seeds) < len(codes):
+            ang = math.tau * len(seeds) / len(codes)
+            rad = base_r * (0.55 if len(codes) <= 8 else 0.78)
+            seeds.append((0.5 + rad * math.cos(ang), 0.5 + rad * math.sin(ang)))
+
+        img = Image.new("RGB", (sw, sh), ocean_dark)
+        pix = img.load()
+        owners = [[-1] * sw for _ in range(sh)]
+        for y in range(sh):
+            ny = (y + 0.5) / sh
+            for x in range(sw):
+                nx = (x + 0.5) / sw
+                dx, dy = nx - 0.5, ny - 0.5
+                radius = math.hypot(dx, dy)
+                limit = coast_r(math.atan2(dy, dx))
+                if radius >= limit:
+                    # 深海向外压暗，近岸留一圈浅水
+                    deep = min(1.0, (radius - limit) / 0.22)
+                    t = 0.35 * ny + 0.65 * deep
+                    pix[x, y] = tuple(int(ocean_light[i] + (ocean_dark[i] - ocean_light[i]) * t)
+                                      for i in range(3))
+                    continue
+                best = min(range(len(seeds)),
+                           key=lambda i: ((nx - seeds[i][0]) ** 2
+                                          + ((ny - seeds[i][1]) * 0.86) ** 2))
+                owners[y][x] = best
+                base_color = palette[codes[best]]
+                # 内陆亮、沿海暗，再叠一点岩层噪点
+                edge = min(1.0, radius / max(limit, 0.01))
+                shade = 0.98 - 0.16 * edge + rng.uniform(-0.03, 0.03)
+                pix[x, y] = tuple(max(0, min(255, int(c * shade))) for c in base_color)
+
+        # 海面上撒几座无人小岛，让画面不那么空
+        for _ in range(random.randint(2, 4)):
+            ang = random.uniform(0, math.tau)
+            dist = coast_r(ang) + random.uniform(0.07, 0.12)
+            if dist > 0.44:
+                continue
+            ix, iy = 0.5 + dist * math.cos(ang), 0.5 + dist * math.sin(ang)
+            isle_r = random.uniform(0.012, 0.020)
+            for y in range(sh):
+                ny = (y + 0.5) / sh
+                if abs(ny - iy) > isle_r:
+                    continue
+                for x in range(sw):
+                    nx = (x + 0.5) / sw
+                    if (nx - ix) ** 2 + (ny - iy) ** 2 <= isle_r * isle_r:
+                        pix[x, y] = (96, 122, 100)
+
+        draw = ImageDraw.Draw(img)
+        for y in range(sh):
+            for x in range(sw):
+                owner = owners[y][x]
+                if owner < 0:
+                    continue
+                # 国与国之间描一条深色界线，临海的边界描海岸色
+                for dx, dy in ((1, 0), (0, 1), (-1, 0), (0, -1)):
+                    x2, y2 = x + dx, y + dy
+                    if x2 < 0 or y2 < 0 or x2 >= sw or y2 >= sh:
+                        draw.point((x, y), fill=coast)
+                        break
+                    other = owners[y2][x2]
+                    if other >= 0 and other != owner:
+                        draw.point((x, y), fill=(60, 58, 52))
+                        break
+                    if other < 0:
+                        draw.point((x, y), fill=coast)
+                        break
+
+        img = img.resize((width, height), Image.LANCZOS)
+        draw = ImageDraw.Draw(img)
+
+        # 山脉：沿着内陆弧线挤出一串三角山脊，让大陆不至于是一整块平色
+        for _ in range(rng.randint(3, 4)):
+            start = None
+            for _ in range(12):
+                ang = rng.uniform(0, math.tau)
+                rad = rng.uniform(0.04, max(0.05, coast_r(ang) - 0.16))
+                sx, sy = 0.5 + rad * math.cos(ang), 0.5 + rad * math.sin(ang)
+                if is_land(sx, sy):
+                    start = (sx, sy, ang)
+                    break
+            if not start:
+                continue
+            mx, my, ang = start
+            # 山脊大体沿着纬向走，才不会几步就扎进海里
+            heading = ang + math.pi / 2 + rng.uniform(-0.7, 0.7)
+            normal = heading + math.pi / 2
+            for step in range(rng.randint(5, 9)):
+                # 山脊略带偏移，避免排成一条笔直的三角尺
+                drift = rng.uniform(-0.007, 0.007)
+                px = (mx + step * 0.024 * math.cos(heading)
+                      + drift * math.cos(normal))
+                py = (my + step * 0.024 * math.sin(heading)
+                      + drift * math.sin(normal))
+                if not is_land(px, py):
+                    break
+                cx, cy = int(px * width), int(py * height)
+                peak = rng.randint(12, 26)
+                half = peak // 2 + rng.randint(2, 5)
+                draw.polygon(
+                    [(cx - half, cy + peak // 3), (cx, cy - peak // 2),
+                     (cx + half, cy + peak // 3)],
+                    fill=(96, 86, 72), outline=(58, 52, 46))
+                # 向光的一侧留一道浅色山脊
+                draw.line([(cx, cy - peak // 2), (cx + half // 3, cy + peak // 3)],
+                          fill=(140, 126, 108), width=2)
+
+        # 河流：从内陆蜿蜒向外，一直流到海岸线
+        rivers = 0
+        river_target = rng.randint(3, 5)
+        for _ in range(10):
+            if rivers >= river_target:
+                break
+            ang = rng.uniform(0, math.tau)
+            start_r = rng.uniform(0.06, max(0.07, coast_r(ang) - 0.16))
+            if start_r <= 0.05:
+                continue
+            rx, ry = 0.5 + start_r * math.cos(ang), 0.5 + start_r * math.sin(ang)
+            if not is_land(rx, ry):
+                continue
+            points: List[Tuple[int, int]] = []
+            theta = ang
+            for _ in range(44):
+                if not is_land(rx, ry):
+                    break
+                points.append((int(rx * width), int(ry * height)))
+                theta += rng.uniform(-0.24, 0.24)
+                nx = rx + 0.011 * math.cos(theta)
+                ny = ry + 0.011 * math.sin(theta)
+                if not is_land(nx, ny):
+                    points.append((int(nx * width), int(ny * height)))
+                    break
+                rx, ry = nx, ny
+            if len(points) >= 4:
+                draw.line(points, fill=(58, 110, 148), width=4, joint="curve")
+                draw.line(points, fill=(110, 168, 198), width=2, joint="curve")
+                rivers += 1
+
+        font = None
+        for path in ("C:/Windows/Fonts/msyh.ttc", "C:/Windows/Fonts/simhei.ttf"):
+            try:
+                font = ImageFont.truetype(path, 28)
+                break
+            except (OSError, ValueError):
+                continue
+        draw = ImageDraw.Draw(img)
+
+        def overlap(a, b):
+            return not (a[2] < b[0] or b[2] < a[0] or a[3] < b[1] or b[3] < a[1])
+
+        # 国名写在各自陆块的重心，比都城更靠里，不容易压到海岸
+        stats = [[0, 0, 0] for _ in seeds]
+        for y in range(sh):
+            for x in range(sw):
+                owner = owners[y][x]
+                if owner >= 0:
+                    stats[owner][0] += x
+                    stats[owner][1] += y
+                    stats[owner][2] += 1
+        placed: List[Tuple[int, int, int, int]] = []
+        for idx, code in enumerate(codes):
+            count = stats[idx][2]
+            if count:
+                x = int(stats[idx][0] / count * width / sw)
+                y = int(stats[idx][1] / count * height / sh)
+            else:
+                x, y = int(seeds[idx][0] * width), int(seeds[idx][1] * height)
+            label = _ERA0_SHORT_NAMES.get(code) or self._country_name(code) or code
+            if font is not None:
+                # 与已有标签重叠时上下让位，避免挤成一团
+                for shift in (0, 42, -42, 84, -84, 126, -126):
+                    ty = y + shift
+                    if ty < 26 or ty > height - 26:
+                        continue
+                    box = draw.textbbox((x, ty), label, font=font, anchor="mm")
+                    rect = (box[0] - 12, box[1] - 8, box[2] + 12, box[3] + 8)
+                    if all(not overlap(rect, other) for other in placed):
+                        y = ty
+                        break
+                box = draw.textbbox((x, y), label, font=font, anchor="mm")
+                rect = (box[0] - 12, box[1] - 8, box[2] + 12, box[3] + 8)
+                draw.rectangle(rect, fill=(30, 32, 34))
+                draw.text((x, y), label, font=font, anchor="mm", fill=(236, 232, 220))
+                placed.append(rect)
+            else:
+                draw.rectangle((x - 30, y - 18, x + 30, y + 18), outline=(30, 32, 34), width=2)
+                draw.text((x - 20, y - 10), code, fill=(236, 232, 220))
+        # 四角压暗，做成旧羊皮卷的边框
+        draw.rectangle((2, 2, width - 3, height - 3), outline=(24, 24, 24), width=4)
+        try:
+            img.save(CAT_STOCK_ERA_MAP_PATH, format="PNG")
+            _save_json(CAT_STOCK_ERA_MAP_META, {"codes": codes})
+        except OSError:
+            return ""
+        return CAT_STOCK_ERA_MAP_PATH
+
+    def _migrate_era(self) -> None:
+        """旧行情一次性折入第一时代：持仓折成猫薄荷，企业池整体退场"""
+        state = self._load_market()
+        if int(state.get("era_version", 0) or 0) >= 2:
+            return
+        lock_path = MARKET_PATH + ".era"
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            return
+        try:
+            state = self._load_market()
+            if int(state.get("era_version", 0) or 0) >= 2:
+                return
+            players = self._load_stock_players()
+            companies = state.get("companies") or {}
+            for st in players.values():
+                total = float(st.get("catnip", 0) or 0)
+                for code, lots in (st.get("holdings") or {}).items():
+                    comp = companies.get(code)
+                    if comp:
+                        total += self._shares_of(lots) * float(comp.get("price", 0))
+                for short in st.get("shorts") or []:
+                    comp = companies.get(short.get("code"))
+                    px = float(comp.get("price", short.get("entry", 0))) if comp \
+                        else float(short.get("entry", 0))
+                    total += (float(short.get("margin", 0) or 0)
+                              + (float(short.get("entry", 0)) - px) * int(short.get("shares", 0) or 0))
+                st["catnip"] = int(round(total))
+                st["holdings"] = {}
+                st["shorts"] = []
+            countries = self._default_countries()
+            state["countries"] = countries
+            state["companies"] = {c["code"]: c for c in self._era_pool(0, countries)}
+            state["catalog"] = self._era_catalog(0, countries)
+            state["era"] = self._new_era_state({}, 0)
+            state["era_version"] = 2
+            state["meetings"] = {}
+            state["news"] = []
+            state["world"] = {"arc": "", "story": "", "relations": []}
+            state["world_directives"] = []
+            state["day"] = ""
+            state["last_tick"] = ""
+            self._save_stock_players(players)
+            self._save_market(state)
+        finally:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            try:
+                os.remove(lock_path)
+            except OSError:
+                pass
+
+    def _destroy_country(self, market: dict, players: dict, code: str,
+                         reason: str) -> Optional[dict]:
+        """灭国：该国企业一并消失，持仓按末价清算，随后不再出现在任何上市候补里"""
+        countries = market.setdefault("countries", {})
+        info = countries.get(code)
+        if not info or not info.get("alive", True):
+            return None
+        alive = [c for c, v in countries.items() if v.get("alive", True)]
+        if len(alive) <= CAT_STOCK_ERA_COUNTRY_MIN:
+            return None
+        info["alive"] = False
+        info["fallen_at"] = datetime.now().strftime("%Y-%m-%d")
+        info["fall_reason"] = reason
+        companies = market.get("companies") or {}
+        removed = []
+        for comp in list(companies.values()):
+            if comp.get("country") != code:
+                continue
+            payout = int(round(float(comp.get("price", 0)) * CAT_STOCK_ERA_COLLAPSE_RATE))
+            for st in players.values():
+                lots = (st.get("holdings") or {}).pop(comp["code"], None)
+                if lots:
+                    shares = self._shares_of(lots)
+                    if shares > 0:
+                        st["catnip"] = int(st.get("catnip", 0)) + shares * payout
+                self._close_shorts_for(st, comp["code"], float(payout),
+                                       "亡国清算")
+            companies.pop(comp["code"], None)
+            removed.append(str(comp.get("name") or comp["code"]))
+        market["catalog"] = [c for c in (market.get("catalog") or [])
+                             if c.get("country") != code]
+        detail = reason or "王庭倾覆，国号从地图上抹去"
+        if removed:
+            detail += f"；{self._country_name(code)}的 {len(removed)} 家企业随之消失"
+        detail += f"，持仓按末价 {CAT_STOCK_ERA_COLLAPSE_RATE:.0%} 清算"
+        return {"title": f"亡国：{self._country_name(code)}的君主陨落，国号不复存在",
+                "detail": detail}
+
+    def _era_country_actions(self, market: dict, players: dict,
+                             actions: Optional[dict]) -> List[dict]:
+        """列国君主的战和举动：结盟、宣战、变法、灾疫，偶尔直接灭国"""
+        news: List[dict] = []
+        countries = market.get("countries") or {}
+        era = market.get("era") or {}
+        data = self._era_base(int(era.get("index", 0) or 0))
+        points = era.setdefault("points", {})
+        companies = market.get("companies") or {}
+        for item in (actions or {}).get("country_actions") or []:
+            if not isinstance(item, dict):
+                continue
+            a = str(item.get("a") or "").strip()
+            b = str(item.get("b") or "").strip()
+            act = str(item.get("action") or "").strip()
+            detail = str(item.get("detail") or "").strip()[:60]
+            if a not in countries or not countries[a].get("alive", True):
+                continue
+            monarch = countries[a].get("monarch", "")
+            if act in ("war", "战争", "开战"):
+                if (b not in countries or b == a
+                        or not countries[b].get("alive", True)
+                        or not self._are_adjacent(a, b)):
+                    continue
+                for comp in companies.values():
+                    if comp.get("country") in (a, b):
+                        comp["price"] = max(
+                            1.0, float(comp["price"]) * (1 - random.uniform(0.02, 0.06)))
+                for path in data.get("paths") or []:
+                    if path.get("kind") == "战争" or "战" in str(path.get("tag") or ""):
+                        points[path["name"]] = int(points.get(path["name"], 0)) + random.randint(8, 16)
+                news.append({
+                    "title": f"{self._country_name(a)}与{self._country_name(b)}爆发战事",
+                    "detail": (detail or f"{monarch}下令出兵，边境烽火连天") + "，两国企业随之震荡",
+                })
+                if random.random() < CAT_STOCK_ERA_WAR_CHANCE:
+                    loser = b if random.random() < 0.5 else a
+                    fallen = self._destroy_country(market, players, loser, "战火焚城，王庭倾覆")
+                    if fallen:
+                        news.append(fallen)
+            elif act in ("alliance", "同盟", "结盟"):
+                if b not in countries or b == a or not countries[b].get("alive", True):
+                    continue
+                for comp in companies.values():
+                    if comp.get("country") in (a, b):
+                        comp["price"] = max(
+                            1.0, float(comp["price"]) * (1 + random.uniform(0.01, 0.03)))
+                news.append({
+                    "title": f"{self._country_name(a)}与{self._country_name(b)}缔结盟约",
+                    "detail": detail or f"{monarch}与邻国君主交换信物，商路重新开放",
+                })
+            elif act in ("reform", "改革", "新政"):
+                for comp in companies.values():
+                    if comp.get("country") == a:
+                        comp["price"] = max(
+                            1.0, float(comp["price"]) * (1 + random.uniform(0.01, 0.04)))
+                for path in data.get("paths") or []:
+                    if path.get("kind") in ("科技", "政治", "社会"):
+                        points[path["name"]] = int(points.get(path["name"], 0)) + random.randint(2, 6)
+                news.append({
+                    "title": f"{self._country_name(a)}颁布新政",
+                    "detail": detail or f"{countries[a].get('style', '')}的{monarch}推行变法，商界议论纷纷",
+                })
+            elif act in ("plague", "灾疫", "crisis", "灾变"):
+                for comp in companies.values():
+                    if comp.get("country") == a:
+                        comp["price"] = max(
+                            1.0, float(comp["price"]) * (1 - random.uniform(0.03, 0.07)))
+                for path in data.get("paths") or []:
+                    if path.get("kind") in ("灾变", "信仰", "社会"):
+                        points[path["name"]] = int(points.get(path["name"], 0)) + random.randint(2, 6)
+                news.append({
+                    "title": f"{self._country_name(a)}境内灾情蔓延",
+                    "detail": detail or f"{self._country_name(a)}仓廪告急，君主{monarch}下令封锁边境",
+                })
+                if random.random() < CAT_STOCK_ERA_WAR_CHANCE:
+                    fallen = self._destroy_country(market, players, a, "灾疫失控，王庭无人主事")
+                    if fallen:
+                        news.append(fallen)
+        era["points"] = points
+        return news
+
+    def _era_rebuild(self, market: dict, players: dict, path: dict) -> List[dict]:
+        """走向抵达终点：同源企业跨世代延续并暴涨，其余企业退场清算"""
+        old = market.get("era") or {}
+        old_index = int(old.get("index", 0) or 0) % len(_ERAS)
+        next_index = int(path.get("next", (old_index + 1) % len(_ERAS))) % len(_ERAS)
+        fate = str(path.get("fate") or "")
+        companies = market.get("companies") or {}
+        tag = str(path.get("tag") or "")
+
+        # 与这条历史走向同源的商号：行业或标签命中走向，可延续到下一个世代
+        survivor_codes: List[str] = []
+        for code, comp in companies.items():
+            sectors = [str(s) for s in (comp.get("sectors")
+                                        or [comp.get("sector") or ""])]
+            tags = [str(t) for t in (comp.get("tags") or [])]
+            if tag and (tag in sectors or tag in tags):
+                survivor_codes.append(code)
+
+        for st in players.values():
+            total = float(st.get("catnip", 0) or 0)
+            kept: dict = {}
+            for code, lots in (st.get("holdings") or {}).items():
+                if code in survivor_codes and code in companies:
+                    kept[code] = lots
+                    continue
+                comp = companies.get(code)
+                if comp:
+                    total += self._shares_of(lots) * float(comp.get("price", 0))
+            for short in st.get("shorts") or []:
+                comp = companies.get(short.get("code"))
+                px = float(comp.get("price", short.get("entry", 0))) if comp \
+                    else float(short.get("entry", 0))
+                total += (float(short.get("margin", 0) or 0)
+                          + (float(short.get("entry", 0)) - px) * int(short.get("shares", 0) or 0))
+            st["catnip"] = int(round(total))
+            st["holdings"] = kept
+            st["shorts"] = []
+
+        countries = market.get("countries") or self._default_countries()
+        market["countries"] = countries
+        fate_news: List[dict] = []
+        if fate in ("wasteland", "silence", "collapse", "deluge"):
+            # 延续下来的商号所在国不在此次灾变中亡国，否则刚接上的香火又断
+            sheltered = {companies[c].get("country") for c in survivor_codes}
+            for _ in range(random.randint(0, 2)):
+                alive = [c for c, v in countries.items()
+                         if v.get("alive", True) and c != "ci" and c not in sheltered]
+                if len(alive) <= CAT_STOCK_ERA_COUNTRY_MIN:
+                    break
+                fallen = self._destroy_country(
+                    market, players, random.choice(alive),
+                    f"{path.get('name', '大灾变')}席卷全境")
+                if fallen:
+                    fate_news.append(fallen)
+
+        survivors: List[dict] = []
+        for code in survivor_codes:
+            comp = companies.get(code)
+            if not comp:
+                continue
+            boost = random.uniform(1.25, 1.65)
+            old_base = float(comp.get("base") or comp.get("price") or 30)
+            comp["base"] = int(max(20, min(300, old_base * boost)))
+            comp["price"] = round(max(1.0, min(
+                float(comp.get("price") or old_base) * boost, comp["base"] * 50)), 2)
+            comp["prev_close"] = comp["price"]
+            comp["bad_ticks"] = 0
+            comp["momentum"] = 0.0
+            survivors.append(comp)
+
+        pool = self._era_pool(next_index, countries)
+        companies.clear()
+        companies.update({c["code"]: c for c in pool})
+        companies.update({c["code"]: c for c in survivors})
+        market["catalog"] = self._era_catalog(next_index, countries)
+        market["meetings"] = {}
+
+        history = list(old.get("history") or [])
+        history.append({
+            "index": old_index,
+            "name": old.get("name", ""),
+            "path": path.get("name", ""),
+            "kind": path.get("kind", ""),
+            "at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        })
+        new_era = self._new_era_state(
+            {"history": history, "techs": old.get("techs"), "cycle": old.get("cycle")},
+            next_index)
+        new_era["fate"] = fate
+        if path.get("kind") == "科技" and path.get("name"):
+            techs = list(new_era.get("techs") or [])
+            techs.append(path["name"])
+            new_era["techs"] = techs[-12:]
+        if next_index <= old_index:
+            new_era["cycle"] = int(old.get("cycle", 0) or 0) + 1
+        market["era"] = new_era
+
+        data = self._era_base(next_index)
+        kept_line = ""
+        if survivors:
+            names = "、".join(c["name"] for c in survivors[:4])
+            kept_line = (f"；{names}{'等' if len(survivors) > 4 else ''} "
+                         f"{len(survivors)} 家与「{path.get('name', '')}」同源的商号跨世代延续，"
+                         "持股原样保留，并因抢占先机而身价大涨")
+        news = [{
+            "title": f"纪元更迭：{path.get('name', '旧时代落幕')}——世界翻到「{data['name']}」",
+            "detail": (f"{path.get('desc', '')}。其余旧时代企业尽数落幕，"
+                       f"持仓已按旧时代末价折成猫薄荷{kept_line}；{data.get('theme', '')}"),
+        }]
+        news.extend(fate_news)
+        return news
+
+    def _path_aligned(self, companies: dict, path: dict) -> List[str]:
+        """与某条历史走向相关的企业代码：行业或标签命中走向"""
+        tag = str(path.get("tag") or "")
+        if not tag:
+            return []
+        return [code for code, comp in companies.items()
+                if tag in self._sectors_of(comp)
+                or tag in [str(t) for t in (comp.get("tags") or [])]]
+
+    def _path_weight_facts(self, market: dict, players: dict,
+                           paths: List[dict]) -> List[dict]:
+        """把每条走向的资金、方针、企业现状整理成给 AI 判断的素材"""
+        companies = market.get("companies") or {}
+        points = (market.get("era") or {}).get("points") or {}
+        facts: List[dict] = []
+        for path in paths:
+            aligned = self._path_aligned(companies, path)
+            invest = 0.0
+            short_value = 0.0
+            holder_count = 0
+            samples: List[str] = []
+            policies: List[str] = []
+            for code in aligned:
+                comp = companies.get(code) or {}
+                price = float(comp.get("price") or comp.get("base") or 1)
+                policy = str(comp.get("policy") or "")
+                if policy:
+                    policies.append(policy[:40])
+                if len(samples) < 3:
+                    samples.append(
+                        f"{comp.get('name', '')}（{'、'.join(self._sectors_of(comp))}，"
+                        f"现价 {self._fmt_price(price)}）")
+                for st in players.values():
+                    shares = self._shares_of((st.get("holdings") or {}).get(code, []))
+                    if shares > 0:
+                        invest += shares * price
+                        holder_count += 1
+                    for short in st.get("shorts") or []:
+                        if short.get("code") == code:
+                            short_value += int(short.get("shares", 0) or 0) * price
+            facts.append({
+                "path": path,
+                "count": len(aligned),
+                "invest": int(round(invest)),
+                "short_value": int(round(short_value)),
+                "holder_count": holder_count,
+                "samples": samples,
+                "policies": policies[:3],
+                "points": int(points.get(path.get("name", ""), 0) or 0),
+            })
+        return facts
+
+    def _floor_weights(self, weights: List[float]) -> List[float]:
+        """每条走向都保留最低 10% 的可能性：押注再多也不能把别的历史节点彻底压死"""
+        if len(weights) <= 1:
+            return weights
+        floor = min(0.1, 1.0 / len(weights))
+        for _ in range(30):
+            total = sum(weights)
+            if total <= 0:
+                break
+            adjusted = [max(w, total * floor) for w in weights]
+            if all(abs(a - b) < 1e-9 for a, b in zip(adjusted, weights)):
+                break
+            weights = adjusted
+        return weights
+
+    def _directive_matches(self, directive: dict, paths: List[dict]) -> List[dict]:
+        """人工世界走向点名的历史节点（按标签或名称匹配）"""
+        if int(directive.get("remaining", 0)) <= 0:
+            return []
+        text = str(directive.get("text") or "")
+        return [p for p in paths
+                if (p.get("tag") and str(p["tag"]) in text) or p.get("name") in text]
+
+    def _apply_directive_weights(self, market: dict, paths: List[dict],
+                                 weights: List[float]) -> List[float]:
+        """人工世界走向的权重压过 AI 与机械判断，防止世界线超出掌控"""
+        adjusted = list(weights)
+        for directive in market.get("world_directives") or []:
+            for path in self._directive_matches(directive, paths):
+                idx = paths.index(path)
+                adjusted[idx] = adjusted[idx] * 12 + 20
+        return self._floor_weights(adjusted)
+
+    def _path_weights(self, market: dict, players: dict, paths: List[dict]) -> List[float]:
+        """机械兜底：按玩家行为给各条历史走向加权。
+
+        按每条走向的相关企业数做归一化，避免相关企业多的走向天然占便宜；
+        买进相关公司会把它推高，做空则会压低；公司方针点名了走向也添一份分量。
+        """
+        companies = market.get("companies") or {}
+        points = (market.get("era") or {}).get("points") or {}
+        weights: List[float] = []
+        for path in paths:
+            tag = str(path.get("tag") or "")
+            pname = str(path.get("name") or "")
+            aligned = self._path_aligned(companies, path)
+            score = 5.0 + float(points.get(pname, 0)) * 0.05
+            contrib = 0.0
+            for code in aligned:
+                comp = companies.get(code) or {}
+                price = float(comp.get("price", comp.get("base", 0)) or 0)
+                policy = str(comp.get("policy") or "")
+                if policy and (tag in policy or (pname and pname in policy)):
+                    contrib += 6.0
+                for st in players.values():
+                    shares = self._shares_of((st.get("holdings") or {}).get(code, []))
+                    if shares > 0:
+                        contrib += math.sqrt(shares * price) * 0.08
+                    for short in st.get("shorts") or []:
+                        if short.get("code") != code:
+                            continue
+                        s_shares = int(short.get("shares", 0) or 0)
+                        if s_shares > 0:
+                            contrib -= math.sqrt(s_shares * price) * 0.08
+            score += contrib / max(1, len(aligned))
+            weights.append(max(1.0, score))
+        return self._apply_directive_weights(market, paths,
+                                             self._floor_weights(weights))
+
+    def _ai_path_weights(self, market: dict, players: dict,
+                         paths: List[dict]) -> Optional[List[float]]:
+        """让 AI 综合玩家投入、做空、方针、新闻与时代叙事来判断各走向的可能性"""
+        if not self._ai or len(paths) <= 1:
+            return None
+        facts = self._path_weight_facts(market, players, paths)
+        names = [str(p.get("name") or "") for p in paths]
+        lines = []
+        for fact in facts:
+            path = fact["path"]
+            line = (f"- 走向「{path.get('name', '')}」（{path.get('kind', '')}｜"
+                    f"标签 {path.get('tag', '')}）：{path.get('desc', '')}；"
+                    f"局势积累 {fact['points']}｜相关企业 {fact['count']} 家")
+            if fact["samples"]:
+                line += "｜" + "；".join(fact["samples"])
+            line += (f"｜玩家累计投入 {fact['invest']} 猫薄荷、做空 {fact['short_value']} 猫薄荷、"
+                     f"参与股东 {fact['holder_count']} 人")
+            if fact["policies"]:
+                line += "｜现有方针：" + "；".join(fact["policies"])
+            lines.append(line)
+        news = (market.get("news") or [])[:8]
+        news_block = ("\n最近的世界新闻：\n"
+                      + "\n".join(f"- {n.get('title', '')}" for n in news if n.get("title"))
+                      if news else "")
+        world = market.get("world") or {}
+        world_block = ""
+        if world.get("arc") or world.get("story"):
+            world_block = (f"\n当前世界主线：{world.get('arc', '')}\n"
+                           f"世界发展脉络：{world.get('story', '')}")
+        directives = [d for d in (market.get("world_directives") or [])
+                      if int(d.get("remaining", 0)) > 0]
+        directive_block = ""
+        if directives:
+            directive_block = ("\n掌管者下达的世界走向（最高优先级，必须服从，但只能写成世界大势，"
+                               "不能写成具体命令）：\n"
+                               + "\n".join(f"- {d.get('text', '')}" for d in directives))
+        era = market.get("era") or {}
+        prompt = (
+            "你是奇幻世界《猫猫远征队》if 线的史官，要在时代翻页前判断这个世界最可能走向哪种结局。\n"
+            f"当前时代：{era.get('name', '')}——{era.get('theme', '')}，"
+            f"期限 {era.get('ends', '')}。\n"
+            + "\n".join(lines) + news_block + world_block + directive_block +
+            "\n\n请忽略「相关企业家数多就天然占优」这种机械偏差，以真实因果来判断："
+            "资金持续投入、重仓与做空、公司方针、连续新闻事件、时代积累与人物动向，"
+            "都会把世界推向某条结局；资金撤走或做空则会削弱它。"
+            "请给每条走向打 0~100 的可能性分，并写一句简短理由。\n"
+            "如果掌管者的世界走向点名了某条结局，该结局必须明显高于其余结局；"
+            "但除非写明锁定，其他结局仍应保留至少 10% 的翻页可能，不要把话说死。\n"
+            "只输出 JSON：{\"weights\":[{\"name\":\"走向名称\",\"score\":0到100,"
+            "\"reason\":\"不超过20字的因果理由\"}]}"
+        )
+        try:
+            raw = self._ai._call_ai(
+                Config.AI_MODEL["chat"],
+                [{"role": "system", "content": "你是奇幻世界的史官，只输出 JSON。"},
+                 {"role": "user", "content": prompt}],
+                temperature=0.4, max_retries=1, max_tokens=500,
+            )
+        except Exception as e:
+            print(f"[cat_stock] era weights failed: {e}")
+            return None
+        data = _extract_json(raw) if isinstance(raw, str) else raw
+        if not isinstance(data, dict):
+            return None
+        rows = data.get("weights") or data.get("paths") or []
+        mapping: Dict[str, float] = {}
+        for item in rows:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "").strip()
+            score = item.get("score", item.get("weight"))
+            if name not in names or not isinstance(score, (int, float)):
+                continue
+            mapping[name] = max(1.0, min(100.0, float(score)))
+        if not mapping:
+            return None
+        # AI 漏写的走向按低位处理，但仍受 10% 保底保护
+        return self._floor_weights([mapping.get(n, 5.0) for n in names])
+
+    def _final_path_weights(self, market: dict, players: dict,
+                            paths: List[dict]) -> List[float]:
+        """优先采用 AI 综合判断；AI 不可用时退回机械兜底"""
+        ai_weights = self._ai_path_weights(market, players, paths)
+        if ai_weights:
+            return self._apply_directive_weights(market, paths, ai_weights)
+        return self._path_weights(market, players, paths)
+
+    def _era_step(self, market: dict, players: dict,
+                  actions: Optional[dict]) -> List[dict]:
+        """每个整点推进时代：累积走向、处理列国战和、必要时翻页"""
+        era = market.get("era")
+        if not isinstance(era, dict):
+            era = self._new_era_state({}, 0)
+            market["era"] = era
+        index = int(era.get("index", 0) or 0) % len(_ERAS)
+        data = self._era_base(index)
+        paths = list(data.get("paths") or [])
+        if not paths:
+            # 三阶时代只写了名字，没有继续分岔的走向：期限到了就回到最初的火塘
+            if not self._era_expired(era):
+                return []
+            return self._era_rebuild(market, players, {
+                "name": "旧世重演", "kind": "轮回",
+                "desc": "这一支世界线写到末页，史官的笔又重新蘸了墨",
+                "next": 0,
+            })
+        points = era.setdefault("points", {})
+        for path in paths:
+            points.setdefault(path["name"], 0)
+
+        # 生效中的世界走向如果点名了某条路径，会显著推快它
+        for directive in market.get("world_directives") or []:
+            if int(directive.get("remaining", 0)) <= 0:
+                continue
+            text = str(directive.get("text") or "")
+            for path in paths:
+                tag = str(path.get("tag") or "")
+                if (tag and tag in text) or path["name"] in text:
+                    points[path["name"]] = int(points.get(path["name"], 0)) + 8
+
+        hint = (actions or {}).get("era_hint") or {}
+        name = str(hint.get("path") or "").strip()
+        if name in points:
+            try:
+                gain = int(float(hint.get("points", 2)))
+            except (TypeError, ValueError):
+                gain = 2
+            points[name] = int(points.get(name, 0)) + max(0, min(5, gain))
+        else:
+            points[random.choice(paths)["name"]] += 1
+
+        news = self._era_country_actions(market, players, actions)
+        era["points"] = points
+
+        # 每满 30 天推进一个时代：按 AI 综合判断的可能性翻页
+        if self._era_expired(era):
+            chosen = random.choices(
+                paths, weights=self._final_path_weights(market, players, paths), k=1)[0]
+            news.extend(self._era_rebuild(market, players, chosen))
+        return news
+
     def _load_stock_players(self) -> dict:
         return _load_json(STOCK_PLAYERS_PATH)
 
@@ -329,7 +1783,7 @@ class CatStockPlugin:
         _save_json(STOCK_PLAYERS_PATH, players)
 
     def _stock_player(self, qq: int, players: dict) -> dict:
-        """取玩家股市账本，首次使用赠送初始猫薄荷"""
+        """取玩家股市账本，新玩家开户即领 1000 猫薄荷"""
         key = str(qq)
         if key not in players:
             players[key] = {"catnip": CAT_STOCK_INITIAL_CATNIP, "holdings": {}, "bonds": {}}
@@ -337,6 +1791,7 @@ class CatStockPlugin:
         st.setdefault("catnip", CAT_STOCK_INITIAL_CATNIP)
         st.setdefault("holdings", {})
         st.setdefault("bonds", {})
+        st.setdefault("shorts", [])
         return st
 
     # ==================== 小工具 ====================
@@ -357,13 +1812,44 @@ class CatStockPlugin:
         countries = getattr(self._cat, "_countries", {}) or {}
         return countries.get(code, code)
 
+    @staticmethod
+    def _sectors_of(comp: dict) -> List[str]:
+        sectors = comp.get("sectors")
+        if isinstance(sectors, list) and sectors:
+            return [str(s) for s in sectors if str(s)]
+        return [str(comp.get("sector") or "综合")]
+
+    @staticmethod
+    def _normalize_sectors(sector, sectors, fallback: str = "综合") -> List[str]:
+        """把 AI 给的行业字段整理成去重后的短列表"""
+        source = sectors if isinstance(sectors, list) and sectors else ([sector] if sector else [])
+        out: List[str] = []
+        for raw in source:
+            name = str(raw).strip()[:4]
+            if name and name not in out:
+                out.append(name)
+        return out[:4] or [fallback]
+
+    def _holding_limit_error(self, st: dict, code: str, new_shares: int) -> Optional[str]:
+        """重点持股公司最多两家，其余公司只能留一小把股份；返回拒绝文案"""
+        holdings = st.get("holdings") or {}
+        majors = {c for c, lots in holdings.items()
+                  if c != code and self._shares_of(lots) > CAT_STOCK_SMALL_HOLDING_MAX}
+        if new_shares <= CAT_STOCK_SMALL_HOLDING_MAX:
+            return None
+        if len(majors) >= CAT_STOCK_MAJOR_COMPANIES_MAX:
+            return ("交易所提醒：你已经在两家公司持有重要股份，其余公司只允许保留"
+                    f" {CAT_STOCK_SMALL_HOLDING_MAX} 股以内的零散股份喵。")
+        return None
+
     def _are_adjacent(self, a: str, b: str) -> bool:
         geo = _COUNTRY_GEO.get(a) or {}
         return b in geo.get("land", []) or b in geo.get("sea", [])
 
     def _geography_prompt(self) -> str:
         lines = ["\n世界地理（国家间互动必须符合地图距离与连通性）："]
-        for code, geo in _COUNTRY_GEO.items():
+        for code in _ERA0_COUNTRIES:
+            geo = _COUNTRY_GEO.get(code) or {}
             name = self._country_name(code)
             if geo.get("note"):
                 lines.append(f"- {name}（{code}）：{geo['note']}")
@@ -420,12 +1906,6 @@ class CatStockPlugin:
     def _shares_of(self, lots: List[dict]) -> int:
         return sum(int(lot.get("shares", 0)) for lot in lots)
 
-    def _avg_cost(self, lots: List[dict]) -> float:
-        shares = self._shares_of(lots)
-        if shares <= 0:
-            return 0.0
-        return sum(float(lot.get("price", 0)) * int(lot.get("shares", 0)) for lot in lots) / shares
-
     # ==================== 命令入口 ====================
 
     def cmd_stock(self, ctx: CommandContext) -> None:
@@ -450,23 +1930,38 @@ class CatStockPlugin:
         elif sub in ("排行", "榜单", "排名", "盈亏榜", "rank"):
             self._show_rank(target)
         elif sub in ("国债", "债券", "bond"):
-            self._show_bonds(target, ctx.user_id)
+            self._bonds_unavailable(target)
         elif sub in ("买国债", "买入国债", "购国债", "buybond"):
-            self._bond_buy(target, ctx.user_id, rest)
+            self._bonds_unavailable(target)
         elif sub in ("卖国债", "卖出国债", "抛售国债", "sellbond"):
-            self._bond_sell(target, ctx.user_id, rest)
+            self._bonds_unavailable(target)
         elif sub in ("国策", "国家方针", "national"):
-            self._set_country_policy(target, ctx.user_id, rest)
+            self._bonds_unavailable(target)
         elif sub in ("买", "买入", "购", "buy"):
             self._buy(target, ctx.user_id, rest)
         elif sub in ("卖", "卖出", "抛", "抛售", "sell"):
             self._sell(target, ctx.user_id, rest)
+        elif sub in ("做空", "空", "short", "开空"):
+            self._short(target, ctx.user_id, rest)
+        elif sub in ("平空", "回补", "cover"):
+            self._cover(target, ctx.user_id, rest)
+        elif sub in ("国家", "列国", "国家介绍", "country"):
+            self._show_country(target, rest)
+        elif sub in ("拓展", "扩营", "拓营", "expand"):
+            self._change_sector(target, ctx.user_id, rest, replace=False)
+        elif sub in ("改营", "转型", "switch"):
+            self._change_sector(target, ctx.user_id, rest, replace=True)
         elif sub in ("充值", "兑", "兑换", "存入"):
             self._deposit(target, ctx.user_id, rest)
         elif sub in ("提现", "取", "取出"):
             self._withdraw(target, ctx.user_id, rest)
         elif sub in ("方针", "政策", "policy"):
-            self._set_policy(target, ctx.user_id, rest)
+            self._sender.send_text(
+                target,
+                "经营方针现在只能由董事会当场议定喵～\n"
+                "持股最多、且股份够多的股东，去网页版股票详情里按下「召集股东大会」，"
+                "十分钟内议出新路子，再由在场股东确认三套方针。"
+            )
         else:
             # 直接输入企业代码/名称时给出该股详情
             comp = self._resolve_company(self._load_market(), parts[0])
@@ -475,7 +1970,7 @@ class CatStockPlugin:
             else:
                 self._sender.send_text(
                     target,
-                    "没有这个子命令喵～ 可用：大盘 / 新闻 / 持仓 / 买 / 卖 / 国债 / 买国债 / 卖国债 / 国策 / 充值 / 提现 / 排行 / 方针\n"
+                    "没有这个子命令喵～ 可用：大盘 / 新闻 / 持仓 / 买 / 卖 / 充值 / 提现 / 排行\n"
                     "发送「喵股市 帮助」查看完整说明"
                 )
 
@@ -484,24 +1979,67 @@ class CatStockPlugin:
     def cmd_world(self, ctx: CommandContext) -> None:
         target = Target.from_data(ctx.raw_data)
         raw = ctx.get_args().strip()
-        ticks = CAT_STOCK_WORLD_TICKS
-        text = raw
         head, _, tail = raw.partition(" ")
-        if head.isdigit():
-            ticks = max(1, min(48, int(head)))
-            text = tail.strip()
+        head = head.strip()
+        tail = tail.strip()
+        ticks = CAT_STOCK_WORLD_TICKS
 
         def is_active(item: dict) -> bool:
             return (int(item.get("remaining", 0)) > 0
                     and item.get("from") == CAT_STOCK_WORLD_ADMIN)
 
+        def usage() -> str:
+            return ("【世界走向·掌管者指令】\n"
+                    "世界走向 <窗口数> <内容> —— 记下世界大势，影响新闻与全盘股价\n"
+                    "世界走向 扶持 <企业代码/名称> [窗口数] —— 接下来若干整点持续推高该企业\n"
+                    "世界走向 打压 <企业代码/名称> [窗口数] —— 接下来若干整点持续压低该企业\n"
+                    "世界走向 解除 <企业代码/名称|全部> —— 解除对该企业的扶持或打压\n"
+                    "世界走向 状态 —— 查看生效中的世界大势与企业干预\n"
+                    "世界走向 删除 <序号|全部> / 清空 —— 删除世界大势，清空会连企业干预一起清掉")
+
         with self._lock:
             market = self._load_market()
             directives = market.setdefault("world_directives", [])
             active = [d for d in directives if is_active(d)]
-            if head in ("删除", "删", "delete", "del"):
+            company_directives = market.setdefault("company_directives", [])
+            company_active = [d for d in company_directives
+                              if int(d.get("remaining", 0)) > 0
+                              and d.get("from") == CAT_STOCK_WORLD_ADMIN]
+
+            if not raw or head in ("帮助", "help", "?", "？"):
+                message = usage()
+                if active:
+                    message += "\n\n当前生效的世界大势：\n" + "\n".join(
+                        f"{i}. {d.get('text', '')}（剩 {int(d.get('remaining', 0))} 个整点）"
+                        for i, d in enumerate(active, 1))
+                if company_active:
+                    message += "\n\n当前企业干预：\n" + "\n".join(
+                        f"- {d.get('name', d.get('code', ''))}：{d.get('mode', '')}"
+                        f"（剩 {int(d.get('remaining', 0))} 个整点）"
+                        for d in company_active)
+            elif head in ("状态", "查看", "state"):
+                lines = [usage().split("\n")[0]]
+                if active:
+                    lines.append("生效大势：\n" + "\n".join(
+                        f"{i}. {d.get('text', '')}（剩 {int(d.get('remaining', 0))} 个整点）"
+                        for i, d in enumerate(active, 1)))
+                else:
+                    lines.append("生效大势：无")
+                if company_active:
+                    lines.append("企业干预：\n" + "\n".join(
+                        f"- {d.get('name', d.get('code', ''))}（{d.get('code', '')}）"
+                        f"：{d.get('mode', '')}，剩 {int(d.get('remaining', 0))} 个整点"
+                        for d in company_active))
+                else:
+                    lines.append("企业干预：无")
+                message = "\n".join(lines)
+            elif head in ("删除", "删", "delete", "del", "清空", "clear"):
                 arg = tail.strip()
-                if arg in ("全部", "所有", "all"):
+                if head in ("清空", "clear"):
+                    market["world_directives"] = []
+                    market["company_directives"] = []
+                    message = "已清空全部世界大势与企业干预。"
+                elif arg in ("全部", "所有", "all"):
                     market["world_directives"] = [d for d in directives if not is_active(d)]
                     message = "已删除全部生效中的世界走向。"
                 elif arg.isdigit() and 1 <= int(arg) <= len(active):
@@ -509,23 +2047,74 @@ class CatStockPlugin:
                     market["world_directives"] = [d for d in directives if d is not victim]
                     message = f"已删除第 {arg} 条：{victim.get('text', '')}"
                 else:
-                    message = "用法：世界走向 删除 <序号>；世界走向 删除 全部"
-            elif text:
-                directives.append({"text": text[:100],
-                                   "ticks": ticks,
-                                   "remaining": ticks,
-                                   "from": int(ctx.user_id),
-                                   "at": datetime.now().strftime("%m-%d %H:%M")})
-                market["world_directives"] = directives[-20:]
-                message = (f"已记录世界走向：{text[:100]}\n"
-                           f"将在接下来 {ticks} 个整点影响世界局势、新闻与股价。")
-            elif active:
-                message = "当前生效的世界走向：\n" + "\n".join(
-                    f"{i}. {d.get('text', '')}（剩 {int(d.get('remaining', 0))} 个整点）"
-                    for i, d in enumerate(active, 1)) + "\n删除：世界走向 删除 <序号> 或 世界走向 删除 全部"
+                    message = "用法：世界走向 删除 <序号>；世界走向 删除 全部；世界走向 清空"
+            elif head in ("扶持", "打压", "boost", "crush"):
+                query = tail.split(" ")[0] if tail else ""
+                window = CAT_STOCK_WORLD_TICKS
+                parts = tail.split()
+                if len(parts) >= 2:
+                    try:
+                        window = max(1, min(48, int(parts[1])))
+                    except ValueError:
+                        window = CAT_STOCK_WORLD_TICKS
+                comp = self._resolve_company(market, query)
+                if not comp:
+                    message = (f"找不到企业「{query}」。发送「喵股市 大盘」查看代码，"
+                               "或直接写企业名称/代码")
+                else:
+                    mode = "扶持" if head in ("扶持", "boost") else "打压"
+                    sign = 1.0 if mode == "扶持" else -1.0
+                    market["company_directives"] = [
+                        d for d in company_directives if d.get("code") != comp["code"]]
+                    market["company_directives"].append({
+                        "code": comp["code"], "name": comp["name"],
+                        "mode": mode, "remaining": window,
+                        "from": int(ctx.user_id),
+                        "at": datetime.now().strftime("%m-%d %H:%M"),
+                    })
+                    comp["price"] = round(max(
+                        1.0, float(comp["price"]) * (1 + sign * CAT_STOCK_COMPANY_BIAS)), 2)
+                    message = (f"已对「{comp['code']} {comp['name']}」下达{mode}，"
+                               f"接下来 {window} 个整点每整点"
+                               f"{'推高' if sign > 0 else '压低'}约 "
+                               f"{CAT_STOCK_COMPANY_BIAS:.0%}（受交易所限价约束）。\n"
+                               "解除请发送「世界走向 解除 <代码/名称>」。")
+            elif head in ("解除", "clear-company", "unpin"):
+                query = tail.strip()
+                if not query:
+                    message = "用法：世界走向 解除 <企业代码/名称|全部>"
+                elif query in ("全部", "所有", "all"):
+                    market["company_directives"] = []
+                    message = "已解除全部企业扶持与打压。"
+                else:
+                    comp = self._resolve_company(market, query)
+                    if not comp:
+                        message = f"找不到企业「{query}」，请用代码或名称。"
+                    else:
+                        before = len(company_directives)
+                        market["company_directives"] = [
+                            d for d in company_directives if d.get("code") != comp["code"]]
+                        if len(market["company_directives"]) < before:
+                            message = f"已解除对「{comp['code']} {comp['name']}」的干预。"
+                        else:
+                            message = f"「{comp['code']} {comp['name']}」当前没有干预。"
             else:
-                message = ("当前没有生效中的世界走向。\n"
-                           "用法：世界走向 <窗口数> <内容>（窗口数可省略，默认 2）")
+                if head.isdigit():
+                    ticks = max(1, min(48, int(head)))
+                    text = tail.strip()
+                else:
+                    text = raw
+                if text:
+                    directives.append({"text": text[:100],
+                                       "ticks": ticks,
+                                       "remaining": ticks,
+                                       "from": int(ctx.user_id),
+                                       "at": datetime.now().strftime("%m-%d %H:%M")})
+                    market["world_directives"] = directives[-20:]
+                    message = (f"已记录世界走向：{text[:100]}\n"
+                               f"将在接下来 {ticks} 个整点影响世界局势、新闻与全盘股价。")
+                else:
+                    message = usage()
             self._save_market(market)
         self._sender.send_text(target, message)
 
@@ -544,7 +2133,15 @@ class CatStockPlugin:
         down = len(companies) - up
 
         lines = [f"【喵股市 · 大盘】{self._market_status_line()}"]
-        lines.append(f"在市企业 {len(companies)} 家｜上涨 {up} 家 · 下跌 {down} 家")
+        era = market.get("era") or {}
+        if era:
+            lines.append(
+                f"纪元：第 {int(era.get('index', 0)) + 1}/{len(_ERAS)} 时代"
+                f"「{era.get('name', '')}」｜{era.get('theme', '')}")
+        alive_count = sum(1 for c in (market.get("countries") or {}).values()
+                          if c.get("alive", True))
+        lines.append(f"在市企业 {len(companies)} 家｜上涨 {up} 家 · 下跌 {down} 家"
+                     f"｜存国 {alive_count}")
 
         # 按国家分组
         grouped: Dict[str, List[dict]] = {}
@@ -559,7 +2156,7 @@ class CatStockPlugin:
                 arrow = "▲" if pct >= 0 else "▼"
                 lines.append(
                     f"{comp['code']} {comp['name']} {self._fmt_price(comp['price'])} "
-                    f"{arrow}{abs(pct):.1f}% ({comp['sector']})"
+                    f"{arrow}{abs(pct):.1f}% ({'、'.join(self._sectors_of(comp))})"
                 )
         if not full:
             lines.append("")
@@ -571,15 +2168,154 @@ class CatStockPlugin:
     def _show_company(self, target: Target, comp: dict) -> None:
         prev = comp.get("prev_close") or comp["price"] or 1
         pct = (comp["price"] - prev) / prev * 100
+        lore = _COUNTRY_LORE.get(comp["country"]) or {}
+        board = self._company_board(comp)
         lines = [
             f"【{comp['code']} {comp['name']}】",
-            f"国家：{self._country_name(comp['country'])}｜行业：{comp['sector']}",
+            f"国家：{self._country_name(comp['country'])}（{lore.get('system') or '集权'}）"
+            f"｜经营：{'、'.join(self._sectors_of(comp))}",
             f"现价：{self._fmt_price(comp['price'])}｜今日 {self._fmt_pct(pct)}",
             f"基准价：{comp['base']}｜买入手续费 {CAT_STOCK_BUY_FEE:.0%}，卖出手续费 {CAT_STOCK_SELL_FEE:.0%}",
-            f"公司方针：{comp.get('policy') or '暂无（最大股东可制定）'}",
-            f"买入：喵股市 买 {comp['code']} <股数>",
         ]
+        intro = comp.get("intro") or ""
+        if intro:
+            lines.append(f"来历：{intro}")
+        lines.append("董事会：")
+        for i, person in enumerate(board, 1):
+            lines.append(f"  {i}. {person.get('name', '')}（{person.get('tag', '')}）"
+                         f"{person.get('persona', '')}｜持股 {person.get('shares', 0)}")
+        lines.append(f"公司方针：{comp.get('policy') or '暂无（最大股东可制定）'}")
+        lines.append(f"买入：喵股市 买 {comp['code']} <股数>｜做空：喵股市 做空 {comp['code']} <股数> [周期]")
+        lines.append(f"改方向：喵股市 改营 {comp['code']} <方向>（拓展：喵股市 拓展 {comp['code']} <方向>）")
         self._sender.send_text(target, "\n".join(lines))
+
+    def _show_country(self, target: Target, rest: List[str]) -> None:
+        market = self._load_market()
+        countries = market.get("countries") or {}
+        companies = market.get("companies") or {}
+        if rest:
+            name = rest[0]
+            code = ""
+            for c in _ERA0_COUNTRIES:
+                info = countries.get(c) or {}
+                if name.upper() == c.upper() or name == info.get("name") or name == self._country_name(c):
+                    code = c
+                    break
+            if not code:
+                # 也允许按简称模糊匹配
+                for c in _ERA0_COUNTRIES:
+                    if name in (self._country_name(c) or ""):
+                        code = c
+                        break
+            if not code:
+                self._sender.send_text(
+                    target, f"找不到国家「{rest[0]}」，发送「喵股市 国家」查看列国")
+                return
+            info = countries.get(code) or {}
+            lore = _COUNTRY_LORE.get(code) or {}
+            listed = [comp for comp in companies.values() if comp.get("country") == code]
+            lines = [f"【{self._country_name(code)}】"]
+            if info.get("alive", True):
+                lines.append(f"制度：{info.get('system') or lore.get('system') or '集权'}")
+                lines.append(f"君主：{info.get('monarch') or '未知'}（{info.get('style') or '性情难测'}）")
+                persona = info.get("persona") or ""
+                if persona:
+                    lines.append(f"君主性情：{persona}")
+                lines.append(f"起源：{info.get('origin') or lore.get('origin') or '记载散佚'}")
+                lines.append(f"在册企业 {len(listed)} 家："
+                             + ("、".join(f"{c['code']} {c['name']}" for c in listed) or "暂无"))
+            else:
+                lines.append("国祚已绝：这个国家的名字已经从地图上抹去")
+                lines.append(f"覆灭原因：{info.get('fall_reason') or '王庭倾覆'}")
+            self._sender.send_text(target, "\n".join(lines))
+            return
+
+        alive = [c for c in _ERA0_COUNTRIES if (countries.get(c) or {}).get("alive", True)]
+        lines = ["【喵股市 · 列国志】"]
+        for c in _ERA0_COUNTRIES:
+            info = countries.get(c) or {}
+            if not info.get("alive", True):
+                lines.append(f"{c} {self._country_name(c)}：已亡（{info.get('fall_reason') or '国祚断绝'}）")
+                continue
+            listed = sum(1 for comp in companies.values() if comp.get("country") == c)
+            lines.append(f"{c} {self._country_name(c)}｜{info.get('monarch') or '未知'}｜"
+                         f"{info.get('style') or '难测'}｜在册企业 {listed}")
+        lines.append(f"存国 {len(alive)} 家。发送「喵股市 国家 <代码/国名>」查看该国起源与君主。")
+        self._sender.send_text(target, "\n".join(lines))
+
+    def _change_sector(self, target: Target, qq: int, rest: List[str],
+                       replace: bool) -> None:
+        """最大股东调整公司的经营方向：拓展是加法，改营是整体换向"""
+        label = "改营" if replace else "拓展"
+        if len(rest) < 2:
+            self._sender.send_text(
+                target,
+                f"用法：喵股市 {label} <股票代码> <方向1> [方向2]\n"
+                f"条件：持有该公司 ≥{CAT_STOCK_POLICY_MIN_SHARES} 股且为最大股东，开市时段可操作\n"
+                "方向用两到四个字，例如「物流」「航运」「矿冶」")
+            return
+        market = self._load_market()
+        comp = self._resolve_company(market, rest[0])
+        if not comp:
+            self._sender.send_text(target, f"找不到企业「{rest[0]}」，发送「喵股市 大盘」查看代码")
+            return
+        code = comp["code"]
+        new_sectors = self._normalize_sectors(None, rest[1:])
+        if not new_sectors:
+            self._sender.send_text(target, "至少要给出一个经营方向喵")
+            return
+
+        with self._lock:
+            players = self._load_stock_players()
+            mine = self._shares_of(self._stock_player(qq, players).get("holdings", {}).get(code, []))
+            max_shares = max([mine] + [self._shares_of(st.get("holdings", {}).get(code, []))
+                                       for st in players.values()])
+            self._save_stock_players(players)
+            if mine < CAT_STOCK_POLICY_MIN_SHARES:
+                self._sender.send_text(
+                    target,
+                    f"你在 {code} 只有 {mine} 股，至少持有 {CAT_STOCK_POLICY_MIN_SHARES} 股才能改经营方向喵")
+                return
+            if mine < max_shares:
+                self._sender.send_text(
+                    target,
+                    f"你不是 {code} 的最大股东（最大持股 {max_shares} 股），方向要由最大股东拍板喵")
+                return
+
+        market = self._load_market()
+        comp = market["companies"].get(code)
+        if not comp:
+            self._sender.send_text(target, f"{code} 已经退市了喵～")
+            return
+        old = self._sectors_of(comp)
+        if replace:
+            sectors = new_sectors[:4]
+            verb = "改弦更张"
+        else:
+            sectors = old[:]
+            for item in new_sectors:
+                if item not in sectors:
+                    sectors.append(item)
+            sectors = sectors[:4]
+            verb = "另开一摊"
+        comp["sectors"] = sectors
+        comp["sector"] = sectors[0]
+        cname = self._country_name(comp["country"])
+        comp["intro"] = (f"{cname}地界上的老字号，眼下经营{'、'.join(sectors)}。")
+        stamp = datetime.now().strftime("%m-%d %H:%M")
+        market.setdefault("news", []).insert(0, {
+            "time": stamp, "ts": time.time(),
+            "title": f"{comp['name']}（{code}）宣布{verb}",
+            "detail": f"原经营 {'、'.join(old)}，现转向 {'、'.join(sectors)}，"
+                      "市场正在重新给它定价",
+        })
+        market["news"] = market["news"][:CAT_STOCK_NEWS_MAX]
+        self._save_market(market)
+        self._sender.send_text(
+            target,
+            f"【{comp['name']}】经营方向已调整：{'、'.join(old)} → {'、'.join(sectors)}\n"
+            "从下一个整点起，世界快报会按新的方向来写这家企业的故事喵～"
+        )
 
     def _show_news(self, target: Target) -> None:
         market = self._load_market()
@@ -604,12 +2340,13 @@ class CatStockPlugin:
             catnip = int(st.get("catnip", 0))
             holdings = {k: list(v) for k, v in st.get("holdings", {}).items()}
             bond_lots = {k: list(v) for k, v in st.get("bonds", {}).items()}
+            shorts = [dict(s) for s in (st.get("shorts") or [])]
             self._save_stock_players(players)
 
         lines = [f"【喵股市 · 我的持仓】{self._market_status_line()}"]
-        lines.append(f"猫薄荷：{catnip}｜约合鱼干：{catnip // CAT_STOCK_CATNIP_TO_FISH}（提现 105:1）")
-        if not holdings and not bond_lots:
-            lines.append("当前空仓")
+        lines.append(f"猫薄荷：{catnip}｜约合猫眼石：{catnip // CAT_STOCK_CATNIP_TO_STONE}（提现 105:1）")
+        if not holdings and not bond_lots and not shorts:
+            lines.append("当前空仓，也没有在押的空头")
             self._sender.send_text(target, "\n".join(lines))
             return
 
@@ -657,8 +2394,22 @@ class CatStockPlugin:
             )
         total_pnl = total_value - total_cost
         lines.append("")
+        if shorts:
+            lines.append("空头仓位：")
+            for short in shorts:
+                code = short.get("code")
+                comp = market["companies"].get(code)
+                entry = float(short.get("entry", 0) or 0)
+                shares = int(short.get("shares", 0) or 0)
+                price = float(comp["price"]) if comp else entry
+                pnl = (entry - price) * shares
+                name = (comp or {}).get("name") or code
+                lines.append(f"  {code} {name}：{shares} 股｜{self._fmt_price(entry)} → "
+                             f"{self._fmt_price(price)}｜浮动 {pnl:+.0f}｜还剩 "
+                             f"{int(short.get('remaining', 0) or 0)} 个开市小时到期")
+            lines.append("")
         lines.append(f"总市值：{total_value:.0f}｜总浮动：{total_pnl:+.0f}｜猫薄荷：{catnip}")
-        lines.append("（买入后满 4 个交易小时才能卖出，休市时间不计入）")
+        lines.append("（当天买入的股份要到第二天才能卖出）")
         self._sender.send_text(target, "\n".join(lines))
 
     # ==================== 盈亏排行 ====================
@@ -666,7 +2417,7 @@ class CatStockPlugin:
     def rank_players(self) -> List[dict]:
         """按累计盈亏排序（从高到低）
 
-        盈亏 =（猫薄荷 + 持仓市值）-（初始 10000 + 累计充值 - 累计提现），
+        盈亏 =（猫薄荷 + 持仓市值）-（初始 1000 + 累计充值 - 累计提现），
         这样充值/提现不会被误算成盈利或亏损。
         """
         market = self._load_market()
@@ -686,6 +2437,14 @@ class CatStockPlugin:
                 bond = bonds.get(country)
                 if bond:
                     value += self._shares_of(lots) * float(bond["price"])
+            # 空头保证金与浮动盈亏同样算进资产，做空只是另一种押注方向
+            for short in st.get("shorts") or []:
+                comp = companies.get(short.get("code"))
+                entry = float(short.get("entry", 0) or 0)
+                shares = int(short.get("shares", 0) or 0)
+                price = float(comp["price"]) if comp else entry
+                value += (float(short.get("margin", 0) or 0)
+                          + (entry - price) * shares)
             net_in = (CAT_STOCK_INITIAL_CATNIP
                       + int(st.get("deposit_catnip", 0))
                       - int(st.get("withdraw_catnip", 0)))
@@ -720,7 +2479,7 @@ class CatStockPlugin:
         else:
             lines.append("暂时全员盈利，没人亏钱喵")
         lines.append("")
-        lines.append("盈亏 =（猫薄荷 + 持仓市值）-（初始 10000 + 累计充值 - 累计提现）")
+        lines.append("盈亏 =（猫薄荷 + 持仓市值）-（初始 1000 + 累计充值 - 累计提现）")
         self._sender.send_text(target, "\n".join(lines))
 
     # ==================== 交易 ====================
@@ -764,13 +2523,19 @@ class CatStockPlugin:
         with self._lock:
             players = self._load_stock_players()
             st = self._stock_player(qq, players)
+            existing = self._shares_of(st.get("holdings", {}).get(comp["code"], []))
+            limit_msg = self._holding_limit_error(st, comp["code"], existing + shares)
+            if limit_msg:
+                self._save_stock_players(players)
+                self._sender.send_text(target, limit_msg)
+                return
             catnip = int(st.get("catnip", 0))
             if catnip < total:
                 self._save_stock_players(players)
                 self._sender.send_text(
                     target,
                     f"猫薄荷不足喵：{shares} 股 × {self._fmt_price(price)} + 手续费 {fee} = {total}，"
-                    f"你只有 {catnip}\n可用「喵股市 充值 <鱼干数>」按 1:95 兑换猫薄荷"
+                    f"你只有 {catnip}\n可用「喵股市 充值 <猫眼石数>」按 1:95 兑换猫薄荷"
                 )
                 return
             st["catnip"] = catnip - total
@@ -784,7 +2549,7 @@ class CatStockPlugin:
             f"买入成交：{comp['code']} {comp['name']} {shares} 股\n"
             f"成交价 {self._fmt_price(price)}｜成交额 {cost}｜手续费 {fee}\n"
             f"剩余猫薄荷 {new_balance}\n"
-            f"（买入后满 4 个交易小时才能卖出，休市时间不计入）"
+            f"（当天买入的股份要到第二天才能卖出）"
         )
 
     def _sell(self, target: Target, qq: int, rest: List[str]) -> None:
@@ -873,7 +2638,249 @@ class CatStockPlugin:
             f"剩余猫薄荷 {new_balance}"
         )
 
+    # ==================== 做空 ====================
+
+    def _short(self, target: Target, qq: int, rest: List[str]) -> None:
+        now = datetime.now()
+        if not self._is_open(now):
+            self._sender.send_text(target, "现在是休市时间喵～ 股市每日 08:00~20:00 开市")
+            return
+        if len(rest) < 2:
+            self._sender.send_text(
+                target,
+                f"用法：喵股市 做空 <股票代码/名称> <股数> [周期 {CAT_STOCK_SHORT_MIN_HOURS}~"
+                f"{CAT_STOCK_SHORT_MAX_HOURS} 个开市小时]\n"
+                "到期自动结算，也可以随时用「喵股市 平空」提前收手。")
+            return
+
+        market = self._load_market()
+        comp = self._resolve_company(market, rest[0])
+        if not comp:
+            self._sender.send_text(target, f"找不到企业「{rest[0]}」，发送「喵股市 大盘」查看代码")
+            return
+        try:
+            shares = int(rest[1])
+        except ValueError:
+            self._sender.send_text(target, "股数必须是正整数喵")
+            return
+        if shares <= 0:
+            self._sender.send_text(target, "股数必须是正整数喵")
+            return
+        if shares < CAT_STOCK_SHORT_MIN_SHARES:
+            self._sender.send_text(
+                target, f"单笔最少做空 {CAT_STOCK_SHORT_MIN_SHARES} 股喵～")
+            return
+        if shares > CAT_STOCK_MAX_SHARES:
+            self._sender.send_text(target, f"单笔最多 {CAT_STOCK_MAX_SHARES} 股喵～")
+            return
+        hours = random.randint(CAT_STOCK_SHORT_MIN_HOURS, CAT_STOCK_SHORT_MAX_HOURS)
+        if len(rest) >= 3:
+            try:
+                hours = int(rest[2])
+            except ValueError:
+                self._sender.send_text(
+                    target, f"周期要用整数小时（{CAT_STOCK_SHORT_MIN_HOURS}~"
+                    f"{CAT_STOCK_SHORT_MAX_HOURS}）喵")
+                return
+        hours = max(CAT_STOCK_SHORT_MIN_HOURS, min(CAT_STOCK_SHORT_MAX_HOURS, hours))
+
+        price = float(comp["price"])
+        notional = int(round(price * shares))
+        margin = int(round(notional * CAT_STOCK_SHORT_MARGIN))
+        fee = max(1, int(round(notional * CAT_STOCK_SHORT_FEE)))
+        total = margin + fee
+
+        with self._lock:
+            players = self._load_stock_players()
+            st = self._stock_player(qq, players)
+            existing = self._shares_of(st.get("holdings", {}).get(comp["code"], []))
+            shorted = sum(int(s.get("shares", 0)) for s in st.get("shorts") or []
+                          if s.get("code") == comp["code"])
+            limit_msg = self._holding_limit_error(st, comp["code"], existing + shorted + shares)
+            if limit_msg:
+                self._save_stock_players(players)
+                self._sender.send_text(target, limit_msg)
+                return
+            catnip = int(st.get("catnip", 0))
+            if catnip < total:
+                self._save_stock_players(players)
+                self._sender.send_text(
+                    target,
+                    f"保证金不足喵：{shares} 股 × {self._fmt_price(price)} 的 {CAT_STOCK_SHORT_MARGIN:.0%} "
+                    f"保证金 {margin} + 手续费 {fee} = {total}，你只有 {catnip}"
+                )
+                return
+            st["catnip"] = catnip - total
+            st.setdefault("shorts", []).append({
+                "code": comp["code"],
+                "shares": shares,
+                "entry": round(price, 4),
+                "margin": margin,
+                "remaining": hours,
+                "opened": now.strftime("%Y-%m-%d %H:%M"),
+                "ts": time.time(),
+            })
+            self._save_stock_players(players)
+            new_balance = st["catnip"]
+
+        self._sender.send_text(
+            target,
+            f"做空成交：{comp['code']} {comp['name']} {shares} 股\n"
+            f"入场价 {self._fmt_price(price)}｜保证金 {margin}｜手续费 {fee}\n"
+            f"约定周期 {hours} 个开市小时，到期自动结算；期间可用「喵股市 平空 {comp['code']}」提前了结\n"
+            f"剩余猫薄荷 {new_balance}"
+        )
+
+    def _cover(self, target: Target, qq: int, rest: List[str]) -> None:
+        now = datetime.now()
+        if not self._is_open(now):
+            self._sender.send_text(target, "现在是休市时间喵～ 股市每日 08:00~20:00 开市")
+            return
+        with self._lock:
+            players = self._load_stock_players()
+            st = self._stock_player(qq, players)
+            shorts = list(st.get("shorts") or [])
+            if not shorts:
+                self._save_stock_players(players)
+                self._sender.send_text(target, "你手上没有空头仓位喵")
+                return
+            code = ""
+            want = 0
+            if rest:
+                market = self._load_market()
+                comp = self._resolve_company(market, rest[0])
+                if not comp:
+                    self._save_stock_players(players)
+                    self._sender.send_text(
+                        target, f"找不到企业「{rest[0]}」，发送「喵股市 大盘」查看代码")
+                    return
+                code = comp["code"]
+                if len(rest) >= 2:
+                    try:
+                        want = int(rest[1])
+                    except ValueError:
+                        want = 0
+            else:
+                market = self._load_market()
+            market = market if isinstance(market, dict) else self._load_market()
+            companies = market.get("companies") or {}
+            closed = []
+            kept = []
+            for short in shorts:
+                if code and short.get("code") != code:
+                    kept.append(short)
+                    continue
+                take = int(short.get("shares", 0) or 0)
+                if want > 0:
+                    take = min(take, want)
+                    want -= take
+                comp = companies.get(short.get("code"))
+                price = float(comp["price"]) if comp else float(short.get("entry", 0) or 0)
+                entry = float(short.get("entry", 0) or 0)
+                notional = price * take
+                fee = max(1, int(round(notional * CAT_STOCK_SHORT_FEE)))
+                proceeds = (float(short.get("margin", 0) or 0) * take
+                            / max(1, int(short.get("shares", 0) or 1))
+                            + (entry - price) * take - fee)
+                st["catnip"] = int(st.get("catnip", 0)) + int(round(proceeds))
+                pnl = (entry - price) * take - fee
+                closed.append((short.get("code"), comp or {"name": short.get("code")},
+                               take, entry, price, int(round(pnl))))
+                if take < int(short.get("shares", 0) or 0):
+                    rest_short = dict(short)
+                    rest_short["shares"] = int(short.get("shares", 0) or 0) - take
+                    rest_short["margin"] = float(short.get("margin", 0) or 0) - \
+                        float(short.get("margin", 0) or 0) * take / max(1, int(short.get("shares", 0) or 1))
+                    kept.append(rest_short)
+                if want <= 0 and code:
+                    want = -1
+            if want > 0:
+                self._save_stock_players(players)
+                self._sender.send_text(target, f"空头仓位不足：{code} 没有这么多股可回补喵")
+                return
+            st["shorts"] = kept
+            log = st.setdefault("short_log", [])
+            for code_i, comp_i, take, entry, price, pnl in closed:
+                log.append({"code": code_i, "name": comp_i.get("name") or code_i,
+                            "shares": take, "entry": round(entry, 2),
+                            "close": round(price, 2), "pnl": pnl,
+                            "at": now.strftime("%Y-%m-%d %H:%M")})
+            st["short_log"] = log[-20:]
+            self._save_stock_players(players)
+            new_balance = st["catnip"]
+
+        if not closed:
+            self._sender.send_text(target, "没有找到可以回补的空头仓位喵")
+            return
+        lines = ["平空成交："]
+        for code_i, comp_i, take, entry, price, pnl in closed:
+            lines.append(f"{code_i} {comp_i.get('name', code_i)} {take} 股｜"
+                         f"{self._fmt_price(entry)} → {self._fmt_price(price)}｜盈亏 {pnl:+d}")
+        lines.append(f"剩余猫薄荷 {new_balance}")
+        self._sender.send_text(target, "\n".join(lines))
+
+    def _settle_shorts(self, players: dict, companies: dict, now: datetime) -> None:
+        """每个整点递减空头约定周期，到期自动按现价结算"""
+        stamp = now.strftime("%Y-%m-%d %H:%M")
+        for st in players.values():
+            shorts = st.get("shorts") or []
+            if not shorts:
+                continue
+            kept = []
+            log = st.setdefault("short_log", [])
+            for short in shorts:
+                remaining = int(short.get("remaining", 0) or 0) - 1
+                code = short.get("code")
+                comp = companies.get(code)
+                if remaining > 0 and comp:
+                    short["remaining"] = remaining
+                    kept.append(short)
+                    continue
+                entry = float(short.get("entry", 0) or 0)
+                price = float(comp["price"]) if comp else entry
+                shares = int(short.get("shares", 0) or 0)
+                proceeds = (float(short.get("margin", 0) or 0)
+                            + (entry - price) * shares)
+                st["catnip"] = int(st.get("catnip", 0)) + int(round(proceeds))
+                log.append({"code": code, "name": (comp or {}).get("name") or code,
+                            "shares": shares, "entry": round(entry, 2),
+                            "close": round(price, 2),
+                            "pnl": int(round((entry - price) * shares)),
+                            "at": stamp})
+            st["shorts"] = kept
+            st["short_log"] = log[-20:]
+
+    def _close_shorts_for(self, st: dict, code: str, price: float, note: str) -> None:
+        """企业消失时，相关空头按清算价一次性了结"""
+        shorts = st.get("shorts") or []
+        if not shorts:
+            return
+        kept = []
+        log = st.setdefault("short_log", [])
+        for short in shorts:
+            if short.get("code") != code:
+                kept.append(short)
+                continue
+            shares = int(short.get("shares", 0) or 0)
+            entry = float(short.get("entry", 0) or 0)
+            proceeds = float(short.get("margin", 0) or 0) + (entry - price) * shares
+            st["catnip"] = int(st.get("catnip", 0)) + int(round(proceeds))
+            log.append({"code": code, "name": code, "shares": shares,
+                        "entry": round(entry, 2), "close": round(price, 2),
+                        "pnl": int(round((entry - price) * shares)),
+                        "at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                        "note": note})
+        st["shorts"] = kept
+        st["short_log"] = log[-20:]
+
     # ==================== 国债 ====================
+
+    def _bonds_unavailable(self, target: Target) -> None:
+        """各国国债尚未发行，玩家侧的入口统一给出提示"""
+        self._sender.send_text(
+            target,
+            "各国的国债还没到发行的时候喵～ 交易所目前只有企业股票，"
+            "等国库那边把契书刻好再说吧。")
 
     def _show_bonds(self, target: Target, qq: int) -> None:
         market = self._load_market()
@@ -994,14 +3001,14 @@ class CatStockPlugin:
                 self._sender.send_text(
                     target,
                     f"{bond['code']} 当前没有可卖出的国债\n"
-                    f"买入后满 4 个交易小时才能卖出（只计算开市时间）")
+                    f"当天买入的股份要到第二天才能卖出")
                 return
             if shares > sellable:
                 self._save_stock_players(players)
                 self._sender.send_text(
                     target,
                     f"可卖数量不足喵：{bond['code']} 现在只能卖 {sellable} 张"
-                    f"（其余为未满 4 个交易小时的持仓）")
+                    f"（其余为今天刚买入、要到第二天才能卖的持仓）")
                 return
 
             remaining = shares
@@ -1093,139 +3100,651 @@ class CatStockPlugin:
             "它只是影响，不保证完全照办喵。\n"
             "AI 每个整点写新闻时会参考，可能体现为政策推进、受阻或妥协。")
 
-    # ==================== 公司方针 ====================
+    # ==================== 股东大会 ====================
 
-    def _judge_policy(self, text: str) -> str:
-        """由 AI 判断方针性质，返回 ok / veto / illegal，不做任何关键词匹配"""
-        if not self._ai:
-            return "ok"
-        prompt = (
-            "请判断下面这条公司经营方针的性质：\n"
-            f"方针：{text}\n"
-            "只返回 JSON：{\"verdict\":\"ok|veto|illegal\",\"reason\":\"一句话理由\"}\n"
-            "verdict：veto 为明显恶意、离谱、会直接毁掉公司的行为（例如解散公司、纵火、掏空资产）；"
-            "illegal 为私利违法违规（例如内幕交易、操纵股价、贿赂、财务造假）；"
-            "ok 为正常经营方向。\n"
-            "若方针依赖不存在的公司、国家、人物、技术或虚构历史，属于无根据的空想，判 veto。\n"
-            "拿不准时判 ok，不要冤枉正常方针。"
-        )
-        try:
-            raw = self._ai._call_ai(
-                Config.AI_MODEL["chat"],
-                [{"role": "system", "content": "你是奇幻王国的证券监管顾问，只输出 JSON。"},
-                 {"role": "user", "content": prompt}],
-                temperature=0.2, max_retries=1, max_tokens=200,
-            )
-        except Exception:
-            return "ok"
-        data = _extract_json(raw) if isinstance(raw, str) else raw
-        if not isinstance(data, dict):
-            return "ok"
-        verdict = str(data.get("verdict") or "").strip().lower()
-        return verdict if verdict in ("veto", "illegal") else "ok"
+    def _player_nick(self, qq: int) -> str:
+        player = self._cat._peek_player(qq) or {}
+        return str(player.get("nick") or f"股东{qq}")
 
-    def _set_policy(self, target: Target, qq: int, rest: List[str]) -> None:
-        """最大股东为公司制定方针；AI 每个整点写新闻时会参考方针"""
-        if not rest:
-            self._sender.send_text(
-                target,
-                "用法：喵股市 方针 <股票代码> <方针内容>\n"
-                f"条件：持有该公司 ≥{CAT_STOCK_POLICY_MIN_SHARES} 股，且是该公司最大股东\n"
-                "示例：喵股市 方针 FRS 稳健经营，优先交付长期军备订单\n"
-                "董事会会否决明显坑公司的离谱方针；违规操作的后果会在后续市场故事与新闻里体现喵。"
-            )
-            return
-        comp = self._resolve_company(self._load_market(), rest[0])
-        if not comp:
-            self._sender.send_text(target, f"找不到企业「{rest[0]}」，发送「喵股市 大盘」查看代码")
-            return
-        code = comp["code"]
-        text = " ".join(rest[1:]).strip()
+    def _shares_in(self, players: dict, qq: int, code: str) -> int:
+        st = players.get(str(qq)) or {}
+        return self._shares_of((st.get("holdings") or {}).get(code, []))
 
-        if not text:
-            self._sender.send_text(
-                target, f"{comp['name']}（{code}）当前方针：{comp.get('policy') or '暂无'}")
-            return
+    def _meeting_holders(self, players: dict, code: str) -> List[dict]:
+        rows = []
+        for key, st in players.items():
+            try:
+                holder = int(key)
+            except (TypeError, ValueError):
+                continue
+            shares = self._shares_of((st.get("holdings") or {}).get(code, []))
+            if shares > CAT_STOCK_MEETING_MIN_SHARES:
+                rows.append({"qq": holder, "name": self._player_nick(holder),
+                             "shares": int(shares)})
+        rows.sort(key=lambda r: (-r["shares"], r["qq"]))
+        return rows
 
-        text_cut = text[:CAT_STOCK_POLICY_MAX_LEN]
+    def _today_meeting(self, market: dict, code: str) -> Optional[dict]:
+        meeting = (market.get("meetings") or {}).get(str(code or "").upper())
+        if not meeting:
+            return None
+        if meeting.get("day") != datetime.now().strftime("%Y-%m-%d"):
+            return None
+        return meeting
 
-        with self._lock:
-            players = self._load_stock_players()
-            mine = self._shares_of(self._stock_player(qq, players).get("holdings", {}).get(code, []))
-            max_shares = max(
-                [mine] + [self._shares_of(st.get("holdings", {}).get(code, []))
-                          for st in players.values()]
-            )
-            self._save_stock_players(players)
-            if mine < CAT_STOCK_POLICY_MIN_SHARES:
-                self._sender.send_text(
-                    target,
-                    f"你在 {code} 只有 {mine} 股，至少持有 {CAT_STOCK_POLICY_MIN_SHARES} 股才能制定方针喵")
-                return
-            if mine < max_shares:
-                self._sender.send_text(
-                    target,
-                    f"你不是 {code} 的最大股东（最大持股 {max_shares} 股），方针要由最大股东拍板喵")
-                return
+    def _company_board(self, comp: dict) -> List[dict]:
+        """取这家公司的常驻董事；老存档没有董事会记录时按代码补一份固定人选"""
+        board = comp.get("board")
+        if isinstance(board, list) and len(board) >= 3:
+            return [b for b in board if isinstance(b, dict)][:3]
+        code = str(comp.get("code") or "SHR")
+        return self._board_for(code, 0)
 
-        # 持股资格确认后再让 AI 做性质判断，避免无关玩家消耗 AI 调用
-        verdict = self._judge_policy(text_cut)
-        if verdict == "veto":
-            self._sender.send_text(
-                target,
-                "这条方针被董事会当场否决喵：明显要把公司往死里坑的方案不会被执行。\n"
-                "换个正经点的经营方向吧。"
-            )
-            return
+    def _ai_opening(self, ai: dict, comp: dict) -> str:
+        name = comp.get("name") or comp.get("code") or "这家公司"
+        sectors = "、".join(self._sectors_of(comp))
+        tag = ai.get("tag") or ""
+        if tag in ("谨慎", "守旧", "悲观", "精算"):
+            return (f"{name}做{sectors}的底子还在，可变卖的家当不多。"
+                    "新方针先算清成本与回本日子，再谈扩张吧。")
+        if tag in ("浮夸", "投机", "冒险", "信仰"):
+            return (f"依我看，{name}早就该把{sectors}的招牌挂到每一座城！"
+                    "只要各位点头，我保证这门生意比火塘还旺。")
+        if tag in ("搞怪", "浪漫"):
+            return (f"呼……我刚才梦见{name}的货船飘在云上，{sectors}卖给了月亮。"
+                    "你们说，这算不算一条新路子？")
+        return (f"{name}的{sectors}这门营生，我盯着账本看了半天，"
+                "先把手上的活计做扎实，再谈往哪儿扩。")
 
+    def start_meeting(self, qq: int, code: str) -> dict:
+        """召集股东大会：每天每家一次，最大股东持股足够时才可发起"""
+        code = str(code or "").strip().upper()
         with self._lock:
             market = self._load_market()
             comp = market["companies"].get(code)
             if not comp:
-                self._sender.send_text(target, f"{code} 已经退市了喵～")
-                return
+                return {"ok": False, "msg": "这家企业已经不在市了喵"}
+            players = self._load_stock_players()
+            mine = self._shares_in(players, qq, code)
+            if mine < CAT_STOCK_MEETING_HOST_SHARES:
+                return {"ok": False,
+                        "msg": f"至少要持有 {CAT_STOCK_MEETING_HOST_SHARES} 股才有资格召集董事会喵"}
+            max_human = max([mine] + [self._shares_in(players, int(k), code)
+                                      for k in players if str(k).isdigit()]) if players else mine
+            if mine < max_human:
+                return {"ok": False, "msg": "董事会的召集权归最大股东，你还差几手喵"}
+            if self._today_meeting(market, code):
+                return {"ok": False, "msg": "这家公司今天已经开过董事会了，明天请早喵"}
+            now_ts = time.time()
+            today = datetime.now().strftime("%Y-%m-%d")
+            meeting = {
+                "code": code, "day": today, "host": int(qq),
+                "host_name": self._player_nick(qq),
+                "start_ts": now_ts,
+                "end_ts": now_ts + CAT_STOCK_MEETING_MINUTES * 60,
+                "confirm_end": 0, "status": "open",
+                "messages": [], "draft": "", "sectors": [],
+                "host_policy": "", "host_sectors": [],
+                "options": [], "votes": {}, "result": "", "result_counts": {},
+            }
+            meeting["messages"].append({
+                "role": "system", "name": "书记员",
+                "text": ("董事会会议开始，讨论时间十分钟。散会前请召集人定稿一份自己的方针；"
+                         "书记员会另拟一份汇总方针，连同公司旧方针一起，"
+                         "交全体持股股东在三十分钟内确认。逾期未确认的按沿用旧方针计。"),
+                "ts": now_ts,
+            })
+            meeting["messages"].append({
+                "role": "host", "name": meeting["host_name"],
+                "text": f"我把各位请来，是为了重新议一议「{comp['name']}」接下来的路子。",
+                "ts": now_ts,
+            })
+            for ai in self._company_board(comp):
+                meeting["messages"].append({
+                    "role": "ai", "name": ai["name"],
+                    "text": self._ai_opening(ai, comp), "ts": now_ts,
+                })
+            # 只保留当天的会议记录，避免文件无限膨胀
+            market["meetings"] = {c: m for c, m in (market.get("meetings") or {}).items()
+                                  if m.get("day") == today}
+            market["meetings"][code] = meeting
+            self._save_market(market)
+        return self.meeting_state(qq, code)
 
-            comp["policy"] = text_cut
-            comp["policy_owner"] = qq
-            comp["policy_set_at"] = datetime.now().strftime("%Y-%m-%d")
+    def meeting_say(self, qq: int, code: str, text: str) -> dict:
+        text = str(text or "").strip()[:CAT_STOCK_MEETING_MAX_LEN]
+        code = str(code or "").strip().upper()
+        if not text:
+            return {"ok": False, "msg": "先说点什么，书记员才好记下来喵"}
+        with self._lock:
+            market = self._load_market()
+            meeting = self._today_meeting(market, code)
+            if not meeting:
+                return {"ok": False, "msg": "现在没有正在进行的董事会喵"}
+            if meeting.get("status") != "open":
+                return {"ok": False, "msg": "讨论时间已结束，正在整理方针并准备确认"}
+            players = self._load_stock_players()
+            mine = self._shares_in(players, qq, code)
+            if mine <= CAT_STOCK_MEETING_MIN_SHARES:
+                return {"ok": False,
+                        "msg": f"持有 {CAT_STOCK_MEETING_MIN_SHARES} 股以上才能列席董事会喵"}
+            meeting["messages"].append({
+                "role": "host" if int(qq) == int(meeting.get("host", 0)) else "holder",
+                "name": self._player_nick(qq), "text": text, "ts": time.time(),
+            })
+            meeting["messages"] = meeting["messages"][-80:]
+            comp_info = {
+                "code": code,
+                "name": (market["companies"].get(code) or {}).get("name") or code,
+                "sectors": self._sectors_of(market["companies"].get(code) or {}),
+                "board": self._company_board(market["companies"].get(code) or {}),
+            }
+            recent = [dict(m) for m in meeting["messages"][-6:]]
             self._save_market(market)
 
-        note = "（该怎么收场，就看后续的市场故事了喵……）\n" if verdict == "illegal" else ""
-        self._sender.send_text(
-            target,
-            f"【{comp['name']}】方针已更新为：{comp['policy']}\n" + note +
-            "接下来的整点快报里，AI 会参考这条方针来写新闻与调整市场情绪喵～"
-        )
+        reply = self._ai_shareholder_reply(comp_info, recent, text)
+        if reply:
+            with self._lock:
+                market = self._load_market()
+                meeting = self._today_meeting(market, code)
+                if meeting and meeting.get("status") == "open":
+                    meeting["messages"].append(reply)
+                    meeting["messages"] = meeting["messages"][-80:]
+                    self._save_market(market)
+        return self.meeting_state(qq, code)
 
-    # ==================== 鱼干 / 猫薄荷兑换 ====================
+    def meeting_set_policy(self, qq: int, code: str, text: str) -> dict:
+        """召集人在讨论结束前定稿自己的方针；留空视为不另拟，按旧方针计"""
+        code = str(code or "").strip().upper()
+        text = str(text or "").strip()[:CAT_STOCK_POLICY_MAX_LEN]
+        with self._lock:
+            market = self._load_market()
+            meeting = self._today_meeting(market, code)
+            if not meeting:
+                return {"ok": False, "msg": "现在没有正在进行的董事会喵"}
+            if int(qq) != int(meeting.get("host", 0)):
+                return {"ok": False, "msg": "只有召集人能定稿大股东方针喵"}
+            if meeting.get("status") != "open":
+                return {"ok": False, "msg": "讨论时间已结束，方针已经定稿喵"}
+            meeting["host_policy"] = text
+            meeting["host_sectors"] = []
+            meeting["messages"].append({
+                "role": "host", "name": meeting.get("host_name") or self._player_nick(qq),
+                "text": (f"大股东方针定稿：{text}" if text
+                         else "大股东未另拟方针，确认时按沿用旧方针计。"),
+                "ts": time.time(),
+            })
+            meeting["messages"] = meeting["messages"][-80:]
+            self._save_market(market)
+        return self.meeting_state(qq, code)
+
+    def meeting_vote(self, qq: int, code: str, choice) -> dict:
+        """股东在三套方针里选一套确认：ai / host / old"""
+        code = str(code or "").strip().upper()
+        if isinstance(choice, bool):
+            choice = "ai" if choice else "old"
+        choice = str(choice or "").strip().lower()
+        if choice not in ("ai", "host", "old"):
+            return {"ok": False, "msg": "只能选 AI 方针、大股东方针或旧方针喵"}
+        with self._lock:
+            market = self._load_market()
+            meeting = self._today_meeting(market, code)
+            if not meeting:
+                return {"ok": False, "msg": "现在没有正在进行的董事会喵"}
+            if meeting.get("status") != "confirm":
+                return {"ok": False, "msg": "书记员正在整理方针，请稍候再确认"}
+            players = self._load_stock_players()
+            mine = self._shares_in(players, qq, code)
+            if mine <= CAT_STOCK_MEETING_MIN_SHARES:
+                return {"ok": False,
+                        "msg": f"持有 {CAT_STOCK_MEETING_MIN_SHARES} 股以上才有确认权喵"}
+            meeting.setdefault("votes", {})[str(qq)] = choice
+            self._save_market(market)
+        return self.meeting_state(qq, code)
+
+    def meeting_finish(self, qq: int, code: str) -> dict:
+        """召集人提前进入总结 / 确认阶段，或提前结束确认"""
+        code = str(code or "").strip().upper()
+        with self._lock:
+            market = self._load_market()
+            meeting = self._today_meeting(market, code)
+            if not meeting:
+                return {"ok": False, "msg": "现在没有正在进行的董事会喵"}
+            if int(qq) != int(meeting.get("host", 0)):
+                return {"ok": False, "msg": "只有召集人能宣布进入下一环节喵"}
+            if meeting.get("status") == "open":
+                meeting["end_ts"] = time.time() - 1
+            elif meeting.get("status") == "confirm":
+                meeting["confirm_end"] = time.time() - 1
+            self._save_market(market)
+        return self.meeting_state(qq, code)
+
+    def meeting_state(self, qq: int, code: str) -> dict:
+        """读取会议状态，并在需要时推进「总结 → 确认 → 定案」"""
+        code = str(code or "").strip().upper()
+        now_ts = time.time()
+        need_summary: Optional[str] = None
+        with self._lock:
+            market = self._load_market()
+            meeting = self._today_meeting(market, code)
+            if not meeting:
+                players = self._load_stock_players()
+                mine = self._shares_in(players, qq, code)
+                comp = market["companies"].get(code)
+                return {"ok": True, "active": False,
+                        "can_start": bool(comp and mine >= CAT_STOCK_MEETING_HOST_SHARES),
+                        "msg": ("按下按钮就能召集今天的董事会喵"
+                                if comp and mine >= CAT_STOCK_MEETING_HOST_SHARES
+                                else "要成为持股最多的股东才有资格召集董事会喵")}
+            status = meeting.get("status")
+            if status == "open" and now_ts >= float(meeting.get("end_ts") or 0):
+                need_summary = code
+            elif status == "confirm" and now_ts >= float(meeting.get("confirm_end") or 0):
+                need_summary = "__finalize__"
+            elif status == "confirm":
+                players = self._load_stock_players()
+                holders = self._meeting_holders(players, code)
+                votes = meeting.get("votes") or {}
+                if holders and all(str(h["qq"]) in votes for h in holders):
+                    need_summary = "__finalize__"
+            meeting_snapshot = {"messages": [dict(m) for m in meeting.get("messages") or []],
+                                "comp": dict(market["companies"].get(code) or {})}
+
+        if need_summary == code:
+            self._summarize_meeting(code, meeting_snapshot)
+        elif need_summary == "__finalize__":
+            self._finalize_meeting(code)
+
+        with self._lock:
+            market = self._load_market()
+            meeting = self._today_meeting(market, code)
+            if not meeting:
+                return {"ok": True, "active": False, "can_start": False, "msg": ""}
+            players = self._load_stock_players()
+            return {"ok": True, "active": True,
+                    "meeting": self._meeting_view(market, meeting, players, qq)}
+
+    def _meeting_view(self, market: dict, meeting: dict, players: dict, qq: int) -> dict:
+        comp = market["companies"].get(meeting["code"]) or {}
+        holders = self._meeting_holders(players, meeting["code"])
+        mine = self._shares_in(players, qq, meeting["code"])
+        status = meeting.get("status") or "open"
+        now_ts = time.time()
+        if status == "open":
+            remain = max(0, int(float(meeting.get("end_ts") or now_ts) - now_ts))
+        elif status == "confirm":
+            remain = max(0, int(float(meeting.get("confirm_end") or now_ts) - now_ts))
+        else:
+            remain = 0
+        votes = meeting.get("votes") or {}
+        counts = {"ai": 0, "host": 0, "old": 0}
+        for choice in votes.values():
+            if choice in counts:
+                counts[choice] += 1
+        eligible = len(holders)
+        # 确认期内没有表态的股东，按沿用旧方针计算
+        counts["old"] += max(0, eligible - len(votes))
+        options = self._meeting_options(meeting, comp)
+        board = self._company_board(comp)
+        return {
+            "code": meeting["code"],
+            "company": comp.get("name") or meeting["code"],
+            "sectors": self._sectors_of(comp),
+            "status": status,
+            "is_host": int(qq) == int(meeting.get("host", 0)),
+            "host_name": meeting.get("host_name") or "",
+            "remaining": remain,
+            "my_shares": int(mine),
+            "can_speak": status == "open" and mine > CAT_STOCK_MEETING_MIN_SHARES,
+            "can_vote": status == "confirm" and mine > CAT_STOCK_MEETING_MIN_SHARES,
+            "can_finish": int(qq) == int(meeting.get("host", 0)) and status in ("open", "confirm"),
+            "can_set_policy": int(qq) == int(meeting.get("host", 0)) and status == "open",
+            "my_vote": votes.get(str(qq)) if str(qq) in votes else None,
+            "host_policy": meeting.get("host_policy") or "",
+            "draft": meeting.get("draft") or "",
+            "draft_sectors": list(meeting.get("sectors") or []),
+            "options": options,
+            "votes": {
+                "ai": counts["ai"], "host": counts["host"], "old": counts["old"],
+                "total": len(votes), "eligible": eligible,
+                "human": [{"name": self._player_nick(int(k)), "choice": v}
+                          for k, v in votes.items()],
+            },
+            "holders": holders,
+            "board": [{"name": b.get("name", ""), "tag": b.get("tag", "")} for b in board],
+            "messages": [{"role": m.get("role", ""), "name": m.get("name", ""),
+                          "text": m.get("text", ""), "ts": m.get("ts", 0)}
+                         for m in (meeting.get("messages") or [])[-60:]],
+            "result": meeting.get("result") or "",
+            "result_choice": meeting.get("result_choice") or "",
+            "result_counts": meeting.get("result_counts") or {},
+            "current_policy": comp.get("policy") or "",
+            "policy": comp.get("policy") or "",
+        }
+
+    def _meeting_options(self, meeting: dict, comp: dict) -> List[dict]:
+        """三套待确认方针：书记员汇总、大股东定稿、沿用旧方针"""
+        options = meeting.get("options")
+        if isinstance(options, list) and options:
+            return [dict(o) for o in options if isinstance(o, dict)]
+        old_policy = str(comp.get("policy") or "").strip() or "维持现有营生与老规矩"
+        return [
+            {"key": "ai", "label": "书记员汇总",
+             "policy": meeting.get("draft") or "（书记员尚未落笔）",
+             "sectors": list(meeting.get("sectors") or [])},
+            {"key": "host", "label": "大股东方针",
+             "policy": meeting.get("host_policy") or "（大股东未另拟）",
+             "sectors": list(meeting.get("host_sectors") or [])},
+            {"key": "old", "label": "沿用旧方针", "policy": old_policy,
+             "sectors": self._sectors_of(comp)},
+        ]
+
+    def _ai_shareholder_reply(self, comp: dict, recent: List[dict], latest: str) -> Optional[dict]:
+        """让其中一位老股东接话；没有 AI 时用性格模板兜底"""
+        board = comp.get("board") or self._board_for(str(comp.get("code") or "SHR"), 0)
+        ai = random.choice(board)
+        transcript = "\n".join(f"{m.get('name', '')}：{m.get('text', '')}"
+                               for m in recent if m.get("text"))
+        if self._ai:
+            prompt = (
+                f"你是奇幻世界《猫猫远征队》if 线里的老股东「{ai['name']}」。\n"
+                f"你的性格：{ai['persona']}\n"
+                f"正在开董事会的公司：{comp.get('name', '')}，经营 "
+                f"{'、'.join(comp.get('sectors') or ['综合'])}。\n"
+                f"最近的发言：\n{transcript}\n"
+                f"刚才有人提到：{latest}\n"
+                "请以你的身份接一句话，可以直接回应对方，也可以自顾自地发表高见；"
+                "保持人格特色，不要复述规则，不要超过 60 字，只输出这句话。"
+            )
+            try:
+                text = self._ai._call_ai(
+                    Config.AI_MODEL["chat"],
+                    [{"role": "system", "content": "你是奇幻世界里的公司老股东，只输出一句话。"},
+                     {"role": "user", "content": prompt}],
+                    temperature=0.9, max_retries=1, max_tokens=120,
+                )
+                text = re.sub(r"\s+", " ", str(text or "")).strip()
+                if text:
+                    return {"role": "ai", "name": ai["name"], "text": text[:120],
+                            "ts": time.time()}
+            except Exception as e:
+                print(f"[cat_stock] meeting reply failed: {e}")
+        if ai["tag"] in ("谨慎", "守旧", "悲观", "精算"):
+            text = "这笔账我先记下，回本的日子不明朗之前，别急着动家底。"
+        elif ai["tag"] in ("浮夸", "投机", "冒险", "信仰"):
+            text = "好！这话我记进回忆录里，等公司名震列国时再翻出来念给各位听。"
+        else:
+            text = "唔……听起来像极了我昨晚的梦，不过梦里那笔生意好像是赚的。"
+        return {"role": "ai", "name": ai["name"], "text": text, "ts": time.time()}
+
+    def _summarize_meeting(self, code: str, snapshot: dict) -> None:
+        comp = snapshot.get("comp") or {}
+        messages = snapshot.get("messages") or []
+        transcript = "\n".join(f"{m.get('name', '')}：{m.get('text', '')}"
+                               for m in messages if m.get("text"))
+        policy = ""
+        sectors: List[str] = []
+        if self._ai:
+            prompt = (
+                f"你是奇幻世界的董事会书记员，正在整理「{comp.get('name', code)}」的股东大会。\n"
+                f"公司当前经营：{'、'.join(self._sectors_of(comp))}\n"
+                f"会议记录：\n{transcript}\n"
+                "请把讨论收束成一条可执行的经营方针：既要体现多数人的共识，"
+                "也可以在必要时调整公司的经营范围。不要罗列规则，不要超过 100 字。\n"
+                '只输出 JSON：{"policy":"一句话方针","sectors":["行业1","行业2"]}'
+            )
+            try:
+                raw = self._ai._call_ai(
+                    Config.AI_MODEL["chat"],
+                    [{"role": "system", "content": "你是奇幻世界里的董事会书记员，只输出 JSON。"},
+                     {"role": "user", "content": prompt}],
+                    temperature=0.5, max_retries=2, max_tokens=300,
+                )
+                data = _extract_json(raw) if isinstance(raw, str) else raw
+                if isinstance(data, dict):
+                    policy = str(data.get("policy") or "").strip()
+                    sectors = self._normalize_sectors("", data.get("sectors"),
+                                                     self._sectors_of(comp)[0])
+            except Exception as e:
+                print(f"[cat_stock] meeting summarize failed: {e}")
+        if not policy:
+            # 兜底：沿用讨论里最后一条较长的发言，避免确认时没有汇总方针
+            texts = [m.get("text", "") for m in messages
+                     if m.get("role") in ("host", "holder") and len(m.get("text", "")) >= 6]
+            policy = ""
+            for text in reversed(texts):
+                policy = re.sub(r"^大股东(方针定稿|未另拟方针)[：:，,]?\s*", "", text).strip()
+                if policy:
+                    break
+            if not policy:
+                policy = (f"稳住{'、'.join(self._sectors_of(comp))}的老本行，暂不冒进")
+        if not sectors:
+            sectors = self._sectors_of(comp)
+
+        with self._lock:
+            market = self._load_market()
+            meeting = self._today_meeting(market, code)
+            if not meeting or meeting.get("status") != "open":
+                return
+            draft = policy[:CAT_STOCK_POLICY_MAX_LEN]
+            host_policy = str(meeting.get("host_policy") or "").strip()
+            old_policy = str(comp.get("policy") or "").strip() or "维持现有营生与老规矩"
+            host_text = host_policy or "（大股东未另拟，等同沿用旧方针）"
+            meeting["draft"] = draft
+            meeting["sectors"] = sectors
+            meeting["options"] = [
+                {"key": "ai", "label": "书记员汇总",
+                 "policy": draft, "sectors": list(sectors)},
+                {"key": "host", "label": "大股东方针",
+                 "policy": host_text, "sectors": list(meeting.get("host_sectors") or [])},
+                {"key": "old", "label": "沿用旧方针",
+                 "policy": old_policy, "sectors": self._sectors_of(comp)},
+            ]
+            meeting["status"] = "confirm"
+            meeting["confirm_end"] = time.time() + CAT_STOCK_MEETING_VOTE_MINUTES * 60
+            meeting["votes"] = {}
+            meeting["messages"].append({
+                "role": "system", "name": "书记员",
+                "text": (f"讨论结束，三套方针摆上桌面："
+                         f"①书记员汇总——{draft}；"
+                         f"②大股东方针——{host_text}；"
+                         f"③沿用旧方针——{old_policy}。"
+                         f"请股东在 {CAT_STOCK_MEETING_VOTE_MINUTES} 分钟内确认，"
+                         f"逾期未表态的按沿用旧方针计。"),
+                "ts": time.time(),
+            })
+            meeting["messages"] = meeting["messages"][-80:]
+            self._save_market(market)
+
+    def _finalize_meeting(self, code: str) -> None:
+        with self._lock:
+            market = self._load_market()
+            meeting = self._today_meeting(market, code)
+            if not meeting or meeting.get("status") != "confirm":
+                return
+            players = self._load_stock_players()
+            eligible = len(self._meeting_holders(players, code))
+            votes = dict(meeting.get("votes") or {})
+            counts = {"ai": 0, "host": 0, "old": 0}
+            for choice in votes.values():
+                if choice in counts:
+                    counts[choice] += 1
+            # 大股东没有另拟方针时，投给他的票等同于沿用旧方针
+            if not str(meeting.get("host_policy") or "").strip():
+                counts["old"] += counts["host"]
+                counts["host"] = 0
+            # 未在确认期内表态的股东，默认沿用旧方针
+            counts["old"] += max(0, eligible - len(votes))
+            choice = "old"
+            if eligible:
+                if counts["ai"] / eligible > CAT_STOCK_MEETING_AI_PASS:
+                    choice = "ai"
+                elif counts["host"] / eligible > CAT_STOCK_MEETING_HOST_PASS:
+                    choice = "host"
+            result_text = {
+                "ai": "股东确认：书记员汇总的方针获得过半数支持，即刻生效。",
+                "host": "股东确认：大股东方针获得三分之二以上支持，即刻生效。",
+                "old": "股东确认未达门槛，公司维持原有方针。",
+            }[choice]
+            comp = market["companies"].get(code)
+            if comp and choice != "old":
+                option = next((o for o in self._meeting_options(meeting, comp)
+                               if o.get("key") == choice), {})
+                policy = str(option.get("policy") or "").strip()
+                if policy and not policy.startswith("（"):
+                    comp["policy"] = policy[:CAT_STOCK_POLICY_MAX_LEN]
+                    comp["policy_owner"] = meeting.get("host")
+                    comp["policy_set_at"] = datetime.now().strftime("%Y-%m-%d")
+                    sectors = option.get("sectors") or []
+                    if sectors:
+                        norm = self._normalize_sectors(
+                            "", sectors, self._sectors_of(comp)[0])
+                        comp["sectors"] = norm
+                        comp["sector"] = norm[0]
+            meeting["status"] = "closed"
+            meeting["result"] = result_text
+            meeting["result_choice"] = choice
+            meeting["result_counts"] = {
+                "ai": counts["ai"], "host": counts["host"],
+                "old": counts["old"], "eligible": eligible,
+            }
+            meeting["finished_at"] = time.time()
+            meeting["messages"].append({
+                "role": "system", "name": "书记员", "text": result_text,
+                "ts": time.time(),
+            })
+            meeting["messages"] = meeting["messages"][-80:]
+            self._save_market(market)
+
+    def _ai_close_policies(self, candidates: List[dict]) -> List[dict]:
+        if not self._ai or not candidates:
+            return []
+        lines = "\n".join(
+            f"- {c['code']}｜{c['name']}｜经营 {'、'.join(c['sectors'])}"
+            f"｜现有方针：{c['policy'] or '暂无'}" for c in candidates)
+        prompt = (
+            "你是奇幻世界《猫猫远征队》if 线的董事会书记员。收市了，"
+            "以下公司今天没有持股足够的大股东来拍板，董事会要自行定下新的经营方向。\n"
+            + lines +
+            "\n请为每一家公司拟一条具体、可执行的经营方针，可以沿用或调整经营范围；"
+            "方针要像这个世界里会长久做下去的买卖，不要空话，不超过 100 字。\n"
+            '只输出 JSON：{"policies":[{"code":"股票代码","policy":"方针",'
+            '"sectors":["行业1","行业2"],"reason":"一句话缘由"}]}'
+        )
+        try:
+            raw = self._ai._call_ai(
+                Config.AI_MODEL["chat"],
+                [{"role": "system", "content": "你是奇幻世界里的董事会书记员，只输出 JSON。"},
+                 {"role": "user", "content": prompt}],
+                temperature=0.7, max_retries=2, max_tokens=500,
+            )
+        except Exception as e:
+            print(f"[cat_stock] close policy failed: {e}")
+            return []
+        data = _extract_json(raw) if isinstance(raw, str) else raw
+        if not isinstance(data, dict):
+            return []
+        allowed = {c["code"] for c in candidates}
+        result = []
+        for item in data.get("policies") or []:
+            if not isinstance(item, dict):
+                continue
+            code = str(item.get("code") or "").strip().upper()
+            policy = str(item.get("policy") or "").strip()
+            if code not in allowed or not policy:
+                continue
+            result.append({
+                "code": code, "policy": policy[:CAT_STOCK_POLICY_MAX_LEN],
+                "sectors": self._normalize_sectors("", item.get("sectors"), "综合"),
+                "reason": str(item.get("reason") or "").strip()[:40],
+            })
+        return result
+
+    def _maybe_close_policies(self, now: datetime) -> None:
+        """收市后，没有大股东拍板的公司由 AI 董事会自行定方针"""
+        if not (CAT_STOCK_CLOSE_HOUR <= now.hour < 24):
+            return
+        today = now.strftime("%Y-%m-%d")
+        chosen: List[dict] = []
+        with self._lock:
+            market = self._load_market()
+            if market.get("auto_policy_day") == today:
+                return
+            players = self._load_stock_players()
+            candidates = []
+            for comp in market["companies"].values():
+                biggest = max([self._shares_in(players, int(k), comp["code"])
+                               for k in players if str(k).isdigit()] or [0])
+                if biggest < CAT_STOCK_MEETING_HOST_SHARES:
+                    candidates.append({
+                        "code": comp["code"], "name": comp["name"],
+                        "sectors": self._sectors_of(comp),
+                        "policy": comp.get("policy") or "",
+                    })
+            if candidates:
+                chosen = random.sample(candidates,
+                                       k=min(CAT_STOCK_AUTO_POLICY_MAX, len(candidates)))
+            market["auto_policy_day"] = today
+            self._save_market(market)
+        if not chosen:
+            return
+        policies = self._ai_close_policies(chosen)
+        if not policies:
+            return
+        with self._lock:
+            market = self._load_market()
+            stamp = now.strftime("%m-%d %H:%M")
+            entries = []
+            for item in policies:
+                comp = market["companies"].get(item["code"])
+                if not comp:
+                    continue
+                comp["policy"] = item["policy"]
+                comp["policy_owner"] = 0
+                comp["policy_set_at"] = today
+                sectors = item.get("sectors") or []
+                if sectors and sectors != self._sectors_of(comp):
+                    norm = self._normalize_sectors("", sectors, self._sectors_of(comp)[0])
+                    comp["sectors"] = norm
+                    comp["sector"] = norm[0]
+                entries.append({
+                    "time": stamp, "ts": now.timestamp(),
+                    "title": f"{comp['name']}（{comp['code']}）董事会连夜定下新方向",
+                    "detail": item["policy"] + (f"（{item['reason']}）" if item.get("reason") else ""),
+                })
+            if entries:
+                market["news"] = self._recent_news(entries + (market.get("news") or []))[:CAT_STOCK_NEWS_MAX]
+            self._save_market(market)
+
+    # ==================== 猫眼石 / 猫薄荷兑换 ====================
 
     def _deposit(self, target: Target, qq: int, rest: List[str]) -> None:
         if not rest:
             self._sender.send_text(
                 target,
-                f"用法：喵股市 充值 <鱼干数>\n兑换比例 {CAT_STOCK_FISH_TO_CATNIP} 猫薄荷 / 鱼干"
+                f"用法：喵股市 充值 <猫眼石数>\n兑换比例 {CAT_STOCK_STONE_TO_CATNIP} 猫薄荷 / 猫眼石"
             )
             return
         try:
-            fish_amount = int(rest[0])
+            stone_amount = int(rest[0])
         except ValueError:
-            self._sender.send_text(target, "鱼干数必须是正整数喵")
+            self._sender.send_text(target, "猫眼石数必须是正整数喵")
             return
-        if fish_amount <= 0:
-            self._sender.send_text(target, "鱼干数必须是正整数喵")
+        if stone_amount <= 0:
+            self._sender.send_text(target, "猫眼石数必须是正整数喵")
             return
 
         player = self._cat._get_player(qq)
-        if int(player.get("fish", 0)) < fish_amount:
+        if int(player.get("eye_stones", 0)) < stone_amount:
             self._sender.send_text(
                 target,
-                f"鱼干不足喵：你有 {player.get('fish', 0)}，需要 {fish_amount}"
+                f"猫眼石不足喵：你有 {player.get('eye_stones', 0)}，需要 {stone_amount}"
             )
             return
-        player["fish"] = int(player.get("fish", 0)) - fish_amount
+        player["eye_stones"] = int(player.get("eye_stones", 0)) - stone_amount
         self._cat._update_player(qq, player)
 
-        gain = fish_amount * CAT_STOCK_FISH_TO_CATNIP
+        gain = stone_amount * CAT_STOCK_STONE_TO_CATNIP
         with self._lock:
             players = self._load_stock_players()
             st = self._stock_player(qq, players)
@@ -1237,27 +3756,27 @@ class CatStockPlugin:
 
         self._sender.send_text(
             target,
-            f"充值成功：-{fish_amount} 鱼干，+{gain} 猫薄荷\n"
-            f"当前猫薄荷 {catnip}｜剩余鱼干 {player['fish']}"
+            f"充值成功：-{stone_amount} 猫眼石，+{gain} 猫薄荷\n"
+            f"当前猫薄荷 {catnip}｜剩余猫眼石 {player['eye_stones']}"
         )
 
     def _withdraw(self, target: Target, qq: int, rest: List[str]) -> None:
         if not rest:
             self._sender.send_text(
                 target,
-                f"用法：喵股市 提现 <鱼干数>\n需要 {CAT_STOCK_CATNIP_TO_FISH} 猫薄荷 / 鱼干"
+                f"用法：喵股市 提现 <猫眼石数>\n需要 {CAT_STOCK_CATNIP_TO_STONE} 猫薄荷 / 猫眼石"
             )
             return
         try:
-            fish_amount = int(rest[0])
+            stone_amount = int(rest[0])
         except ValueError:
-            self._sender.send_text(target, "鱼干数必须是正整数喵")
+            self._sender.send_text(target, "猫眼石数必须是正整数喵")
             return
-        if fish_amount <= 0:
-            self._sender.send_text(target, "鱼干数必须是正整数喵")
+        if stone_amount <= 0:
+            self._sender.send_text(target, "猫眼石数必须是正整数喵")
             return
 
-        need = fish_amount * CAT_STOCK_CATNIP_TO_FISH
+        need = stone_amount * CAT_STOCK_CATNIP_TO_STONE
         with self._lock:
             players = self._load_stock_players()
             st = self._stock_player(qq, players)
@@ -1266,7 +3785,7 @@ class CatStockPlugin:
                 self._save_stock_players(players)
                 self._sender.send_text(
                     target,
-                    f"猫薄荷不足喵：提现 {fish_amount} 鱼干需要 {need} 猫薄荷，你只有 {catnip}"
+                    f"猫薄荷不足喵：提现 {stone_amount} 猫眼石需要 {need} 猫薄荷，你只有 {catnip}"
                 )
                 return
             st["catnip"] = catnip - need
@@ -1275,10 +3794,10 @@ class CatStockPlugin:
             self._save_stock_players(players)
             left = st["catnip"]
 
-        self._cat.add_fish(qq, fish_amount)
+        self._cat.add_eye_stones(qq, stone_amount)
         self._sender.send_text(
             target,
-            f"提现成功：-{need} 猫薄荷，+{fish_amount} 鱼干\n剩余猫薄荷 {left}"
+            f"提现成功：-{need} 猫薄荷，+{stone_amount} 猫眼石\n剩余猫薄荷 {left}"
         )
 
     # ==================== 猫薄荷转账（红包/赠送） ====================
@@ -1356,10 +3875,15 @@ class CatStockPlugin:
                 "country": comp["country"],
                 "country_name": self._country_name(comp["country"]),
                 "sector": comp["sector"],
+                "sectors": self._sectors_of(comp),
                 "base": comp["base"],
                 "price": round(float(comp["price"]), 2),
                 "pct": round(pct, 2),
                 "policy": comp.get("policy") or "",
+                "intro": comp.get("intro") or "",
+                "board": [{"name": b.get("name", ""), "tag": b.get("tag", ""),
+                           "persona": b.get("persona", ""), "shares": int(b.get("shares", 0))}
+                          for b in self._company_board(comp)],
                 "history": ((list(comp.get("history") or [])[-CAT_STOCK_HISTORY_SHOW:])
                             or [{"t": "当前", "p": round(float(comp["price"]), 2)}]),
             })
@@ -1370,15 +3894,38 @@ class CatStockPlugin:
         players = self._load_stock_players()
         cat_players = self._cat._load_players()
         ranks: Dict[str, List[Tuple[int, float, str, str]]] = {}
+        my_shares: Dict[str, int] = {}
+        max_human_shares: Dict[str, int] = {}
         for key, st in players.items():
             nick = (cat_players.get(str(key)) or {}).get("nick") or f"玩家{key}"
             for code, lots in (st.get("holdings") or {}).items():
                 shares = self._shares_of(lots)
-                if shares > 0:
-                    # 持股相同则先买入者优先，再按 QQ 升序，保证每次排序结果稳定
-                    first_ts = min((float(lot.get("ts", 0) or 0) for lot in lots), default=0.0)
-                    ranks.setdefault(code, []).append((shares, first_ts, str(key), nick))
+                if shares <= 0:
+                    continue
+                # 持股相同则先买入者优先，再按 QQ 升序，保证每次排序结果稳定
+                first_ts = min((float(lot.get("ts", 0) or 0) for lot in lots), default=0.0)
+                ranks.setdefault(code, []).append((shares, first_ts, str(key), nick))
+                if shares > max_human_shares.get(code, 0):
+                    max_human_shares[code] = shares
+                if qq is not None and key == str(qq):
+                    my_shares[code] = shares
+        # 三位常驻老股东：固定在每家公司持有董事会席位，不参与玩家排行
+        for code, comp in companies.items():
+            for ai in self._company_board(comp):
+                ranks.setdefault(code, []).append(
+                    (int(ai["shares"]), -1.0, f"ai{ai['shares']}", ai["name"]))
+        meetings = market.get("meetings") or {}
+        today = now.strftime("%Y-%m-%d")
         for row in rows:
+            code = row["code"]
+            meeting = meetings.get(code) or {}
+            active = bool(meeting) and meeting.get("day") == today
+            row["my_shares"] = int(my_shares.get(code, 0))
+            row["meeting_status"] = meeting.get("status", "") if active else ""
+            row["can_start_meeting"] = bool(
+                qq is not None and not active
+                and row["my_shares"] >= CAT_STOCK_MEETING_HOST_SHARES
+                and row["my_shares"] >= max_human_shares.get(code, 0))
             entries = sorted(ranks.get(row["code"], []),
                              key=lambda x: (-x[0], x[1], x[2]))[:3]
             holders = []
@@ -1446,6 +3993,55 @@ class CatStockPlugin:
             } for rel in (world.get("relations") or [])[:10]],
         }
 
+        era = market.get("era") or {}
+        era_index = int(era.get("index", 0) or 0) % len(_ERAS)
+        era_data = self._era_base(era_index)
+        era_points = era.get("points") or {}
+        era_paths = list(era_data.get("paths") or [])
+        era_weights = self._path_weights(market, players, era_paths)
+        era_weight_total = sum(era_weights) or 1.0
+        era_view = {
+            "index": era_index,
+            "total": len(_ERAS),
+            "name": era.get("name") or era_data["name"],
+            "theme": era.get("theme") or era_data["theme"],
+            "parent": era_data.get("parent"),
+            "map": ("/stock-assets/era_map.png"
+                    if self._ensure_era_map(list((market.get("countries") or {}).keys()))
+                    else ""),
+            "started": era.get("started", ""),
+            "ends": era.get("ends", ""),
+            "cycle": int(era.get("cycle", 0) or 0),
+            "fate": era.get("fate") or "",
+            "techs": list(era.get("techs") or []),
+            "paths": [{
+                "name": p["name"],
+                "kind": p["kind"],
+                "tag": p.get("tag", ""),
+                "desc": p.get("desc", ""),
+                "points": int(era_points.get(p["name"], 0)),
+                "chance": round(era_weights[i] / era_weight_total * 100, 1),
+                "progress": round(era_weights[i] / era_weight_total * 100, 1),
+            } for i, p in enumerate(era_paths)],
+            "history": list(era.get("history") or [])[-6:],
+        }
+        country_rows = []
+        for code, info in (market.get("countries") or {}).items():
+            if code not in _ERA0_COUNTRIES:
+                continue
+            country_rows.append({
+                "code": code,
+                "name": self._country_name(code),
+                "alive": bool(info.get("alive", True)),
+                "system": info.get("system") or "集权",
+                "origin": info.get("origin") or _COUNTRY_LORE.get(code, {}).get("origin", ""),
+                "monarch": info.get("monarch", ""),
+                "style": info.get("style", ""),
+                "persona": info.get("persona", ""),
+                "fall_reason": info.get("fall_reason", ""),
+            })
+        country_rows.sort(key=lambda r: (not r["alive"], r["name"]))
+
         data = {
             "open": self._is_open(now),
             "status_line": self._market_status_line(),
@@ -1457,18 +4053,34 @@ class CatStockPlugin:
             "down": len(rows) - up,
             "news": news,
             "world": world_view,
+            "era": era_view,
+            "countries": country_rows,
             "rules": {
                 "initial_catnip": CAT_STOCK_INITIAL_CATNIP,
-                "fish_to_catnip": CAT_STOCK_FISH_TO_CATNIP,
-                "catnip_to_fish": CAT_STOCK_CATNIP_TO_FISH,
+                "stone_to_catnip": CAT_STOCK_STONE_TO_CATNIP,
+                "catnip_to_stone": CAT_STOCK_CATNIP_TO_STONE,
                 "buy_fee": CAT_STOCK_BUY_FEE,
                 "sell_fee": CAT_STOCK_SELL_FEE,
-                "lock_note": "买入后满 4 个交易小时才能卖出（休市不计）",
+                "lock_note": "当天买入的股份要到第二天才能卖出",
                 "max_shares": CAT_STOCK_MAX_SHARES,
                 "delist_rate": CAT_STOCK_DELIST_RATE,
+                "hourly_cap": CAT_STOCK_HOURLY_CAP,
+                "daily_cap": CAT_STOCK_DAILY_CAP,
+                "small_holding_max": CAT_STOCK_SMALL_HOLDING_MAX,
+                "major_companies_max": CAT_STOCK_MAJOR_COMPANIES_MAX,
+                "meeting_min_shares": CAT_STOCK_MEETING_MIN_SHARES,
+                "meeting_host_shares": CAT_STOCK_MEETING_HOST_SHARES,
+                "meeting_minutes": CAT_STOCK_MEETING_MINUTES,
+                "meeting_vote_minutes": CAT_STOCK_MEETING_VOTE_MINUTES,
                 "bond_min_shares": CAT_STOCK_BOND_MIN_SHARES,
                 "bond_influence_shares": CAT_STOCK_BOND_INFLUENCE_SHARES,
                 "bond_price": CAT_STOCK_BOND_PRICE,
+                "era_days": CAT_STOCK_ERA_DAYS,
+                "short_min_hours": CAT_STOCK_SHORT_MIN_HOURS,
+                "short_max_hours": CAT_STOCK_SHORT_MAX_HOURS,
+                "short_margin": CAT_STOCK_SHORT_MARGIN,
+                "short_fee": CAT_STOCK_SHORT_FEE,
+                "short_min_shares": CAT_STOCK_SHORT_MIN_SHARES,
             },
         }
         if qq is not None:
@@ -1484,6 +4096,7 @@ class CatStockPlugin:
             catnip = int(st.get("catnip", 0))
             raw = {code: list(lots) for code, lots in st.get("holdings", {}).items()}
             raw_bonds = {c: list(lots) for c, lots in st.get("bonds", {}).items()}
+            raw_shorts = [dict(s) for s in (st.get("shorts") or [])]
             self._save_stock_players(players)
 
         rows = []
@@ -1547,13 +4160,43 @@ class CatStockPlugin:
             })
         bond_rows.sort(key=lambda r: r["value"], reverse=True)
 
+        short_rows = []
+        total_short_pnl = 0.0
+        for short in raw_shorts:
+            code = short.get("code")
+            comp = companies.get(code)
+            shares = int(short.get("shares", 0) or 0)
+            entry = float(short.get("entry", 0) or 0)
+            margin = float(short.get("margin", 0) or 0)
+            price = float(comp["price"]) if comp else entry
+            pnl = (entry - price) * shares
+            value = margin + pnl
+            total_value += value
+            total_cost += margin
+            total_short_pnl += pnl
+            short_rows.append({
+                "code": code,
+                "name": (comp or {}).get("name") or code,
+                "shares": shares,
+                "entry": round(entry, 2),
+                "price": round(price, 2),
+                "margin": round(margin, 0),
+                "pnl": round(pnl, 0),
+                "remaining": int(short.get("remaining", 0) or 0),
+                "opened": short.get("opened", ""),
+                "delisted": comp is None,
+            })
+        short_rows.sort(key=lambda r: r["remaining"])
+
         player = self._cat._peek_player(qq) or {}
         return {
             "catnip": catnip,
-            "fish": int(player.get("fish", 0)),
-            "catnip_to_fish_est": catnip // CAT_STOCK_CATNIP_TO_FISH,
+            "stone": int(player.get("eye_stones", 0)),
+            "catnip_to_stone_est": catnip // CAT_STOCK_CATNIP_TO_STONE,
             "holdings": rows,
             "bonds": bond_rows,
+            "shorts": short_rows,
+            "short_pnl": round(total_short_pnl, 0),
             "total_value": round(total_value, 0),
             "total_pnl": round(total_value - total_cost, 0),
         }
@@ -1561,32 +4204,41 @@ class CatStockPlugin:
     # ==================== 帮助 ====================
 
     def _help_text(self) -> str:
+        era = self._load_market().get("era") or {}
+        era_name = era.get("name") or _ERAS[0]["name"]
         return (
             "【喵股市 · 奇幻世界 if 线】\n"
             "这是猫猫远征队世界观的一条平行时间线，涨跌与新闻不会影响主线存档。\n"
+            f"时间线正在走过十二个时代，如今是「{era_name}」；"
+            "每个时代会在某条走向走到尽头时翻页，"
+            "世界可能因技术、战乱或灾变改道，列国也会在战火中存亡更迭。\n"
             f"开市时间：每天 {CAT_STOCK_OPEN_HOUR:02d}:00 ~ {CAT_STOCK_CLOSE_HOUR:02d}:00，"
-            "每个整点 AI 发布世界新闻并重新定价；休市期间不能买卖。\n"
-            f"初始猫薄荷：每人 {CAT_STOCK_INITIAL_CATNIP}（首次使用自动到账）\n"
-            f"充值：喵股市 充值 <鱼干数>（1 鱼干 = {CAT_STOCK_FISH_TO_CATNIP} 猫薄荷）\n"
-            f"提现：喵股市 提现 <鱼干数>（{CAT_STOCK_CATNIP_TO_FISH} 猫薄荷 = 1 鱼干）\n"
-            f"手续费：买入 {CAT_STOCK_BUY_FEE:.0%}、卖出 {CAT_STOCK_SELL_FEE:.0%}（每笔最低 1 猫薄荷）\n"
-            f"交易规则：买入后满 {CAT_STOCK_LOCK_HOURS} 个开市小时才能卖出（休市时间不计）；"
-            "单笔最少 10 股、最多 100 万股\n"
-            "涨跌：不设涨跌停，单小时大致 -20% ~ +25%；事件会延续发酵，"
-            "同国与同行业的企业也会联动涨跌\n"
-            "退市：经营不善、股价长期低迷的企业会被摘牌，股价崩塌时会直接退市，"
-            "持仓按最新价 70% 强制清算，退市企业也可能改日重新上市\n"
-            "买入：喵股市 买 <股票代码> <股数>\n"
-            "卖出：喵股市 卖 <股票代码> <股数>\n"
-            "查看：喵股市 大盘 / 喵股市 新闻 / 喵股市 持仓\n"
-            "排行：喵股市 排行（收益榜 + 亏得最惨榜）\n"
-            f"方针：持股 ≥{CAT_STOCK_POLICY_MIN_SHARES} 股且为该公司最大股东时，"
-            "可用「喵股市 方针 <股票代码> <方针内容>」给公司定方向，AI 写新闻时会参考\n"
-            f"国债：每个国家都发行国债，价格波动很小；单笔最少 {CAT_STOCK_BOND_MIN_SHARES} 张\n"
-            "  查看：喵股市 国债｜买入：喵股市 买国债 <国家/代码> <张数>｜卖出：喵股市 卖国债 <国家/代码> <张数>\n"
-            f"  国策：持有 ≥{CAT_STOCK_BOND_INFLUENCE_SHARES} 张该国国债后，"
-            "可用「喵股市 国策 <国家/代码> <内容>」影响该国发展方针（AI 新闻会参考，但不保证完全照办）\n"
-            f"（提示：大额持仓可能被空头盯上，别把猫薄荷都押在一只股上）"
+            "每个整点交易所会发布世界快报并重新挂出价格；收市后只可观望。\n"
+            f"入市资金：新开户赠送 {CAT_STOCK_INITIAL_CATNIP} 猫薄荷，也可用猫眼石换取；"
+            f"「喵股市 充值 <猫眼石数>」按 1 猫眼石 = {CAT_STOCK_STONE_TO_CATNIP} 猫薄荷，"
+            f"「喵股市 提现 <猫眼石数>」按 {CAT_STOCK_CATNIP_TO_STONE} 猫薄荷 = 1 猫眼石。\n"
+            f"交易：买入与卖出各收 {CAT_STOCK_BUY_FEE:.0%} 手续费（每笔最低 1 猫薄荷）；"
+            f"当天买入的股份要到第二天才能卖出；"
+            f"单笔最多 {CAT_STOCK_MAX_SHARES} 股，不设最少购入限制。\n"
+            "行情：交易所给每只股票挂了限价牌，单小时只允许小幅挪动，"
+            "一整天涨跌互相抵消后也走不出太远，隔日重新起算；"
+            "但经营崩坏或遭遇意外的企业，可以直接被摘牌清盘，"
+            "持仓按最新价的七成折算，摘牌企业也可能改日重新挂牌。\n"
+            "持股：一位股东最多深度介入两家公司的经营，其他公司只允许保留一小把零散股份。\n"
+            "做空：押注某家企业会跌，需先付五成保证金与 1% 手续费；"
+            f"约定周期 {CAT_STOCK_SHORT_MIN_HOURS}~{CAT_STOCK_SHORT_MAX_HOURS} 个开市小时，"
+            "到期按现价自动了结，也可以随时「平空」提前收手。\n"
+            "经营方向：企业可以同时做几门营生，最大股东在开市时段可「拓展」新方向或「改营」整体换向。\n"
+            "买卖：喵股市 买 <代码> <股数>｜喵股市 卖 <代码> <股数>\n"
+            "　　　喵股市 做空 <代码> <股数> [周期]｜喵股市 平空 [代码] [股数]\n"
+            "查看：喵股市 大盘 / 新闻 / 持仓 / 排行 / 国家 / 代码或名称\n"
+            "国家：喵股市 国家 查看列国，喵股市 国家 <代码或国名> 查看制度、君主与起源。\n"
+            "董事会：持股最多且股份够多时，可在网页召集股东大会，"
+            "先讨论十分钟，再由大股东定稿一份方针、书记员汇总一份，连同旧方针一起交股东确认；"
+            "散会后三十分钟内不确认的按沿用旧方针计，"
+            "AI 方针得票超过一半、或大股东方针超过三分之二才启用。"
+            "没有大股东拍板的公司，收市后由董事会自行定下新的经营方向。\n"
+            "（提示：大额持仓可能被空头盯上，别把猫薄荷都押在一只股上）"
         )
 
     # ==================== 整点行情调度 ====================
@@ -1597,7 +4249,9 @@ class CatStockPlugin:
     def _scheduler_loop(self) -> None:
         while True:
             try:
-                self._catch_up(datetime.now())
+                now = datetime.now()
+                self._catch_up(now)
+                self._maybe_close_policies(now)
             except Exception as e:
                 print(f"[cat_stock] tick error: {e}")
             time.sleep(30)
@@ -1632,6 +4286,7 @@ class CatStockPlugin:
         world = [d.get("text", "") for d in snapshot.get("world_directives", [])
                  if int(d.get("remaining", 0)) > 0
                  and d.get("from") == CAT_STOCK_WORLD_ADMIN]
+        world_tone = _world_tone(world)
         # AI 生成新闻较慢，先不占用锁，避免玩家交易被阻塞
         ai_news, effects, world_update, ai_actions = self._make_news(snapshot, now, world)
 
@@ -1678,6 +4333,29 @@ class CatStockPlugin:
                            (dev - CAT_STOCK_REVERT_THRESHOLD) * CAT_STOCK_REVERT_COEF)
                 comp["price"] = max(1.0, comp["price"] * (1 - pull))
 
+            # 1.2) 局势设定同时给全盘定调：同一条走向下，绝大多数企业朝同一方向走
+            if world_tone:
+                for comp in companies.values():
+                    drift = (world_tone * CAT_STOCK_WORLD_BIAS
+                             + random.uniform(-0.002, 0.002))
+                    comp["price"] = max(1.0, comp["price"] * (1 + drift))
+
+            # 1.25) 掌管者对具体企业的扶持/打压：持续若干个整点推拉该企业
+            company_directives = [d for d in (market.get("company_directives") or [])
+                                  if d.get("from") == CAT_STOCK_WORLD_ADMIN]
+            for item in company_directives:
+                remaining = int(item.get("remaining", 0) or 0)
+                if remaining <= 0:
+                    continue
+                comp = companies.get(item.get("code"))
+                if comp:
+                    sign = 1.0 if item.get("mode") == "扶持" else -1.0
+                    comp["price"] = max(
+                        1.0, float(comp["price"]) * (1 + sign * CAT_STOCK_COMPANY_BIAS))
+                item["remaining"] = remaining - 1
+            market["company_directives"] = [
+                d for d in company_directives if int(d.get("remaining", 0) or 0) > 0]
+
             # 1.1) 国债：波动远小于股票，缓慢向面值回归
             for bond in (market.get("bonds") or {}).values():
                 base = float(bond.get("base") or CAT_STOCK_BOND_PRICE)
@@ -1693,6 +4371,21 @@ class CatStockPlugin:
 
             # 3) 大额持仓被针对（轻度）
             pressure_news = self._big_holding_pressure(companies, players)
+            self._settle_positions(companies, players)
+            self._settle_shorts(players, companies, now)
+
+            # 3.5) 交易所限价：单小时最多上下 2%，当日累计最多 ±10%
+            #      当日涨跌互相抵消，隔日重新计算；经营崩坏仍可由交易所直接摘牌
+            for comp in companies.values():
+                before = price_before.get(comp["code"]) or comp["price"] or 1
+                day_base = float(comp.get("prev_close") or before) or before
+                day_low = day_base * (1 - CAT_STOCK_DAILY_CAP)
+                day_high = day_base * (1 + CAT_STOCK_DAILY_CAP)
+                low = max(before * (1 - CAT_STOCK_HOURLY_CAP), day_low)
+                high = min(before * (1 + CAT_STOCK_HOURLY_CAP), day_high)
+                if low > high:
+                    low, high = day_low, day_high
+                comp["price"] = max(1.0, min(max(float(comp["price"]), low), high))
 
             # 4) 退市 / 新上市
             event_news = []
@@ -1709,6 +4402,9 @@ class CatStockPlugin:
                 event_news.append(forced_listing)
             # 4.3) 历史新闻里提过挂牌、但市场上查不到对应企业的，逐小时重试补上
             event_news.extend(self._repair_listing_news(market))
+
+            # 4.5) 时代与列国：走向推进、君主战和、必要时翻页换一批企业
+            event_news.extend(self._era_step(market, players, ai_actions))
 
             stamp = now.strftime("%m-%d %H:%M")
 
@@ -1789,13 +4485,14 @@ class CatStockPlugin:
         if code and code in companies:
             affected = {code: 1.0}
             comp = companies[code]
+            comp_sectors = set(self._sectors_of(comp))
             for peer in companies.values():
                 if peer["code"] == code:
                     continue
                 if peer["country"] == comp["country"]:
                     affected[peer["code"]] = max(
                         affected.get(peer["code"], 0.0), CAT_STOCK_LINK_COUNTRY)
-                elif peer["sector"] == comp["sector"]:
+                elif comp_sectors & set(self._sectors_of(peer)):
                     affected[peer["code"]] = max(
                         affected.get(peer["code"], 0.0), CAT_STOCK_LINK_SECTOR)
             for peer_code, ratio in affected.items():
@@ -1806,10 +4503,10 @@ class CatStockPlugin:
             for comp in companies.values():
                 if comp["country"] == country:
                     comp["price"] = max(1.0, comp["price"] * (1 + pct))
-                    sectors.add(comp["sector"])
+                    sectors.update(self._sectors_of(comp))
             # 同一行业在别国的企业也会受到小幅波及
             for comp in companies.values():
-                if comp["country"] != country and comp["sector"] in sectors:
+                if comp["country"] != country and sectors & set(self._sectors_of(comp)):
                     comp["price"] = max(1.0, comp["price"] * (1 + pct * CAT_STOCK_LINK_SECTOR))
 
     def _big_holding_pressure(self, companies: dict, players: dict) -> List[dict]:
@@ -1835,6 +4532,49 @@ class CatStockPlugin:
             "title": f"空头狙击！{comp['name']}（{code}）传出大额持仓被集中做空",
             "detail": f"盘中一度下挫约 {abs(pct) * 100:.0f}%，监管机构表示正在调查",
         }]
+
+    def _settle_positions(self, companies: dict, players: dict) -> None:
+        """按市场净头寸温和回收利润：多头浮盈压低价格，空头浮盈抬高价格。
+
+        每个代码记 [多头成本, 多头股数, 空头成本, 空头股数]，
+        两边同时押注时按净方向施加压力，保证不会出现全员一起赚钱的行情。"""
+        pool: Dict[str, List[float]] = {}
+        for st in players.values():
+            for code, lots in (st.get("holdings") or {}).items():
+                shares = self._shares_of(lots)
+                if shares <= 0:
+                    continue
+                cost = sum(float(l.get("price", 0)) * int(l.get("shares", 0)) for l in lots)
+                slot = pool.setdefault(code, [0.0, 0.0, 0.0, 0.0])
+                slot[0] += cost
+                slot[1] += float(shares)
+            for short in st.get("shorts") or []:
+                code = short.get("code")
+                shares = int(short.get("shares", 0) or 0)
+                if not code or shares <= 0:
+                    continue
+                slot = pool.setdefault(code, [0.0, 0.0, 0.0, 0.0])
+                slot[2] += float(short.get("entry", 0) or 0) * shares
+                slot[3] += float(shares)
+        for code, (lcost, lshares, scost, sshares) in pool.items():
+            comp = companies.get(code)
+            if not comp:
+                continue
+            price = float(comp["price"])
+            pressure = 0.0
+            if lshares > 0 and lcost > 0:
+                long_gain = price * lshares / lcost - 1
+                if long_gain > CAT_STOCK_SETTLE_GAP:
+                    pressure += min(CAT_STOCK_SETTLE_MAX,
+                                    (long_gain - CAT_STOCK_SETTLE_GAP) * CAT_STOCK_SETTLE_COEF)
+            if sshares > 0 and scost > 0:
+                short_gain = 1 - price * sshares / scost
+                if short_gain > CAT_STOCK_SETTLE_GAP:
+                    pressure -= min(CAT_STOCK_SETTLE_MAX,
+                                    (short_gain - CAT_STOCK_SETTLE_GAP) * CAT_STOCK_SETTLE_COEF)
+            if not pressure:
+                continue
+            comp["price"] = max(1.0, price * (1 - pressure))
 
     def _maybe_delist(self, market: dict, players: dict) -> List[dict]:
         companies = market["companies"]
@@ -1868,16 +4608,17 @@ class CatStockPlugin:
         paid = False
         for st in players.values():
             lots = st.get("holdings", {}).pop(code, None)
-            if not lots:
-                continue
-            shares = self._shares_of(lots)
-            if shares > 0:
-                st["catnip"] = int(st.get("catnip", 0)) + shares * payout
-                paid = True
+            if lots:
+                shares = self._shares_of(lots)
+                if shares > 0:
+                    st["catnip"] = int(st.get("catnip", 0)) + shares * payout
+                    paid = True
+            self._close_shorts_for(st, code, float(payout), "摘牌清算")
         market["companies"].pop(code, None)
         market["catalog"].append({
             "code": comp["code"], "name": comp["name"], "country": comp["country"],
-            "sector": comp["sector"], "base": comp["base"],
+            "sector": comp["sector"], "sectors": self._sectors_of(comp),
+            "intro": comp.get("intro") or "", "base": comp["base"],
         })
         if forced:
             detail = ("经营不善，股价崩塌，已触发强制退市；"
@@ -1890,9 +4631,65 @@ class CatStockPlugin:
         return {"title": f"退市公告：{comp['name']}（{code}）经营不善，正式摘牌",
                 "detail": detail}
 
+    def _ai_pick_listing(self, market: dict, candidates: List[dict],
+                         reason: str) -> Optional[dict]:
+        """从候补企业里让 AI 挑一家最贴合当下局势、且不会让行业过度拥挤的公司"""
+        if not self._ai or len(candidates) <= 1:
+            return None
+        companies = market.get("companies") or {}
+        sector_counts: Dict[str, int] = {}
+        for comp in companies.values():
+            for sec in set(self._sectors_of(comp)):
+                sector_counts[sec] = sector_counts.get(sec, 0) + 1
+        pool = list(candidates)
+        random.shuffle(pool)
+        shown = pool[:8]
+        lines = "\n".join(
+            f"{i}. {item['name']}｜{self._country_name(item.get('country', ''))}"
+            f"｜{'、'.join(self._normalize_sectors(item.get('sector'), item.get('sectors')))}"
+            f"｜基准 {item.get('base')}"
+            for i, item in enumerate(shown, 1))
+        news = (market.get("news") or [])[:4]
+        world = market.get("world") or {}
+        prompt = (
+            "你是奇幻世界《猫猫远征队》if 线交易所的挂牌审核人。\n"
+            f"本小时要补一家新上市公司，直接原因是：{reason}。\n"
+            f"当前世界主线：{world.get('arc', '')}。\n"
+            "最近新闻：\n" + ("\n".join(f"- {n.get('title', '')}" for n in news
+                                        if n.get("title")) or "无") +
+            "\n当前各行业上市公司数量："
+            + "、".join(f"{k} {v} 家" for k, v in sorted(sector_counts.items(),
+                                                          key=lambda x: -x[1])[:10]) +
+            "\n候选企业（按编号）：\n" + lines +
+            "\n请综合考虑：哪家企业的营生最符合当下的世界局势与新闻走向；"
+            "同时照顾市场平衡，行业已经太拥挤时优先让别的行业上市；"
+            "国家缺上市公司时优先补那个国家。\n"
+            '只输出 JSON：{"pick":候选编号,"reason":"不超过20字"}'
+        )
+        try:
+            raw = self._ai._call_ai(
+                Config.AI_MODEL["chat"],
+                [{"role": "system", "content": "你是奇幻世界的交易所挂牌审核人，只输出 JSON。"},
+                 {"role": "user", "content": prompt}],
+                temperature=0.5, max_retries=1, max_tokens=120,
+            )
+            data = _extract_json(raw) if isinstance(raw, str) else raw
+            idx = int(data.get("pick")) - 1
+            if 0 <= idx < len(shown):
+                return shown[idx]
+        except Exception as e:
+            print(f"[cat_stock] listing pick failed: {e}")
+        return None
+
     def _maybe_list(self, market: dict) -> Optional[dict]:
         companies = market["companies"]
         catalog = market.get("catalog", [])
+        # 已灭亡的国家不会再冒出新的上市公司
+        countries_state = market.get("countries") or {}
+        alive = {code for code, info in countries_state.items() if info.get("alive", True)}
+        if countries_state:
+            catalog = [item for item in catalog if item.get("country") in alive]
+            market["catalog"] = catalog
         if not catalog or len(companies) >= CAT_STOCK_COMPANY_MAX:
             return None
 
@@ -1915,14 +4712,24 @@ class CatStockPlugin:
                 return None
             candidates = catalog
             reason = "扩展业务版图"
-        item = random.choice(candidates)
+        item = (self._ai_pick_listing(market, candidates, reason)
+                or random.choice(candidates))
         catalog.remove(item)
-        price = float(max(10, int(item["base"] * random.uniform(0.7, 1.3))))
+        # 首日参考价贴近基准价，不再让新股的起点忽高忽低，避免市场强度失衡
+        price = float(max(10, int(item["base"] * random.uniform(0.95, 1.05))))
+        sectors = self._normalize_sectors(item.get("sector"), item.get("sectors"))
+        cname = self._country_name(item["country"])
+        era_index = int((market.get("era") or {}).get("index", 0) or 0)
         companies[item["code"]] = {
             "code": item["code"],
             "name": item["name"],
             "country": item["country"],
-            "sector": item.get("sector", "综合"),
+            "sector": sectors[0],
+            "sectors": sectors,
+            "intro": item.get("intro") or (
+                f"{cname}地界上的老字号，起先只做{sectors[0]}，"
+                f"后来把手伸向{'、'.join(sectors[1:]) if sectors[1:] else '左近的零碎营生'}。"),
+            "board": item.get("board") or self._board_for(item["code"], era_index),
             "base": item["base"],
             "price": price,
             "prev_close": price,
@@ -1930,7 +4737,7 @@ class CatStockPlugin:
         }
         return {"title": f"新上市：{item['name']}（{item['code']}）挂牌交易",
                 "detail": f"来自 {self._country_name(item['country'])}，{reason}；"
-                          f"首日参考价 {self._fmt_price(price)}，行业 {item.get('sector', '综合')}"}
+                          f"首日参考价 {self._fmt_price(price)}，经营 {'、'.join(sectors)}"}
 
     # 局势设定里出现这些词，视为“要求本小时要有企业挂牌”
     _LISTING_WORDS = ("上市", "挂牌", "新股", "首次公开募股")
@@ -2021,21 +4828,45 @@ class CatStockPlugin:
         companies = market.get("companies", {})
         catalog_codes = sorted({str(c.get("code", "")).upper()
                                 for c in market.get("catalog") or []})
-        countries = "\n".join(f"- {self._country_name(code)}（{code}）"
-                              for code in _COUNTRY_GEO)
+        bases = sorted(float(c.get("base") or 0) for c in companies.values()
+                       if float(c.get("base") or 0) > 0)
+        median_base = bases[len(bases) // 2] if bases else 30
+        country_counts: Dict[str, int] = {}
+        sector_counts: Dict[str, int] = {}
+        for comp in companies.values():
+            country_counts[comp["country"]] = country_counts.get(comp["country"], 0) + 1
+            for sec in set(self._sectors_of(comp)):
+                sector_counts[sec] = sector_counts.get(sec, 0) + 1
+        era_index = int((market.get("era") or {}).get("index", 0) or 0)
+        era_data = self._era_base(era_index)
         prompt = (
             "你是奇幻世界《猫猫远征队》if 线的股市主编。\n"
+            f"当前时代：{era_data['name']}——{era_data['theme']}，"
+            f"产业水平：{'、'.join(era_data.get('sectors') or [])}。\n"
             f"当前外部局势：{world_text}\n"
             "请依据这个新局势设计一家刚刚诞生的企业并挂牌上市："
             "战争会催生军工、炼金、佣兵；灾变催生重建、草药、驱魔；"
             "贸易繁荣催生航运、商会、仓储；王权更替催生典礼、谍报、铸币。"
             "如果新闻或走向原文已经点明了企业名，就沿用那个名字；"
             "如果原文给了三位大写代码，也沿用该代码。\n"
-            "可用的国家：\n" + countries +
+            "可用的国家（括号内为现有上市公司数）：\n"
+            + "\n".join(f"- {self._country_name(code)}（{code}）："
+                        f"{country_counts.get(code, 0)} 家"
+                        for code, info in (market.get("countries") or {}).items()
+                        if info.get("alive", True)) +
             "\n已有企业（名称与代码都不能重复）：\n"
             + ("\n".join(f"{c['code']}｜{c['name']}" for c in companies.values()) or "无") +
             "\n已占用代码：" + ("、".join(catalog_codes) or "无") +
-            "\n只输出一个 JSON 对象，不要解释："
+            "\n现有行业分布："
+            + ("、".join(f"{k} {v} 家" for k, v in sorted(sector_counts.items(),
+                                                          key=lambda x: -x[1])[:10]) or "无") +
+            "\n市场平衡：现有企业基准价中位数约 "
+            f"{median_base:.0f}。新企业的基准价要与现有市场相称，"
+            f"建议落在 {max(20, int(median_base * 0.7))}~{min(300, int(median_base * 1.3))}；"
+            "不要凭空拔高整体估值。行业分布也要照顾平衡，已有太多的行业不要再挤。"
+            "新企业的行业与产品必须属于当前时代的产业水平，"
+            "禁止把后续时代的技术、制度或金融产物提前上市。\n"
+            "只输出一个 JSON 对象，不要解释："
             '{"code":"三位大写字母","name":"企业名（不超过10字）",'
             '"country":"国家代码","sector":"行业名（不超过4字）","base":20到300的整数}'
         )
@@ -2079,20 +4910,48 @@ class CatStockPlugin:
             if (not re.fullmatch(r"[A-Z]{3}", code) or code in companies
                     or code in catalog_codes or not name
                     or name in existing_names or name in catalog_names
-                    or country not in _COUNTRY_GEO or not sector
+                    or not sector
+                    or not (market.get("countries") or {}).get(country, {}).get("alive", False)
                     or not isinstance(base, (int, float)) or not 20 <= base <= 300):
                 continue
             base = int(base)
-            price = float(max(10, int(base * random.uniform(0.85, 1.15))))
+            price = float(max(10, int(base * random.uniform(0.95, 1.05))))
+            sectors = self._normalize_sectors(sector, item.get("sectors"))
+            cname = self._country_name(country)
+            era_index = int((market.get("era") or {}).get("index", 0) or 0)
             companies[code] = {
-                "code": code, "name": name, "country": country, "sector": sector,
+                "code": code, "name": name, "country": country, "sector": sectors[0],
+                "sectors": sectors,
+                "intro": (f"{cname}地界上由世界局势催生的新字号，"
+                          f"眼下经营{'、'.join(sectors)}。"),
+                "board": self._board_for(code, era_index),
                 "base": base, "price": price, "prev_close": price, "bad_ticks": 0,
             }
             existing_names.add(name)
             news.append({
                 "title": f"新产业上市：{name}（{code}）挂牌交易",
-                "detail": (f"世界局势催生新的{sector}企业，落户"
+                "detail": (f"世界局势催生新的{'、'.join(sectors)}企业，落户"
                            f"{self._country_name(country)}；首日参考价 {self._fmt_price(price)}"),
+            })
+
+        # 企业改换经营方向：董事会决定后，业务不再一成不变
+        for item in actions.get("rebrands") or []:
+            code = str(item.get("code") or "").strip().upper()
+            comp = companies.get(code)
+            if not comp:
+                continue
+            sectors = self._normalize_sectors("", item.get("sectors"),
+                                             self._sectors_of(comp)[0])
+            if sectors == self._sectors_of(comp):
+                continue
+            old = '、'.join(self._sectors_of(comp))
+            comp["sectors"] = sectors
+            comp["sector"] = sectors[0]
+            reason = str(item.get("reason") or "").strip()[:40]
+            news.append({
+                "title": f"{comp['name']}（{code}）调整业务版图",
+                "detail": (f"经营范围由「{old}」转向「{'、'.join(sectors)}」"
+                           + (f"：{reason}" if reason else "")),
             })
 
         for item in actions.get("delistings") or []:
@@ -2170,12 +5029,20 @@ class CatStockPlugin:
         try:
             news, effects, world_update, actions = self._ai_news(market, now, world)
             if actions and not world:
-                # 没有外部设定时，普通事件偶尔也能推动换血，但概率压低避免频繁
+                # 没有外部设定时，普通事件偶尔也能推动换血，但概率压低避免频繁；
+                # 时代走向与列国君主的举动不受这个概率限制
+                era_bits = {
+                    "era_hint": actions.get("era_hint") or {},
+                    "country_actions": actions.get("country_actions") or [],
+                }
                 if random.random() >= CAT_STOCK_AI_ACTION_CHANCE:
-                    actions = None
+                    actions = dict(era_bits, listings=[], delistings=[], rebrands=[])
                 else:
-                    actions = {"listings": (actions.get("listings") or [])[:1],
-                               "delistings": (actions.get("delistings") or [])[:1]}
+                    actions = dict(
+                        era_bits,
+                        listings=(actions.get("listings") or [])[:1],
+                        delistings=(actions.get("delistings") or [])[:1],
+                        rebrands=(actions.get("rebrands") or [])[:1])
             if news or actions:
                 return news, effects, world_update, actions
         except Exception as e:
@@ -2192,24 +5059,49 @@ class CatStockPlugin:
         has_policy = False
         for comp in companies.values():
             line = (f"{comp['code']}｜{comp['name']}｜{comp['country']}({self._country_name(comp['country'])})"
-                    f"｜{comp['sector']}｜现价{self._fmt_price(comp['price'])}"
+                    f"｜{'、'.join(self._sectors_of(comp))}｜现价{self._fmt_price(comp['price'])}"
                     f"｜近1小时{self._fmt_pct(float(comp.get('momentum', 0.0)) * 100)}")
             policy = comp.get("policy")
             if policy:
                 has_policy = True
                 line += f"｜方针:{policy}"
             lines.append(line)
-        bond_lines = []
+        bond_lines: List[str] = []
         has_bond_policy = False
-        for bond in sorted((market.get("bonds") or {}).values(), key=lambda b: b["country"]):
-            line = (f"{bond['code']}｜{bond['name']}｜{bond['country']}"
-                    f"({self._country_name(bond['country'])})｜现价{self._fmt_price(bond['price'])}")
-            policy = str(bond.get("policy") or "").strip()
-            if policy:
-                has_bond_policy = True
-                line += f"｜国债持有人诉求:{policy}"
-            bond_lines.append(line)
         cat_seed = self._cat_news_seed()
+        # 资金动向：玩家真金白银的持仓与做空，是新闻里最自然的市场题材
+        flow_block = ""
+        try:
+            stock_players = self._load_stock_players()
+            ranked: List[Tuple[float, dict]] = []
+            short_rows: List[Tuple[float, dict]] = []
+            for comp in companies.values():
+                value = 0.0
+                for st in stock_players.values():
+                    shares = self._shares_of(
+                        (st.get("holdings") or {}).get(comp["code"], []))
+                    value += shares * float(comp["price"])
+                if value > 0:
+                    ranked.append((value, comp))
+                for st in stock_players.values():
+                    for short in st.get("shorts") or []:
+                        if short.get("code") != comp["code"]:
+                            continue
+                        short_rows.append(
+                            (int(short.get("shares", 0) or 0) * float(comp["price"]), comp))
+            ranked.sort(key=lambda x: -x[0])
+            short_rows.sort(key=lambda x: -x[0])
+            if ranked or short_rows:
+                flow_block = "\n本小时玩家资金动向（可写成商会抢筹、跟风、空头传闻与逼空）：\n"
+                if ranked:
+                    flow_block += "重仓持有：" + "；".join(
+                        f"{c['name']} 约 {int(v)} 猫薄荷" for v, c in ranked[:5])
+                if short_rows:
+                    flow_block += "\n被做空：" + "；".join(
+                        f"{c['name']} 约 {int(v)} 猫薄荷" for v, c in short_rows[:3])
+                flow_block += "\n"
+        except Exception:
+            flow_block = ""
         recent_news = (market.get("news") or [])[:10]
         recent_block = ""
         if recent_news:
@@ -2227,7 +5119,12 @@ class CatStockPlugin:
                            + "\n这些设定彼此并列、同等重要：每一条都必须至少有一条新闻写它的具体进展和后果，"
                              "不能只围绕其中一条写、也不能让后面的设定落空；"
                              "每条都要给出明确的 effects，量级要相当，"
-                             "不要用一条压倒性的新闻吞掉其他几条。"
+                           "不要用一条压倒性的新闻吞掉其他几条。"
+                             "设定若是全局性的灾祸（危机、战争、瘟疫、萧条、崩盘一类），"
+                             "绝大多数企业必须下跌，只允许极少数被写成逆势获利；"
+                             "设定若是全局性的繁荣或大利好，则反过来，绝大多数企业必须上涨。"
+                             "effects 要覆盖七成以上的上市企业，不能只落在零星几家，"
+                             "更不能把一场全局危机写成半盘上涨。"
                              "严禁把原文照搬进新闻标题或详情（不要写“设定：……”“背景：……”），"
                              "要写出局势自然发展出的具体进展和后果——谁做了什么、哪国哪行业受冲击、结果如何。"
                              "effects 必须显著，单条可给到 ±0.35，"
@@ -2253,25 +5150,78 @@ class CatStockPlugin:
                             "不要使用任何预设事件模板，所有事件都由你根据故事线、国家关系和企业现状自由创作。"
                             "各国存在合纵连横：盟友可能因共同敌人靠拢，敌对国可能互相制裁、"
                             "断商路、边境摩擦；新闻要顺着这些关系发展，而不是每小时另起炉灶。\n")
+        era = market.get("era") or {}
+        era_index = int(era.get("index", 0) or 0) % len(_ERAS)
+        era_data = _ERAS[era_index]
+        era_points = era.get("points") or {}
+        path_lines = "；".join(
+            f"{p['name']}（{p['kind']}，局势积累 {int(era_points.get(p['name'], 0))}）"
+            for p in era_data.get("paths") or [])
+        countries_state = market.get("countries") or {}
+        country_lines = []
+        fallen_lines = []
+        for code, info in countries_state.items():
+            if info.get("alive", True):
+                country_lines.append(
+                    f"- {self._country_name(code)}（{code}）：君主 {info.get('monarch', '')}，"
+                    f"{info.get('style', '')}性情，{info.get('persona', '')}")
+            else:
+                fallen_lines.append(f"{self._country_name(code)}（{code}）")
+        era_block = (
+            f"\n当前是第 {era_index + 1}/{len(_ERAS)} 个时代「{era_data['name']}」"
+            f"——{era_data['theme']}。\n"
+            f"这个时代可以走的结局：{path_lines}。\n"
+            f"时代固定延续 {CAT_STOCK_ERA_DAYS} 天，到 {era.get('ends', '')} 时按可能性随机选中一条走向"
+            "翻页；玩家对相关产业的投资、做空与公司方针会改变各走向的权重，"
+            "押注越多越容易走向那条历史节点。\n"
+            "已经点亮的里程碑："
+            + ("、".join(era.get("techs") or []) or "无") + "。\n"
+            "这个时代的产业水平："
+            + "、".join(era_data.get("sectors") or [])
+            + "；新闻里不要出现明显超出该时代的技术与企业"
+              "（例如蒙昧时代不该有电报、蒸汽机）。\n"
+            "节奏约束：世界按时代缓慢演进，当前时代必须一直走到 "
+            f"{era.get('ends', '')}，本小时只是其中一瞬。"
+            "新闻与 world.story 只能写这个时代内部的渐变、反复与曲折，"
+            "不要在一小时或一天内让文明整体跃迁；"
+            "新事物只能以当前产业能解释的雏形出现，不能提前写出后续时代的成熟技术、"
+            "制度与金融体系。时代翻页只能由到期时的历史走向决定，"
+            "新闻不得自行宣布进入新时代，科技突破只能作为下一时代的伏笔。\n"
+            "列国皆为集权，君主由各自的智能体扮演，性情各异：\n"
+            + ("\n".join(country_lines) or "列国皆已覆灭")
+            + ("\n已经灭亡的国家：" + "、".join(fallen_lines) if fallen_lines else "")
+            + "\n国家会因战乱、灾变、政变而亡国，企业会因失败而瞬间消失；"
+              "新闻要写出这些后果，但不要每小时都让列国开战。\n"
+        )
+        sparks = random.sample(
+            ["边境冲突", "魔物侵袭", "商路新发现", "宫廷政变", "走私丑闻",
+             "节庆与祭祀", "炼金事故", "难民迁徙", "古老遗迹出土", "商队失踪",
+             "海难与救援", "丰收与饥荒", "雇佣兵哗变", "密教传道", "矿山塌方"],
+            k=2)
         prompt = (
             "你是一个奇幻世界的财经新闻主编，世界背景是《猫猫远征队》的 if 线，"
             "这是一个充满魔法、魔物与列国纷争的世界。\n"
             f"现在是 {now.strftime('%H:%M')}，股市开市。\n"
-            "以下是当前上市企业（代码｜名称｜国家｜行业｜现价｜近1小时涨跌）：\n"
+            "以下是当前上市企业（代码｜名称｜国家｜经营范围（可含多项业务）｜现价｜近1小时涨跌）：\n"
             + "\n".join(lines)
-            + "\n\n各国国债（代码｜名称｜国家｜现价｜国债持有人诉求）：\n"
-            + "\n".join(bond_lines)
-            + recent_block + world_block + state_block
+            + recent_block + world_block + state_block + era_block + flow_block
             + self._geography_prompt() +
             f"\n\n请生成 {CAT_STOCK_NEWS_TICK_MIN}~{CAT_STOCK_NEWS_TICK_MAX} 条本小时的世界新闻，"
             "不要写成十几条，也不要只有一条。新闻要有长有短：既有影响盘面的重头消息，"
             "也有交易所里流传的短讯、传闻、人物动向，读起来像一整个热闹的新闻流。"
+            "事件类型必须丰富：这一小时可以夹杂意外、灾祸、奇遇、丑闻、发现、节庆、"
+            "迁徙、骗局、魔物、宫廷秘闻、技术尝试等不同性质的事件，"
+            "不要连续几小时重复同一种灾祸或同一种战争，也不要套用固定模板。"
+            f"本小时可以借用这些灵感方向：{'、'.join(sparks)}；只是灵感，不必全部使用，"
+            "更不要写成千篇一律的模板。"
             "其中至少一半的新闻必须与股市直接相关，并给出能由这条新闻解释的股价影响。"
             "新闻要参考企业最近的走势和前面的新闻，保持事件连续性，"
             "但具体事件如何发展完全由你自由创作，不要套用固定剧情或固定行业对应关系，"
             "也不要每小时都凭空另起炉灶。"
-            "涨跌可以有戏剧性，单条新闻大致 -25% ~ +35%，但必须有因果依据，"
-            "也不要所有股票同涨同跌。"
+            "如果上面有玩家资金动向，请至少有一条新闻写出资金面带来的具体后果"
+            "（抢筹、跟风、空头狙击、逼空或大户撤退），但不要机械地按持仓数字编涨跌。"
+            "涨跌可以有戏剧性，但必须有因果依据，"
+            "实际盘面会受交易所限价约束，每小时与当日的波动都在规则之内，不要所有股票同涨同跌。"
             + ("\n有企业带着「方针」，那是最大股东制定的经营方向；"
                "请至少让一条新闻体现方针带来的实际经营变化"
                "（新订单、扩产、招聘、政策扶持或收缩裁员），"
@@ -2300,18 +5250,34 @@ class CatStockPlugin:
             "pct 是小数涨跌幅，范围 -0.25 ~ 0.35（局势设定直接引发的重大事件可到 ±0.35），"
             "正数为涨；code 和 country 二选一；每条新闻给 1~2 条 effects。"
             "world 是可选的：如果本小时故事有推进，就给出更新后的世界发展脉络"
-            "（150字以内，要接着上一版写、不要推翻已有历史）、当前主线（一句话）"
+            "（150字以内，要接着上一版写、不要推翻已有历史，只做本时代内部的小幅推进，"
+            "不要把几百年乃至几个时代的跨度压进一天）、当前主线（一句话）"
             "和仍然成立的完整国家关系列表（最多 10 条，没有变化可省略）。"
             "\n如果上面的局势设定明确要求某个产业兴起、或局势催生全新行业，可以额外返回 listings"
             "（最多 2 家，没有就省略）："
             '{"code":"三位大写字母代码","name":"企业名","country":"国家代码",'
-            '"sector":"行业名（不超过4字）","base":基准价整数20~300}；'
+            '"sector":"行业名（不超过4字，必须属于当前时代产业水平）",'
+            '"base":基准价整数20~300}；'
             "如果上面的局势设定明确要求某行业整体衰败退出，可以额外返回 delistings"
             "（最多 2 家，没有就省略）："
-            '{"code":"现有股票代码","reason":"一句话原因"}。'
+            '{"code":"现有股票代码","reason":"一句话原因"}；'
+            "企业的经营范围并非一成不变，董事会改换赛道时可以额外返回 rebrands"
+            "（最多 1 家，没有就省略）："
+            '{"code":"现有股票代码","sectors":["行业1","行业2"],"reason":"一句话原因"}。'
             "局势设定涉及产业兴衰时必须给出；即使没有额外设定，普通事件（灾变、重建、"
             "贸易繁荣、行业衰败等）也可以促成上市或摘牌，但不要频繁，大多数整点不要返回；"
             "这类上市与摘牌会由交易所自动播报，不需要写进 news。\n"
+            "\n还可以返回 era_hint 与 country_actions（没有就省略）："
+            '{"era_hint":{"path":"当前时代某条走向的名称","points":1到5},'
+            '"country_actions":[{"a":"国家代码","b":"国家代码或空",'
+            '"action":"war/alliance/reform/plague","detail":"一句话"}]}。'
+            "era_hint：本小时的新闻确实推动了某条走向（新技术、制度变革、战争或灾变）时才给出，"
+            "points 只代表这一小时积累的一小步，不要让一条新闻把整条走向直接写通；"
+            "不要把三条走向同时写通，一个时代最终只会走通一条。"
+            "country_actions 最多两条；war 必须是地理上相邻或海上可达的国家，"
+            "alliance 同理；reform 与 plague 只需 a。"
+            "reform 只能是本时代内部的调整，不能写成文明阶段或科技体系的整体跃迁。"
+            "亡国只在极少数情况下发生，不要每小时都灭国。\n"
         )
         text = self._ai._call_ai(
             Config.AI_MODEL["chat"],
@@ -2386,9 +5352,16 @@ class CatStockPlugin:
         """收集 AI 提出的新产业上市 / 产业下市，具体校验在落地时进行"""
         listings = [x for x in (data.get("listings") or []) if isinstance(x, dict)][:2]
         delistings = [x for x in (data.get("delistings") or []) if isinstance(x, dict)][:2]
-        if not listings and not delistings:
+        rebrands = [x for x in (data.get("rebrands") or []) if isinstance(x, dict)][:2]
+        era_hint = data.get("era_hint")
+        if not isinstance(era_hint, dict):
+            era_hint = {}
+        country_actions = [x for x in (data.get("country_actions") or [])
+                           if isinstance(x, dict)][:2]
+        if not listings and not delistings and not rebrands and not era_hint and not country_actions:
             return None
-        return {"listings": listings, "delistings": delistings}
+        return {"listings": listings, "delistings": delistings, "rebrands": rebrands,
+                "era_hint": era_hint, "country_actions": country_actions}
 
     def _parse_world(self, data: dict, company_countries: set) -> Optional[dict]:
         """校验 AI 返回的世界格局，避免脏数据写入行情文件"""
@@ -2432,6 +5405,10 @@ class CatStockPlugin:
         down = len(comps) - up
 
         lines = [f"【喵股市 · {now.strftime('%H:%M')} 整点快报】"]
+        era = market.get("era") or {}
+        if era:
+            lines.append(f"纪元 · 第 {int(era.get('index', 0)) + 1} 时代"
+                         f"「{era.get('name', '')}」")
         for item in news[:6]:
             lines.append(f"📰 {item.get('title', '')}")
             if item.get("detail"):

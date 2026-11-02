@@ -841,4 +841,104 @@ code { background: #120f0d; border: 1px solid var(--line); border-radius: 6px; p
   .stock-rank-cols { grid-template-columns: 1fr; }
 }
 
+/* ---------- 股东大会（董事会） ---------- */
+
+.stock-detail-meeting { margin-top: 16px; padding-top: 14px; border-top: 1px dashed var(--line); }
+.stock-detail-meeting .btn { width: auto; }
+
+.meeting-card { max-width: 640px; }
+.meeting-head-actions { display: flex; align-items: center; gap: 10px; }
+.meeting-timer { font-size: 13px; color: var(--gold); white-space: nowrap; }
+
+.meeting-body { display: flex; flex-direction: column; gap: 10px; }
+.meeting-log {
+  max-height: 320px; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 10px; background: #120f0d;
+  border: 1px solid var(--line); border-radius: 10px;
+}
+.meeting-msg { padding: 8px 10px; border-radius: 8px; background: rgba(255, 255, 255, 0.03); }
+.meeting-msg-head {
+  display: flex; justify-content: space-between; gap: 8px;
+  font-size: 12px; color: var(--text-dim); margin-bottom: 3px;
+}
+.meeting-msg-text { font-size: 14px; line-height: 1.5; word-break: break-word; }
+.meeting-msg-ai { border-left: 3px solid var(--gold); }
+.meeting-msg-system { border-left: 3px solid var(--line); color: var(--text-dim); }
+.meeting-msg-host { border-left: 3px solid #d3564d; }
+
+.meeting-draft, .meeting-votes, .meeting-result {
+  padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: #171310;
+}
+.meeting-draft p, .meeting-votes p, .meeting-result p { margin: 0 0 4px; font-size: 14px; }
+.meeting-result.ok { border-color: var(--gold); }
+
+.meeting-compose { display: flex; gap: 10px; align-items: center; }
+.meeting-compose input { flex: 1; }
+.meeting-compose .btn { width: auto; }
+.meeting-options { display: flex; gap: 10px; flex-wrap: wrap; }
+.meeting-options .btn { width: auto; }
+.meeting-option { padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; margin-bottom: 6px; }
+.meeting-option-label { font-size: 13px; color: var(--gold); margin-bottom: 4px; }
+.meeting-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.meeting-actions .btn { width: auto; }
+.meeting-actions .btn.is-active { border-color: var(--gold); color: var(--gold); }
+
+/* ---------- 时代与列国 ---------- */
+
+.stock-era-paths { display: flex; flex-direction: column; gap: 10px; }
+.era-path {
+  padding: 10px 12px;
+  background: #120f0d;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.era-path-head {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 10px;
+  font-size: 14px; font-weight: 700;
+}
+.era-path-kind { font-size: 12px; font-weight: 400; color: var(--text-dim); }
+.era-path-bar {
+  height: 6px; margin: 8px 0 6px;
+  background: #0c0a09; border: 1px solid var(--line); border-radius: 99px; overflow: hidden;
+}
+.era-path-bar span {
+  display: block; height: 100%;
+  background: linear-gradient(90deg, var(--blue), var(--gold));
+}
+.era-path-desc { font-size: 12px; color: var(--text-dim); }
+
+.stock-era-countries { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.era-country-label { font-size: 12px; color: var(--text-dim); letter-spacing: 1px; }
+.era-country {
+  padding: 3px 10px;
+  background: #120f0d;
+  border: 1px solid var(--line);
+  border-radius: 99px;
+  font-size: 12px;
+  color: var(--text);
+}
+.era-country-fallen { border-color: #5a2a26; color: #b67a74; }
+.era-country-btn { cursor: pointer; font-family: inherit; }
+.era-country-btn:hover { border-color: var(--gold); color: var(--gold); }
+
+.stock-era-map-wrap { margin-top: 16px; }
+.stock-era-map {
+  display: block; width: 100%; height: auto;
+  border: 1px solid var(--line); border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.stock-short-box {
+  margin-top: 14px; padding: 12px;
+  background: #120f0d; border: 1px solid var(--line); border-radius: 10px;
+}
+.stock-short-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
+.stock-short-row input { width: 110px; }
+.stock-short-row .btn { width: auto; }
+
+@media (max-width: 640px) {
+  .stock-era-paths { gap: 8px; }
+}
+
 

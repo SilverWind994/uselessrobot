@@ -60,6 +60,8 @@ app.mount("/catexp/jobs", StaticFiles(directory=cat_web.JOBS_DIR), name="catexp-
 app.mount("/catexp/origins", StaticFiles(directory=cat_web.ORIGINS_DIR), name="catexp-origins")
 app.mount("/catexp/expedition", StaticFiles(directory=cat_web.EXPEDITION_IMG_DIR), name="catexp-expedition")
 app.mount("/catexp/data", StaticFiles(directory=cat_web.DATA_DIR), name="catexp-data")
+# 喵股市素材：第一世代随机世界地图
+app.mount("/stock-assets", StaticFiles(directory=stock_web.STOCK_DIR), name="stock-assets")
 
 
 @app.middleware("http")
@@ -1201,6 +1203,36 @@ def stock_sell(payload: dict, cat_token: str = Cookie(default="")) -> JSONRespon
     return _stock_action(stock_web.sell(qq, payload.get("code"), payload.get("shares")), qq)
 
 
+@app.post("/api/stock/short")
+def stock_short(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
+    """开空：押注某家企业会跌"""
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    return _stock_action(stock_web.short(qq, payload.get("code"), payload.get("shares"),
+                                         payload.get("hours")), qq)
+
+
+@app.post("/api/stock/cover")
+def stock_cover(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
+    """平空：不填代码则全部了结"""
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    return _stock_action(stock_web.cover(qq, payload.get("code"), payload.get("shares")), qq)
+
+
+@app.post("/api/stock/sector")
+def stock_sector(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
+    """最大股东改营 / 拓展经营方向"""
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    return _stock_action(
+        stock_web.change_sector(qq, payload.get("code"), payload.get("sectors"),
+                                payload.get("replace", True)), qq)
+
+
 @app.post("/api/stock/bond_buy")
 def stock_bond_buy(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
     qq = _auth_qq(cat_token)
@@ -1227,17 +1259,79 @@ def stock_bond_policy(payload: dict, cat_token: str = Cookie(default="")) -> JSO
 
 @app.post("/api/stock/deposit")
 def stock_deposit(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
-    """鱼干兑换猫薄荷"""
+    """猫眼石兑换猫薄荷"""
     qq = _auth_qq(cat_token)
     if qq is None:
         return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
-    return _stock_action(stock_web.deposit(qq, payload.get("fish")), qq)
+    return _stock_action(stock_web.deposit(qq, payload.get("stone")), qq)
 
 
 @app.post("/api/stock/withdraw")
 def stock_withdraw(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
-    """猫薄荷兑换鱼干"""
+    """猫薄荷兑换猫眼石"""
     qq = _auth_qq(cat_token)
     if qq is None:
         return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
-    return _stock_action(stock_web.withdraw(qq, payload.get("fish")), qq)
+    return _stock_action(stock_web.withdraw(qq, payload.get("stone")), qq)
+
+
+# ---------- 股东大会 ----------
+
+def _meeting_response(data: dict, qq: int) -> JSONResponse:
+    data["overview"] = stock_web.overview(qq)
+    return JSONResponse(data)
+
+
+@app.get("/api/stock/meeting")
+def stock_meeting_state(code: str = "", cat_token: str = Cookie(default="")) -> JSONResponse:
+    """读取董事会状态；到点时会自动推进总结与确认"""
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    return JSONResponse(stock_web.meeting_state(qq, code))
+
+
+@app.post("/api/stock/meeting/start")
+def stock_meeting_start(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    return _meeting_response(stock_web.meeting_start(qq, payload.get("code")), qq)
+
+
+@app.post("/api/stock/meeting/say")
+def stock_meeting_say(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    return _meeting_response(
+        stock_web.meeting_say(qq, payload.get("code"), payload.get("text")), qq)
+
+
+@app.post("/api/stock/meeting/policy")
+def stock_meeting_policy(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    return _meeting_response(
+        stock_web.meeting_set_policy(qq, payload.get("code"), payload.get("text")), qq)
+
+
+@app.post("/api/stock/meeting/vote")
+def stock_meeting_vote(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    choice = payload.get("choice")
+    if not choice and "approve" in payload:
+        choice = "ai" if payload.get("approve") else "old"
+    return _meeting_response(
+        stock_web.meeting_vote(qq, payload.get("code"), choice), qq)
+
+
+@app.post("/api/stock/meeting/finish")
+def stock_meeting_finish(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    return _meeting_response(stock_web.meeting_finish(qq, payload.get("code")), qq)

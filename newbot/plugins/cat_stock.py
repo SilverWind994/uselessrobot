@@ -81,8 +81,10 @@ CAT_STOCK_MEETING_HOST_PASS = 2 / 3  # 大股东方针得票超过三分之二�
 CAT_STOCK_MEETING_MAX_LEN = 80       # 单条发言最大长度
 CAT_STOCK_AUTO_POLICY_MAX = 2        # 收市时 AI 自行制定方针的公司数量上限
 CAT_STOCK_COUNTRY_MIN_LISTED = 2     # 每个国家尽量维持的上市公司数
-CAT_STOCK_COMPANY_MIN = 35           # 市场最少保持的上市公司数
-CAT_STOCK_COMPANY_MAX = 70           # 市场最多容纳的上市公司数
+CAT_STOCK_COMPANY_MIN = 20           # 市场最少保持的上市公司数
+CAT_STOCK_COMPANY_MAX = 40           # 市场最多容纳的上市公司数
+CAT_STOCK_COMPANY_START = 20         # 开局上市公司数量
+CAT_STOCK_COMPANY_GROWTH = 2         # 每个时代额外增加的企业数量
 CAT_STOCK_AI_ACTION_CHANCE = 0.25    # 无外部设定时，AI 推动上市/摘牌被采纳的概率
 CAT_STOCK_NEWS_TICK_MIN = 4          # 每个整点最少生成几条新闻
 CAT_STOCK_NEWS_TICK_MAX = 8          # 每个整点最多生成几条新闻
@@ -935,13 +937,19 @@ class CatStockPlugin:
             "history": [],
         }
 
-    def _era_pool(self, index: int, countries: Optional[dict] = None) -> List[dict]:
+    def _era_pool(self, index: int, countries: Optional[dict] = None,
+                  size: int = 0) -> List[dict]:
         """用该时代手写好的企业名录铺出企业池，不再用前后缀临时拼名字"""
         data = self._era_base(index)
         countries = countries or self._default_countries()
         alive = self._countries_of(countries)
+        # 初期企业克制些，之后每个时代缓慢扩容，总数不超过 40 家
+        limit = min(CAT_STOCK_COMPANY_MAX,
+                    CAT_STOCK_COMPANY_START + CAT_STOCK_COMPANY_GROWTH * max(0, index))
+        if size > 0:
+            limit = min(limit, size)
         pool: List[dict] = []
-        for seq, item in enumerate(data.get("companies") or []):
+        for seq, item in enumerate((data.get("companies") or [])[:limit]):
             country = item.get("country") if item.get("country") in alive else random.choice(alive)
             secs = item.get("sectors") or item.get("sector") or "综合"
             pool.append(self._era_company(
@@ -1378,7 +1386,7 @@ class CatStockPlugin:
                             1.0, float(comp["price"]) * (1 + random.uniform(0.01, 0.04)))
                 for path in data.get("paths") or []:
                     if path.get("kind") in ("科技", "政治", "社会"):
-                        points[path["name"]] = int(points.get(path["name"], 0)) + random.randint(2, 6)
+                        points[path["name"]] = int(points.get(path["name"], 0)) + random.randint(4, 10)
                 news.append({
                     "title": f"{self._country_name(a)}颁布新政",
                     "detail": detail or f"{countries[a].get('style', '')}的{monarch}推行变法，商界议论纷纷",
@@ -1390,7 +1398,7 @@ class CatStockPlugin:
                             1.0, float(comp["price"]) * (1 - random.uniform(0.03, 0.07)))
                 for path in data.get("paths") or []:
                     if path.get("kind") in ("灾变", "信仰", "社会"):
-                        points[path["name"]] = int(points.get(path["name"], 0)) + random.randint(2, 6)
+                        points[path["name"]] = int(points.get(path["name"], 0)) + random.randint(6, 12)
                 news.append({
                     "title": f"{self._country_name(a)}境内灾情蔓延",
                     "detail": detail or f"{self._country_name(a)}仓廪告急，君主{monarch}下令封锁边境",
@@ -1472,7 +1480,8 @@ class CatStockPlugin:
             comp["momentum"] = 0.0
             survivors.append(comp)
 
-        pool = self._era_pool(next_index, countries)
+        pool = self._era_pool(next_index, countries,
+                              size=max(1, CAT_STOCK_COMPANY_MAX - len(survivors)))
         companies.clear()
         companies.update({c["code"]: c for c in pool})
         companies.update({c["code"]: c for c in survivors})
@@ -1567,10 +1576,10 @@ class CatStockPlugin:
         return facts
 
     def _floor_weights(self, weights: List[float]) -> List[float]:
-        """每条走向都保留最低 10% 的可能性：押注再多也不能把别的历史节点彻底压死"""
+        """每条走向都保留最低 15% 的可能性：押注再多也不能把别的历史节点彻底压死"""
         if len(weights) <= 1:
             return weights
-        floor = min(0.1, 1.0 / len(weights))
+        floor = min(0.15, 1.0 / len(weights))
         for _ in range(30):
             total = sum(weights)
             if total <= 0:
@@ -1612,24 +1621,25 @@ class CatStockPlugin:
             tag = str(path.get("tag") or "")
             pname = str(path.get("name") or "")
             aligned = self._path_aligned(companies, path)
-            score = 5.0 + float(points.get(pname, 0)) * 0.05
+            # 随机事件（战争、灾疫、灾变）与时代积累是主要推力，资金只是次要参考
+            score = 5.0 + float(points.get(pname, 0)) * 0.2
             contrib = 0.0
             for code in aligned:
                 comp = companies.get(code) or {}
                 price = float(comp.get("price", comp.get("base", 0)) or 0)
                 policy = str(comp.get("policy") or "")
                 if policy and (tag in policy or (pname and pname in policy)):
-                    contrib += 6.0
+                    contrib += 2.0
                 for st in players.values():
                     shares = self._shares_of((st.get("holdings") or {}).get(code, []))
                     if shares > 0:
-                        contrib += math.sqrt(shares * price) * 0.08
+                        contrib += math.sqrt(shares * price) * 0.02
                     for short in st.get("shorts") or []:
                         if short.get("code") != code:
                             continue
                         s_shares = int(short.get("shares", 0) or 0)
                         if s_shares > 0:
-                            contrib -= math.sqrt(s_shares * price) * 0.08
+                            contrib -= math.sqrt(s_shares * price) * 0.02
             score += contrib / max(1, len(aligned))
             weights.append(max(1.0, score))
         return self._apply_directive_weights(market, paths,
@@ -1677,12 +1687,12 @@ class CatStockPlugin:
             f"当前时代：{era.get('name', '')}——{era.get('theme', '')}，"
             f"期限 {era.get('ends', '')}。\n"
             + "\n".join(lines) + news_block + world_block + directive_block +
-            "\n\n请忽略「相关企业家数多就天然占优」这种机械偏差，以真实因果来判断："
-            "资金持续投入、重仓与做空、公司方针、连续新闻事件、时代积累与人物动向，"
-            "都会把世界推向某条结局；资金撤走或做空则会削弱它。"
+            "\n\n请按真实因果来判断，不要让「相关企业家数多或资金体量大」天然决定结果："
+            "战争、灾疫、灾变、社会动荡、连续新闻事件与时代积累是主要推力；"
+            "资金投入、重仓与做空、公司方针只能作为次要参考，不能压过随机事件。"
             "请给每条走向打 0~100 的可能性分，并写一句简短理由。\n"
             "如果掌管者的世界走向点名了某条结局，该结局必须明显高于其余结局；"
-            "但除非写明锁定，其他结局仍应保留至少 10% 的翻页可能，不要把话说死。\n"
+            "但除非写明锁定，其他结局仍应保留至少 15% 的翻页可能，不要把话说死。\n"
             "只输出 JSON：{\"weights\":[{\"name\":\"走向名称\",\"score\":0到100,"
             "\"reason\":\"不超过20字的因果理由\"}]}"
         )
@@ -1711,7 +1721,7 @@ class CatStockPlugin:
             mapping[name] = max(1.0, min(100.0, float(score)))
         if not mapping:
             return None
-        # AI 漏写的走向按低位处理，但仍受 10% 保底保护
+        # AI 漏写的走向按低位处理，但仍受 15% 保底保护
         return self._floor_weights([mapping.get(n, 5.0) for n in names])
 
     def _final_path_weights(self, market: dict, players: dict,
@@ -1762,7 +1772,7 @@ class CatStockPlugin:
                 gain = int(float(hint.get("points", 2)))
             except (TypeError, ValueError):
                 gain = 2
-            points[name] = int(points.get(name, 0)) + max(0, min(5, gain))
+            points[name] = int(points.get(name, 0)) + max(0, min(8, gain))
         else:
             points[random.choice(paths)["name"]] += 1
 
@@ -3185,13 +3195,13 @@ class CatStockPlugin:
                 "confirm_end": 0, "status": "open",
                 "messages": [], "draft": "", "sectors": [],
                 "host_policy": "", "host_sectors": [],
-                "options": [], "votes": {}, "result": "", "result_counts": {},
+                "options": [], "votes": {}, "ai_votes": [], "result": "", "result_counts": {},
             }
             meeting["messages"].append({
                 "role": "system", "name": "书记员",
                 "text": ("董事会会议开始，讨论时间十分钟。散会前请召集人定稿一份自己的方针；"
                          "书记员会另拟一份汇总方针，连同公司旧方针一起，"
-                         "交全体持股股东在三十分钟内确认。逾期未确认的按沿用旧方针计。"),
+                         "交全体持股股东与董事会老股东在三十分钟内确认。逾期未表态的股东按沿用旧方针计。"),
                 "ts": now_ts,
             })
             meeting["messages"].append({
@@ -3348,7 +3358,8 @@ class CatStockPlugin:
                 if holders and all(str(h["qq"]) in votes for h in holders):
                     need_summary = "__finalize__"
             meeting_snapshot = {"messages": [dict(m) for m in meeting.get("messages") or []],
-                                "comp": dict(market["companies"].get(code) or {})}
+                                "comp": dict(market["companies"].get(code) or {}),
+                                "host_policy": str(meeting.get("host_policy") or "")}
 
         if need_summary == code:
             self._summarize_meeting(code, meeting_snapshot)
@@ -3377,13 +3388,19 @@ class CatStockPlugin:
         else:
             remain = 0
         votes = meeting.get("votes") or {}
+        ai_board = meeting.get("ai_votes") or []
         counts = {"ai": 0, "host": 0, "old": 0}
         for choice in votes.values():
             if choice in counts:
                 counts[choice] += 1
-        eligible = len(holders)
-        # 确认期内没有表态的股东，按沿用旧方针计算
-        counts["old"] += max(0, eligible - len(votes))
+        for vote in ai_board:
+            choice = str(vote.get("choice") or "")
+            if choice in counts:
+                counts[choice] += 1
+        # 老股东与持股股东一起计入表决人数
+        eligible = len(holders) + len(ai_board)
+        # 确认期内没有表态的持股股东，按沿用旧方针计算
+        counts["old"] += max(0, len(holders) - len(votes))
         options = self._meeting_options(meeting, comp)
         board = self._company_board(comp)
         return {
@@ -3406,9 +3423,11 @@ class CatStockPlugin:
             "options": options,
             "votes": {
                 "ai": counts["ai"], "host": counts["host"], "old": counts["old"],
-                "total": len(votes), "eligible": eligible,
+                "total": len(votes) + len(ai_board), "eligible": eligible,
                 "human": [{"name": self._player_nick(int(k)), "choice": v}
                           for k, v in votes.items()],
+                "board": [{"name": v.get("name") or "", "tag": v.get("tag") or "",
+                           "choice": v.get("choice") or ""} for v in ai_board],
             },
             "holders": holders,
             "board": [{"name": b.get("name", ""), "tag": b.get("tag", "")} for b in board],
@@ -3438,6 +3457,40 @@ class CatStockPlugin:
             {"key": "old", "label": "沿用旧方针", "policy": old_policy,
              "sectors": self._sectors_of(comp)},
         ]
+
+    def _normalize_board_votes(self, board: List[dict], raw,
+                               has_host: bool) -> List[dict]:
+        """把书记员给出的老股东表态整理成每人一票，缺人时按人设兜底"""
+        picked: dict = {}
+        if isinstance(raw, list):
+            for item in raw:
+                if not isinstance(item, dict):
+                    continue
+                name = str(item.get("name") or "").strip()
+                choice = str(item.get("choice") or "").strip().lower()
+                if name and choice in ("ai", "host", "old"):
+                    if choice == "host" and not has_host:
+                        choice = "old"
+                    picked[name] = choice
+        votes: List[dict] = []
+        for member in board:
+            name = str(member.get("name") or "")
+            choice = picked.get(name) or self._fallback_board_vote(member, has_host)
+            votes.append({"name": name, "tag": str(member.get("tag") or ""),
+                          "choice": choice})
+        return votes
+
+    @staticmethod
+    def _fallback_board_vote(member: dict, has_host: bool) -> str:
+        """AI 不可用时的老股东表态：守旧派更认旧方针，冒险派更认书记员汇总"""
+        tag = str(member.get("tag") or "")
+        if tag in ("谨慎", "守旧", "悲观", "精算"):
+            options, weights = (["old", "host", "ai"], [0.55, 0.3, 0.15]) if has_host \
+                else (["old", "ai"], [0.65, 0.35])
+        else:
+            options, weights = (["ai", "host", "old"], [0.5, 0.3, 0.2]) if has_host \
+                else (["ai", "old"], [0.65, 0.35])
+        return random.choices(options, weights=weights, k=1)[0]
 
     def _ai_shareholder_reply(self, comp: dict, recent: List[dict], latest: str) -> Optional[dict]:
         """让其中一位老股东接话；没有 AI 时用性格模板兜底"""
@@ -3484,29 +3537,44 @@ class CatStockPlugin:
                                for m in messages if m.get("text"))
         policy = ""
         sectors: List[str] = []
+        board = self._company_board(comp)
+        board_lines = "\n".join(
+            f"- {b.get('name', '')}（{b.get('tag', '')}）：{b.get('persona', '')}"
+            for b in board)
+        ai_votes: List[dict] = []
+        has_host = bool(str(snapshot.get("host_policy") or "").strip())
         if self._ai:
             prompt = (
                 f"你是奇幻世界的董事会书记员，正在整理「{comp.get('name', code)}」的股东大会。\n"
                 f"公司当前经营：{'、'.join(self._sectors_of(comp))}\n"
+                f"董事会老股东：\n{board_lines}\n"
                 f"会议记录：\n{transcript}\n"
                 "请把讨论收束成一条可执行的经营方针：既要体现多数人的共识，"
                 "也可以在必要时调整公司的经营范围。不要罗列规则，不要超过 100 字。\n"
-                '只输出 JSON：{"policy":"一句话方针","sectors":["行业1","行业2"]}'
+                "同时请按每位老股东的人设与会议内容，替他们各自表态："
+                "ai 表示支持书记员汇总，host 表示支持大股东方针，old 表示沿用旧方针；"
+                "每人只能选一个，不要漏人。\n"
+                '只输出 JSON：{"policy":"一句话方针","sectors":["行业1","行业2"],'
+                '"board_votes":[{"name":"老股东姓名","choice":"ai|host|old"}]}'
             )
             try:
                 raw = self._ai._call_ai(
                     Config.AI_MODEL["chat"],
                     [{"role": "system", "content": "你是奇幻世界里的董事会书记员，只输出 JSON。"},
                      {"role": "user", "content": prompt}],
-                    temperature=0.5, max_retries=2, max_tokens=300,
+                    temperature=0.5, max_retries=2, max_tokens=400,
                 )
                 data = _extract_json(raw) if isinstance(raw, str) else raw
                 if isinstance(data, dict):
                     policy = str(data.get("policy") or "").strip()
                     sectors = self._normalize_sectors("", data.get("sectors"),
                                                      self._sectors_of(comp)[0])
+                    ai_votes = self._normalize_board_votes(
+                        board, data.get("board_votes"), has_host)
             except Exception as e:
                 print(f"[cat_stock] meeting summarize failed: {e}")
+        if not ai_votes:
+            ai_votes = self._normalize_board_votes(board, [], has_host)
         if not policy:
             # 兜底：沿用讨论里最后一条较长的发言，避免确认时没有汇总方针
             texts = [m.get("text", "") for m in messages
@@ -3543,16 +3611,27 @@ class CatStockPlugin:
             meeting["status"] = "confirm"
             meeting["confirm_end"] = time.time() + CAT_STOCK_MEETING_VOTE_MINUTES * 60
             meeting["votes"] = {}
+            meeting["ai_votes"] = ai_votes
             meeting["messages"].append({
                 "role": "system", "name": "书记员",
                 "text": (f"讨论结束，三套方针摆上桌面："
                          f"①书记员汇总——{draft}；"
                          f"②大股东方针——{host_text}；"
                          f"③沿用旧方针——{old_policy}。"
-                         f"请股东在 {CAT_STOCK_MEETING_VOTE_MINUTES} 分钟内确认，"
-                         f"逾期未表态的按沿用旧方针计。"),
+                         f"请股东与董事会在 {CAT_STOCK_MEETING_VOTE_MINUTES} 分钟内确认，"
+                         f"逾期未表态的持股股东按沿用旧方针计。"),
                 "ts": time.time(),
             })
+            board_line = "；".join(
+                f"{v.get('name', '')}选"
+                f"{'书记员汇总' if v.get('choice') == 'ai' else '大股东方针' if v.get('choice') == 'host' else '沿用旧方针'}"
+                for v in ai_votes)
+            if board_line:
+                meeting["messages"].append({
+                    "role": "system", "name": "书记员",
+                    "text": f"董事会老股东同时表态：{board_line}。他们的票与持股股东一同计入。",
+                    "ts": time.time(),
+                })
             meeting["messages"] = meeting["messages"][-80:]
             self._save_market(market)
 
@@ -3563,18 +3642,31 @@ class CatStockPlugin:
             if not meeting or meeting.get("status") != "confirm":
                 return
             players = self._load_stock_players()
-            eligible = len(self._meeting_holders(players, code))
+            holders = self._meeting_holders(players, code)
             votes = dict(meeting.get("votes") or {})
+            ai_board = list(meeting.get("ai_votes") or [])
+            if not ai_board:
+                # 兼容本次更新前已进入确认阶段的会议，临时补上老股东的表态
+                comp_now = market["companies"].get(code) or {}
+                ai_board = self._normalize_board_votes(
+                    self._company_board(comp_now), [],
+                    bool(str(meeting.get("host_policy") or "").strip()))
+                meeting["ai_votes"] = ai_board
             counts = {"ai": 0, "host": 0, "old": 0}
             for choice in votes.values():
+                if choice in counts:
+                    counts[choice] += 1
+            for vote in ai_board:
+                choice = str(vote.get("choice") or "")
                 if choice in counts:
                     counts[choice] += 1
             # 大股东没有另拟方针时，投给他的票等同于沿用旧方针
             if not str(meeting.get("host_policy") or "").strip():
                 counts["old"] += counts["host"]
                 counts["host"] = 0
-            # 未在确认期内表态的股东，默认沿用旧方针
-            counts["old"] += max(0, eligible - len(votes))
+            # 未在确认期内表态的持股股东，默认沿用旧方针
+            counts["old"] += max(0, len(holders) - len(votes))
+            eligible = len(holders) + len(ai_board)
             choice = "old"
             if eligible:
                 if counts["ai"] / eligible > CAT_STOCK_MEETING_AI_PASS:
@@ -3607,6 +3699,7 @@ class CatStockPlugin:
             meeting["result_counts"] = {
                 "ai": counts["ai"], "host": counts["host"],
                 "old": counts["old"], "eligible": eligible,
+                "board": len(ai_board),
             }
             meeting["finished_at"] = time.time()
             meeting["messages"].append({
@@ -5268,11 +5361,12 @@ class CatStockPlugin:
             "贸易繁荣、行业衰败等）也可以促成上市或摘牌，但不要频繁，大多数整点不要返回；"
             "这类上市与摘牌会由交易所自动播报，不需要写进 news。\n"
             "\n还可以返回 era_hint 与 country_actions（没有就省略）："
-            '{"era_hint":{"path":"当前时代某条走向的名称","points":1到5},'
+            '{"era_hint":{"path":"当前时代某条走向的名称","points":1到8},'
             '"country_actions":[{"a":"国家代码","b":"国家代码或空",'
             '"action":"war/alliance/reform/plague","detail":"一句话"}]}。'
-            "era_hint：本小时的新闻确实推动了某条走向（新技术、制度变革、战争或灾变）时才给出，"
-            "points 只代表这一小时积累的一小步，不要让一条新闻把整条走向直接写通；"
+            "era_hint 只由新闻里的随机事件推动（新技术、制度变革、战争、灾疫或灾变），"
+            "资金买卖本身不应产生 era_hint；战争、灾疫、灾变这类事件可以给更高的 points，"
+            "但只代表这一小时积累的一小步，不要让一条新闻把整条走向直接写通；"
             "不要把三条走向同时写通，一个时代最终只会走通一条。"
             "country_actions 最多两条；war 必须是地理上相邻或海上可达的国家，"
             "alliance 同理；reform 与 plague 只需 a。"

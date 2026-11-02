@@ -3790,6 +3790,7 @@ function renderStock(data) {
           <input class="stock-trade-shares" type="number" min="1" step="1" placeholder="股数" data-code="${esc(c.code)}">
           <button class="btn btn-primary btn-sm stock-buy" type="button" data-code="${esc(c.code)}">买</button>
           <button class="btn btn-ghost btn-sm stock-sell" type="button" data-code="${esc(c.code)}">卖</button>
+          <button class="btn btn-ghost btn-sm stock-short" type="button" data-code="${esc(c.code)}" title="用上方股数开空，周期随机 12~36 个开市小时">做空</button>
         </div>
         <div class="stock-trade-max">
           <button class="stock-max-buy" type="button" data-code="${esc(c.code)}">最大买入</button>
@@ -4238,7 +4239,7 @@ stockMarketBodyEl.addEventListener('click', (e) => {
     fillMaxShares(maxBtn);
     return;
   }
-  const btn = e.target.closest('.stock-buy, .stock-sell');
+  const btn = e.target.closest('.stock-buy, .stock-sell, .stock-short');
   if (!btn) return;
   const code = btn.dataset.code || '';
   const input = btn.closest('.stock-trade').querySelector('input');
@@ -4246,6 +4247,10 @@ stockMarketBodyEl.addEventListener('click', (e) => {
   if (!shares) {
     stockMsgEl.textContent = '先填要交易的股数喵';
     stockMsgEl.classList.remove('ok');
+    return;
+  }
+  if (btn.classList.contains('stock-short')) {
+    stockAction('/api/stock/short', { code, shares }, '做空');
     return;
   }
   const isBuy = btn.classList.contains('stock-buy');
@@ -4547,12 +4552,18 @@ function renderStockMeeting(m) {
         : x.choice === 'host' ? '大股东方针' : '沿用旧方针';
       return `${esc(x.name)} ${label}`;
     }).join('｜');
+    const boardLine = (votes.board || []).map((x) => {
+      const label = x.choice === 'ai' ? '书记员汇总'
+        : x.choice === 'host' ? '大股东方针' : '沿用旧方针';
+      return `${esc(x.name)} ${label}`;
+    }).join('｜');
     stockMeetingVotesEl.classList.remove('hidden');
     stockMeetingVotesEl.innerHTML = `
       <div class="section-title">${status === 'confirm' ? '股东确认中' : '确认结果'}</div>
       <p>书记员汇总 ${votes.ai || 0} · 大股东方针 ${votes.host || 0} · 沿用旧方针 ${votes.old || 0}</p>
       <p class="hint">已确认 ${votes.total || 0} / ${votes.eligible || 0} 人，未表态者按沿用旧方针计</p>
-      ${humanLine ? `<p class="hint">在场股东：${humanLine}</p>` : ''}`;
+      ${humanLine ? `<p class="hint">在场股东：${humanLine}</p>` : ''}
+      ${boardLine ? `<p class="hint">董事会老股东：${boardLine}</p>` : ''}`;
   } else {
     stockMeetingVotesEl.classList.add('hidden');
   }

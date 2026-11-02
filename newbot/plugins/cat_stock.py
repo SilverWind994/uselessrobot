@@ -1478,6 +1478,7 @@ class CatStockPlugin:
             comp["prev_close"] = comp["price"]
             comp["bad_ticks"] = 0
             comp["momentum"] = 0.0
+            comp["limit_exempt"] = True
             survivors.append(comp)
 
         pool = self._era_pool(next_index, countries,
@@ -2082,8 +2083,6 @@ class CatStockPlugin:
                         "from": int(ctx.user_id),
                         "at": datetime.now().strftime("%m-%d %H:%M"),
                     })
-                    comp["price"] = round(max(
-                        1.0, float(comp["price"]) * (1 + sign * CAT_STOCK_COMPANY_BIAS)), 2)
                     message = (f"已对「{comp['code']} {comp['name']}」下达{mode}，"
                                f"接下来 {window} 个整点每整点"
                                f"{'推高' if sign > 0 else '压低'}约 "
@@ -4397,6 +4396,11 @@ class CatStockPlugin:
                 for bond in (market.get("bonds") or {}).values():
                     bond["prev_close"] = bond["price"]
                 market["day"] = today
+            # 旧存档可能没有 prev_close：当天也要补上一个基准，否则日线限价失效
+            for comp in companies.values():
+                comp.setdefault("prev_close", comp["price"])
+            for bond in (market.get("bonds") or {}).values():
+                bond.setdefault("prev_close", bond["price"])
             price_before = {code: comp["price"] for code, comp in companies.items()}
 
             # 1) 基础波动：全市场共同情绪 + 国家共同情绪 + 个股随机扰动
@@ -4469,16 +4473,7 @@ class CatStockPlugin:
 
             # 3.5) 交易所限价：单小时最多上下 2%，当日累计最多 ±10%
             #      当日涨跌互相抵消，隔日重新计算；经营崩坏仍可由交易所直接摘牌
-            for comp in companies.values():
-                before = price_before.get(comp["code"]) or comp["price"] or 1
-                day_base = float(comp.get("prev_close") or before) or before
-                day_low = day_base * (1 - CAT_STOCK_DAILY_CAP)
-                day_high = day_base * (1 + CAT_STOCK_DAILY_CAP)
-                low = max(before * (1 - CAT_STOCK_HOURLY_CAP), day_low)
-                high = min(before * (1 + CAT_STOCK_HOURLY_CAP), day_high)
-                if low > high:
-                    low, high = day_low, day_high
-                comp["price"] = max(1.0, min(max(float(comp["price"]), low), high))
+            self._apply_price_limits(companies, price_before)
 
             # 4) 退市 / 新上市
             event_news = []
@@ -4498,6 +4493,8 @@ class CatStockPlugin:
 
             # 4.5) 时代与列国：走向推进、君主战和、必要时翻页换一批企业
             event_news.extend(self._era_step(market, players, ai_actions))
+            # 时代事件也会改价，收尾时再按交易所限价压一次
+            self._apply_price_limits(companies, price_before)
 
             stamp = now.strftime("%m-%d %H:%M")
 
@@ -4601,6 +4598,25 @@ class CatStockPlugin:
             for comp in companies.values():
                 if comp["country"] != country and sectors & set(self._sectors_of(comp)):
                     comp["price"] = max(1.0, comp["price"] * (1 + pct * CAT_STOCK_LINK_SECTOR))
+
+    def _apply_price_limits(self, companies: dict, price_before: dict) -> None:
+        """交易所限价：单小时 ±2%，当日累计 ±10%，两个约束同时生效"""
+        for comp in companies.values():
+            if comp.pop("limit_exempt", False):
+                # 时代翻页时整体重估的企业，当日基准已同步重置，不参与本次限价
+                continue
+            before = float(price_before.get(comp["code"]) or comp["price"] or 1)
+            day_base = float(comp.get("prev_close") or before) or before
+            low = max(before * (1 - CAT_STOCK_HOURLY_CAP),
+                      day_base * (1 - CAT_STOCK_DAILY_CAP))
+            high = min(before * (1 + CAT_STOCK_HOURLY_CAP),
+                       day_base * (1 + CAT_STOCK_DAILY_CAP))
+            if low > high:
+                # 旧数据/干预导致昨收偏离太多：优先守住当日 ±10%
+                day_low = day_base * (1 - CAT_STOCK_DAILY_CAP)
+                day_high = day_base * (1 + CAT_STOCK_DAILY_CAP)
+                low = high = day_high if before >= day_base else day_low
+            comp["price"] = max(1.0, min(max(float(comp["price"]), low), high))
 
     def _big_holding_pressure(self, companies: dict, players: dict) -> List[dict]:
         """大额持仓可能被空头狙击：概率低、幅度有限，只影响一只股票"""

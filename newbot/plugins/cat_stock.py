@@ -45,6 +45,7 @@ CAT_STOCK_LINK_COUNTRY = 0.35        # 同国企业联动系数
 CAT_STOCK_LINK_SECTOR = 0.25         # 同行业企业联动系数
 CAT_STOCK_DELIST_BAD_RATIO = 0.6     # 股价低于基准价该比例视为持续低迷
 CAT_STOCK_DELIST_BAD_TICKS = 10      # 连续低迷多少个整点才进入退市候选
+CAT_STOCK_DELIST_FORCE_RATIO = 0.25  # 股价跌破基准价该比例时直接强制退市
 CAT_STOCK_CATCHUP_MAX = 6            # 单次最多补发多少个错过的整点
 CAT_STOCK_NEWS_DAYS = 3              # 新闻只保留最近 days 天
 CAT_STOCK_WORLD_TICKS = 2            # 人工局势设定影响接下来几个整点
@@ -1572,8 +1573,7 @@ class CatStockPlugin:
             "单笔最少 10 股、最多 100 万股\n"
             "涨跌：不设涨跌停，单小时大致 -20% ~ +25%；事件会延续发酵，"
             "同国与同行业的企业也会联动涨跌\n"
-            f"退市：连续 {CAT_STOCK_DELIST_BAD_TICKS} 个整点股价低于基准价 "
-            f"{CAT_STOCK_DELIST_BAD_RATIO:.0%} 的企业会被摘牌，"
+            "退市：经营不善、股价长期低迷的企业会被摘牌，股价崩塌时会直接退市，"
             "持仓按最新价 70% 强制清算，退市企业也可能改日重新上市\n"
             "买入：喵股市 买 <股票代码> <股数>\n"
             "卖出：喵股市 卖 <股票代码> <股数>\n"
@@ -1696,8 +1696,7 @@ class CatStockPlugin:
             # 4) 退市 / 新上市
             event_news = []
             delisted = self._maybe_delist(market, players)
-            if delisted:
-                event_news.append(delisted)
+            event_news.extend(delisted)
             listed = self._maybe_list(market)
             if listed:
                 event_news.append(listed)
@@ -1836,7 +1835,7 @@ class CatStockPlugin:
             "detail": f"盘中一度下挫约 {abs(pct) * 100:.0f}%，监管机构表示正在调查",
         }]
 
-    def _maybe_delist(self, market: dict, players: dict) -> Optional[dict]:
+    def _maybe_delist(self, market: dict, players: dict) -> List[dict]:
         companies = market["companies"]
         # 每个整点记录经营状态：股价长期低于基准价一定比例才累积低迷计数
         for comp in companies.values():
@@ -1846,16 +1845,25 @@ class CatStockPlugin:
             else:
                 comp["bad_ticks"] = 0
 
+        # 股价崩塌到基准价两成半以下：不看概率、不看低迷计数，整批强制退市
+        force = sorted([c for c in companies.values()
+                        if float(c.get("base", 0) or 0) > 0
+                        and c["price"] <= float(c["base"]) * CAT_STOCK_DELIST_FORCE_RATIO],
+                       key=lambda c: c["price"])
+        if force:
+            return [self._do_delist(market, players, comp, True) for comp in force]
         if len(companies) <= CAT_STOCK_COMPANY_MIN or random.random() >= CAT_STOCK_DELIST_CHANCE:
-            return None
+            return []
         eligible = [c for c in companies.values()
                     if int(c.get("bad_ticks", 0)) >= CAT_STOCK_DELIST_BAD_TICKS]
         if not eligible:
-            return None
-        comp = random.choice(eligible)
+            return []
+        return [self._do_delist(market, players, random.choice(eligible), False)]
+
+    def _do_delist(self, market: dict, players: dict, comp: dict, forced: bool) -> dict:
+        """摘牌一家企业：按退市比例清算持仓，并把企业回收进候补名单"""
         code = comp["code"]
-        final_price = comp["price"]
-        payout = int(round(final_price * CAT_STOCK_DELIST_RATE))
+        payout = int(round(comp["price"] * CAT_STOCK_DELIST_RATE))
         paid = False
         for st in players.values():
             lots = st.get("holdings", {}).pop(code, None)
@@ -1865,17 +1873,20 @@ class CatStockPlugin:
             if shares > 0:
                 st["catnip"] = int(st.get("catnip", 0)) + shares * payout
                 paid = True
-        companies.pop(code, None)
+        market["companies"].pop(code, None)
         market["catalog"].append({
             "code": comp["code"], "name": comp["name"], "country": comp["country"],
             "sector": comp["sector"], "base": comp["base"],
         })
-        detail = (f"连续 {comp.get('bad_ticks', CAT_STOCK_DELIST_BAD_TICKS)} 个整点股价"
-                  f"低于基准价 {CAT_STOCK_DELIST_BAD_RATIO:.0%}，经营持续恶化，"
-                  f"持仓按最新价 {CAT_STOCK_DELIST_RATE:.0%} 强制清算")
+        if forced:
+            detail = ("经营不善，股价崩塌，已触发强制退市；"
+                      f"持仓按最新价 {CAT_STOCK_DELIST_RATE:.0%} 强制清算")
+        else:
+            detail = (f"经营不善、连续 {comp.get('bad_ticks', CAT_STOCK_DELIST_BAD_TICKS)} 个整点低迷，"
+                      f"持仓按最新价 {CAT_STOCK_DELIST_RATE:.0%} 强制清算")
         if paid:
             detail += "（本小时有玩家持仓被清算）"
-        return {"title": f"退市公告：{comp['name']}（{code}）长期低迷，正式摘牌",
+        return {"title": f"退市公告：{comp['name']}（{code}）经营不善，正式摘牌",
                 "detail": detail}
 
     def _maybe_list(self, market: dict) -> Optional[dict]:
@@ -1894,10 +1905,15 @@ class CatStockPlugin:
                     if counts.get(ctry, 0) < CAT_STOCK_COUNTRY_MIN_LISTED]
         if shortage:
             candidates = [item for item in catalog if item["country"] in shortage]
+            reason = "该国暂时缺上市公司，紧急挂牌"
+        elif len(companies) < CAT_STOCK_COMPANY_MIN:
+            candidates = catalog
+            reason = "市场挂牌数量不足，紧急补位"
         else:
             if random.random() >= CAT_STOCK_LIST_CHANCE:
                 return None
             candidates = catalog
+            reason = "扩展业务版图"
         item = random.choice(candidates)
         catalog.remove(item)
         price = float(max(10, int(item["base"] * random.uniform(0.7, 1.3))))
@@ -1911,7 +1927,6 @@ class CatStockPlugin:
             "prev_close": price,
             "bad_ticks": 0,
         }
-        reason = "该国暂时缺上市公司，紧急挂牌" if shortage else "扩展业务版图"
         return {"title": f"新上市：{item['name']}（{item['code']}）挂牌交易",
                 "detail": f"来自 {self._country_name(item['country'])}，{reason}；"
                           f"首日参考价 {self._fmt_price(price)}，行业 {item.get('sector', '综合')}"}

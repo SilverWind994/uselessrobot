@@ -79,7 +79,6 @@ class BilibiliLivePlugin:
         self._sender = sender
         self._lock = threading.Lock()
         self._state = _load_state()
-        self._first_check = True
         self._rooms = [
             str(room).strip()
             for room in (getattr(Config, "BILIBILI_LIVE_ROOMS", None) or [])
@@ -151,21 +150,17 @@ class BilibiliLivePlugin:
                 _save_state(self._state)
             rooms = keep
         changed = False
-        fetched = False
-        first_check = self._first_check
         for room_id in self._rooms:
             old = rooms.get(room_id) or {}
             info = self._fetch_room(room_id)
             if not info:
                 continue
-            fetched = True
             was = old.get("live")
             now = info["live"]
             name = old.get("name") or ""
             if was is not None and was != now:
                 _log(f"room {room_id} live {was} -> {now}")
-            # 状态翻转照常提醒；机器人刚启动后的第一次检查，哪怕之前就在播也提醒一次
-            if now and (was is False or first_check):
+            if now and was is False:
                 name = name or self._anchor_name(room_id)
                 self._notify(
                     f"【B站开播】{name or ('直播间 ' + room_id)}\n"
@@ -182,8 +177,6 @@ class BilibiliLivePlugin:
                 if name:
                     entry["name"] = name
                 changed = True
-        if fetched:
-            self._first_check = False
         if changed:
             with self._lock:
                 _save_state(self._state)

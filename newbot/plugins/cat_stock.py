@@ -91,8 +91,9 @@ CAT_STOCK_MEETING_MAX_LEN = 80       # 单条发言最大长度
 CAT_STOCK_WAR_HOURS = 24             # 一场商战持续多少小时
 CAT_STOCK_WAR_COST = 100             # 每次地区活动消耗的猫薄荷
 CAT_STOCK_WAR_ANNEX = 0.65           # 全部地区支持度超过该比例即可吞并
-CAT_STOCK_WAR_REWARD = 0.9           # 吞并后获胜方分得的比例
-CAT_STOCK_WAR_WIN_REWARD = 0.45      # 未吞并、仅以总支持度取胜时获胜方分得的比例
+CAT_STOCK_WAR_REFUND = 0.5           # 吞并时败方拿回、胜方获得的比例
+CAT_STOCK_WAR_SIZE_MAX = 0.03        # 打平时体量大者下跌、体量小者上涨的最大幅度
+CAT_STOCK_WAR_COOLDOWN_DAYS = 7      # 同一家公司多久才能再次发动商战
 CAT_STOCK_WAR_LOG_MAX = 10           # 战报保留最近多少场
 CAT_STOCK_AUTO_POLICY_MAX = 2        # 收市时 AI 自行制定方针的公司数量上限
 CAT_STOCK_COUNTRY_MIN_LISTED = 2     # 每个国家尽量维持的上市公司数
@@ -4224,12 +4225,21 @@ class CatStockPlugin:
                     return {"ok": False, "msg": "两家做的营生没有交集，师出无名喵"}
             if self._war_for_code(market, my_code) or self._war_for_code(market, code):
                 return {"ok": False, "msg": "这两家里已经有一方卷在商战里了喵"}
+            now_ts = time.time()
+            cooldowns = market.setdefault("war_cooldowns", {})
+            last_declare = float(cooldowns.get(my_code, 0) or 0)
+            next_ts = last_declare + CAT_STOCK_WAR_COOLDOWN_DAYS * 86400
+            if last_declare and next_ts > now_ts:
+                wait_h = int((next_ts - now_ts) // 3600) + 1
+                return {"ok": False,
+                        "msg": f"「{companies[my_code]['name']}」刚打过一场商战，"
+                               f"还要 {wait_h} 小时才能再次发动喵"}
             _holder, rival = self._war_major(players, code)
             if rival < CAT_STOCK_MEETING_HOST_SHARES:
                 return {"ok": False,
                         "msg": "对手没有非 AI 的大股东坐镇，商战打不起来喵"}
             mine = companies[my_code]
-            now_ts = time.time()
+            cooldowns[my_code] = now_ts
             war = {
                 "id": f"W{int(now_ts)}",
                 "a": my_code, "b": code,
@@ -4329,6 +4339,34 @@ class CatStockPlugin:
                 return side
         return ""
 
+    def _war_size(self, comp: dict) -> float:
+        """公司体量：股价 × 总股本"""
+        return float(comp.get("price", 0) or 0) * float(comp.get("base") or 1)
+
+    def _war_size_effect(self, a_comp: dict, b_comp: dict,
+                         size_a: float, size_b: float) -> float:
+        """打平时体量大的一方跌、体量小的一方涨，返回调整幅度"""
+        if size_a <= 0 or size_b <= 0 or size_a == size_b:
+            return 0.0
+        big, small = (a_comp, b_comp) if size_a > size_b else (b_comp, a_comp)
+        adj = CAT_STOCK_WAR_SIZE_MAX * (1.0 - min(size_a, size_b) / max(size_a, size_b))
+        if adj <= 0:
+            return 0.0
+        big["price"] = round(float(big["price"]) * (1.0 - adj), 2)
+        small["price"] = round(float(small["price"]) * (1.0 + adj), 2)
+        return adj
+
+    def _war_payout(self, players: dict, code: str, comp: dict, amount: int) -> None:
+        """战利按持股比例折进股价，不受交易所限价约束"""
+        if amount <= 0:
+            return
+        total_shares = 0
+        for st in players.values():
+            total_shares += self._shares_of(
+                (st.get("holdings") or {}).get(code) or [])
+        if total_shares > 0:
+            comp["price"] = round(float(comp["price"]) + amount / total_shares, 2)
+
     def _war_settle(self, market: dict, players: dict, war: dict,
                     annex_side: str = "") -> List[dict]:
         """结算商战：吞并对手，或按总支持度判出胜负"""
@@ -4347,49 +4385,84 @@ class CatStockPlugin:
         annex = bool(annex_side)
         win_code, lose_code = (a_code, b_code) if side == "a" else (b_code, a_code)
         win_comp, lose_comp = (a_comp, b_comp) if side == "a" else (b_comp, a_comp)
-        cost_total = int(war.get("cost_a", 0) or 0) + int(war.get("cost_b", 0) or 0)
+        cost_a = int(war.get("cost_a", 0) or 0)
+        cost_b = int(war.get("cost_b", 0) or 0)
+        cost_total = cost_a + cost_b
+        size_a = self._war_size(a_comp)
+        size_b = self._war_size(b_comp)
         lose_value = 0
+        lose_price = 0.0
+        lose_shares = 0
+        holders = []
         if annex:
             lose_price = float(lose_comp["price"])
             for st in players.values():
                 lots = (st.get("holdings") or {}).get(lose_code)
                 if lots:
-                    lose_value += int(round(self._shares_of(lots) * lose_price))
-                    st["holdings"].pop(lose_code, None)
+                    shares = self._shares_of(lots)
+                    if shares > 0:
+                        holders.append((st, shares))
+                        lose_shares += shares
+                        lose_value += int(round(shares * lose_price))
                 self._close_shorts_for(st, lose_code, lose_price, "商战吞并清算")
             companies.pop(lose_code, None)
             (market.get("meetings") or {}).pop(lose_code, None)
             market["company_directives"] = [
                 d for d in (market.get("company_directives") or [])
                 if d.get("code") != lose_code]
-        rate = CAT_STOCK_WAR_REWARD if annex else CAT_STOCK_WAR_WIN_REWARD
-        payout = int(round(rate * (cost_total + lose_value)))
-        # 获胜公司的非 AI 股东按持股比例分享这笔钱，直接折进股价里（不受限价约束）
-        total_shares = 0
-        for st in players.values():
-            total_shares += self._shares_of(
-                (st.get("holdings") or {}).get(win_code) or [])
-        if total_shares > 0 and payout > 0:
-            win_comp["price"] = round(
-                float(win_comp["price"]) + payout / total_shares, 2)
+        payout = 0
+        refund_a = 0
+        refund_b = 0
+        if annex:
+            # 破产清算：败方股东拿回被清空市值的五成，胜方股东同样只拿五成
+            payout = int(round(CAT_STOCK_WAR_REFUND * lose_value))
+            refund_win = int(round(CAT_STOCK_WAR_REFUND * cost_total))
+            for st, shares in holders:
+                back = int(round(shares * lose_price * CAT_STOCK_WAR_REFUND))
+                if lose_shares > 0:
+                    back += int(round(refund_win * shares / lose_shares))
+                st["catnip"] = int(st.get("catnip", 0) or 0) + back
+            for st in players.values():
+                (st.get("holdings") or {}).pop(lose_code, None)
+            self._war_payout(players, win_code, win_comp, payout)
+            self._war_payout(players, win_code, win_comp, refund_win)
+            refund_a = refund_b = refund_win
+        else:
+            # 没吞并：活动资金全额返还，按五五开分给两边股东
+            refund_a = refund_b = int(round(CAT_STOCK_WAR_REFUND * cost_total))
+            self._war_payout(players, a_code, a_comp, refund_a)
+            self._war_payout(players, b_code, b_comp, refund_b)
+        size_adj = 0.0
+        if not annex:
+            # 打平后市场重新定价：体量大的一方回落，体量小的一方上涨
+            size_adj = self._war_size_effect(a_comp, b_comp, size_a, size_b)
         war["status"] = "done"
         war["annex"] = annex
         war["winner"] = side
         war["payout"] = payout
+        war["refund_a"] = refund_a
+        war["refund_b"] = refund_b
         war["lose_value"] = lose_value
         war["ended_ts"] = time.time()
         if annex:
             war["result"] = (
-                f"{win_comp['name']}在全部地区压过 {lose_comp['name']}，"
-                f"将其吞并。对手股东共损失 {lose_value:,} 猫薄荷，"
-                f"双方活动投入 {cost_total:,}；获胜方股东按持股分享 {payout:,} 猫薄荷，"
-                "已折入股价。")
+                f"{win_comp['name']}在全部地区压过 {lose_comp['name']}，将其吞并。"
+                f"对手股东原值 {lose_value:,} 猫薄荷，破产清算后按五成返还；"
+                f"获胜方股东同样只得五成、即 {payout:,} 猫薄荷，由股价拉升分配；"
+                f"双方活动资金 {cost_total:,} 全额返还，按五五开分给两边股东。")
         else:
+            big_name = a_comp["name"] if size_a > size_b else b_comp["name"]
+            small_name = b_comp["name"] if size_a > size_b else a_comp["name"]
+            size_text = "双方体量相当，股价未做重新定价。"
+            if size_adj > 0:
+                size_text = (f"{big_name}体量更大，股价回落 {size_adj:.2%}；"
+                             f"{small_name}体量更小，股价上涨 {size_adj:.2%}。")
             war["result"] = (
                 f"商战到期，{win_comp['name']}以总支持度 "
-                f"{max(total_a, total_b):,.1f}:{min(total_a, total_b):,.1f} 胜出；"
-                f"未能在所有地区压过 65%，不吞并对手，"
-                f"获胜方股东分享 {payout:,} 猫薄荷，已折入股价。")
+                f"{max(total_a, total_b):,.1f}:{min(total_a, total_b):,.1f} 领先，"
+                f"但没能在所有地区压过 65%，不吞并对手。"
+                f"双方活动投入 {cost_total:,} 全额返还，按五五开分给两边股东；"
+                f"{size_text}")
         return [{"title": f"商战结算：{win_comp['name']}胜出",
                  "detail": war["result"]}]
 
@@ -5073,8 +5146,11 @@ class CatStockPlugin:
             "（只写一个代码时，会自动从你控股的同业公司里挑一家出战）；"
             "双方股份在商战期间冻结，股东可花 100 猫薄荷在当地"
             "「喵股市 商战活动 <代码> <国家> 挤压/宣传」，"
-            "每小时还有舆论事件左右支持度，24 小时后按支持度判胜负，"
-            "一方在所有地区都过 65% 就直接吞并对手。\n"
+            "每小时还有舆论事件左右支持度，24 小时后按总支持度判胜负："
+            "一方在所有地区都过 65% 就直接吞并对手，被吞并方股东按五成拿回，胜方股东也只拿五成；"
+            "没吞并则不再额外转移，体量大的一方股价回落、体量小的一方上涨；"
+            "双方活动资金始终全额返还、按五五开分给两边股东；"
+            "同一家公司一周只能发动一次商战。\n"
             "（提示：大额持仓可能被空头盯上，别把猫薄荷都押在一只股上）"
         )
 

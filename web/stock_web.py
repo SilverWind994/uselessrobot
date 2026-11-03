@@ -133,8 +133,8 @@ def meeting_finish(qq: int, code) -> dict:
 
 # ==================== 商战 ====================
 
-def war_start(qq: int, code) -> dict:
-    return _plugin.start_trade_war(qq, str(code or "").strip())
+def war_start(qq: int, code, my_code=None) -> dict:
+    return _plugin.start_trade_war(qq, str(code or "").strip(), str(my_code or "").strip())
 
 
 def war_activity(qq: int, code, country, kind) -> dict:

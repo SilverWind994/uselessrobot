@@ -421,10 +421,14 @@
           <div class="panel-head">
             <div>
               <div class="panel-title">商战</div>
-              <div class="panel-sub" id="stock-war-sub">持股一千股以上且为最大股东，可对同业公司开战</div>
+              <div class="panel-sub" id="stock-war-sub">先填你控股的公司，再填对手；两边都要有一千股以上的最大股东</div>
             </div>
           </div>
           <div class="create-row">
+            <label class="field inline">
+              <span>我方公司代码</span>
+              <input id="stock-war-my-code" type="text" placeholder="你控股的那家">
+            </label>
             <label class="field inline">
               <span>对手公司代码</span>
               <input id="stock-war-code" type="text" placeholder="例如 RQZH">
@@ -459,7 +463,7 @@
               <li>单只持仓市值过大时可能被空头盯上，别把猫薄荷都押在一只股上。</li>
               <li>也可以亲自押注某家企业会跌：先付五成保证金与 1% 手续费，开空后随时能「平空」，不设固定期限；但跟买卖一样，开仓当天不能平，要到第二天才能平空。</li>
               <li>企业不只做一门营生：持有该企业一千股以上且是最大股东时，可在开市时段「拓展」新方向，或「改营」整体换道。</li>
-              <li>商战：持有同业公司一千股以上且是最大股东，可对另一家有非 AI 大股东的同业公司开战。双方股份在开战期间冻结；股东可花 100 猫薄荷在当地「挤压」对手或「宣传」自己，每小时还有舆论事件左右支持度。任一方在所有地区都过 65% 即吞并对手，24 小时后未吞并则按总支持度判胜负；获胜方股东按持股分享战利，直接折入股价、不受限价约束。</li>
+              <li>商战：持有同业公司一千股以上且是最大股东，可先选定自己出战的公司，再对另一家有非 AI 大股东的同业公司开战。双方股份在开战期间冻结；股东可花 100 猫薄荷在当地「挤压」对手或「宣传」自己，每小时还有舆论事件左右支持度。任一方在所有地区都过 65% 即吞并对手，24 小时后未吞并则按总支持度判胜负；获胜方股东按持股分享战利，直接折入股价、不受限价约束。</li>
             </ol>
           </div>
         </div>
@@ -1046,6 +1050,6 @@
 
   <footer class="foot">串子小车 · 网页端</footer>
 
-  <script src="/static/app.js?v=36"></script>
+  <script src="/static/app.js?v=37"></script>
 </body>
 </html>

@@ -3721,6 +3721,7 @@ function stockPctCell(pct) {
 const stockWarsEl = document.getElementById('stock-wars');
 const stockWarSubEl = document.getElementById('stock-war-sub');
 const stockWarCodeEl = document.getElementById('stock-war-code');
+const stockWarMyCodeEl = document.getElementById('stock-war-my-code');
 
 function stockWarLeft(seconds) {
   const left = Math.max(0, Math.round(Number(seconds || 0)));
@@ -4086,12 +4087,17 @@ if (stockWarsEl) {
 const stockWarStartBtn = document.getElementById('btn-stock-war-start');
 if (stockWarStartBtn) {
   stockWarStartBtn.addEventListener('click', () => {
+    const myCode = (stockWarMyCodeEl && stockWarMyCodeEl.value || '').trim();
+    if (!myCode) {
+      stockMsgEl.textContent = '先填上你这边出战的公司代码喵';
+      return;
+    }
     const code = (stockWarCodeEl && stockWarCodeEl.value || '').trim();
     if (!code) {
       stockMsgEl.textContent = '先填上对手公司的代码喵';
       return;
     }
-    stockAction('/api/stock/war/start', { code }, '发动商战');
+    stockAction('/api/stock/war/start', { code, my_code: myCode }, '发动商战');
   });
 }
 

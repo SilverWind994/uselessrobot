@@ -1344,7 +1344,7 @@ def stock_war_start(payload: dict, cat_token: str = Cookie(default="")) -> JSONR
     qq = _auth_qq(cat_token)
     if qq is None:
         return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
-    data = stock_web.war_start(qq, payload.get("code"))
+    data = stock_web.war_start(qq, payload.get("code"), payload.get("my_code"))
     data["overview"] = stock_web.overview(qq)
     return JSONResponse(data)
 

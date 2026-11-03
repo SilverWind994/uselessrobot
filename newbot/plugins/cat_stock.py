@@ -4180,9 +4180,10 @@ class CatStockPlugin:
             "payout": int(war.get("payout", 0) or 0),
         }
 
-    def start_trade_war(self, qq: int, code: str) -> dict:
-        """大股东对同业公司发动商战"""
+    def start_trade_war(self, qq: int, code: str, my_code: str = "") -> dict:
+        """大股东对同业公司发动商战；my_code 指定自己这边出战的公司"""
         code = str(code or "").strip().upper()
+        my_code = str(my_code or "").strip().upper()
         if not code:
             return {"ok": False, "msg": "先选定要开战的那家公司喵"}
         if not self._is_open(datetime.now()):
@@ -4203,11 +4204,24 @@ class CatStockPlugin:
                 return {"ok": False,
                         "msg": f"要先持有某家公司 {CAT_STOCK_MEETING_HOST_SHARES} 股、"
                                "并成为它最大的股东，才有资格发动商战喵"}
-            my_code = next((c for c in my_codes
-                            if set(self._sectors_of(companies[c]))
-                            & set(self._sectors_of(target))), "")
-            if not my_code:
-                return {"ok": False, "msg": "两家做的营生没有交集，师出无名喵"}
+            if my_code:
+                if my_code not in companies:
+                    return {"ok": False, "msg": "这家企业已经不在市了喵"}
+                if my_code == code:
+                    return {"ok": False, "msg": "自己打自己可不行喵"}
+                if my_code not in my_codes:
+                    return {"ok": False,
+                            "msg": f"你还没有成为「{companies[my_code]['name']}」的最大股东"
+                                   f"（至少 {CAT_STOCK_MEETING_HOST_SHARES} 股）喵"}
+                if not (set(self._sectors_of(companies[my_code]))
+                        & set(self._sectors_of(target))):
+                    return {"ok": False, "msg": "两家做的营生没有交集，师出无名喵"}
+            else:
+                my_code = next((c for c in my_codes
+                                if set(self._sectors_of(companies[c]))
+                                & set(self._sectors_of(target))), "")
+                if not my_code:
+                    return {"ok": False, "msg": "两家做的营生没有交集，师出无名喵"}
             if self._war_for_code(market, my_code) or self._war_for_code(market, code):
                 return {"ok": False, "msg": "这两家里已经有一方卷在商战里了喵"}
             _holder, rival = self._war_major(players, code)
@@ -4447,14 +4461,26 @@ class CatStockPlugin:
 
     def _declare_war(self, target: Target, qq: int, rest: List[str]) -> None:
         if not rest:
-            self._sender.send_text(target, "用法：喵股市 开战 <对手公司代码/名称>")
+            self._sender.send_text(
+                target, "用法：喵股市 开战 <我方公司代码/名称> <对手公司代码/名称>")
             return
         market = self._load_market()
-        comp = self._resolve_company(market, rest[0])
-        if not comp:
-            self._sender.send_text(target, f"找不到企业「{rest[0]}」喵")
-            return
-        result = self.start_trade_war(qq, comp["code"])
+        if len(rest) >= 2:
+            mine = self._resolve_company(market, rest[0])
+            if not mine:
+                self._sender.send_text(target, f"找不到企业「{rest[0]}」喵")
+                return
+            rival = self._resolve_company(market, rest[1])
+            if not rival:
+                self._sender.send_text(target, f"找不到企业「{rest[1]}」喵")
+                return
+            result = self.start_trade_war(qq, rival["code"], mine["code"])
+        else:
+            comp = self._resolve_company(market, rest[0])
+            if not comp:
+                self._sender.send_text(target, f"找不到企业「{rest[0]}」喵")
+                return
+            result = self.start_trade_war(qq, comp["code"])
         if not result.get("ok"):
             self._sender.send_text(target, result.get("msg") or "商战发动失败喵")
             return
@@ -5043,7 +5069,8 @@ class CatStockPlugin:
             "AI 方针得票超过一半、或大股东方针超过三分之二才启用。"
             "没有大股东拍板的公司，收市后由董事会自行定下新的经营方向。\n"
             "商战：持有同业公司一千股以上并成为其最大股东时，可在开市时段"
-            "「喵股市 开战 <对手代码>」对另一家有非 AI 大股东的同业公司发动商战；"
+            "「喵股市 开战 <我方代码> <对手代码>」对另一家有非 AI 大股东的同业公司发动商战"
+            "（只写一个代码时，会自动从你控股的同业公司里挑一家出战）；"
             "双方股份在商战期间冻结，股东可花 100 猫薄荷在当地"
             "「喵股市 商战活动 <代码> <国家> 挤压/宣传」，"
             "每小时还有舆论事件左右支持度，24 小时后按支持度判胜负，"

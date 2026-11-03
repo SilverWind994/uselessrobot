@@ -4278,8 +4278,6 @@ class CatStockPlugin:
             kind = "boost"
         else:
             return {"ok": False, "msg": "活动类型只能是挤压或宣传喵"}
-        if not self._is_open(datetime.now()):
-            return {"ok": False, "msg": "休市期间不方便在各地张罗活动喵"}
         with self._lock:
             market = self._load_market()
             players = self._load_stock_players()

@@ -4073,14 +4073,20 @@ stockHoldingsEl.addEventListener('click', (e) => {
 });
 
 if (stockWarsEl) {
-  stockWarsEl.addEventListener('click', (e) => {
+  stockWarsEl.addEventListener('click', async (e) => {
     const btn = e.target.closest('.stock-war-act');
     if (!btn) return;
-    stockAction('/api/stock/war/activity', {
+    const actionName = btn.dataset.kind === 'squeeze' ? '挤压对手' : '宣传自己';
+    const ok = await stockAction('/api/stock/war/activity', {
       code: btn.dataset.code || '',
       country: btn.dataset.country || '',
       kind: btn.dataset.kind || '',
-    }, btn.dataset.kind === 'squeeze' ? '挤压对手' : '宣传自己');
+    }, actionName);
+    // 商战卡在页面底部，把结果也贴在卡片标题旁，免得只看到没反应
+    if (stockWarSubEl && stockMsgEl.textContent) {
+      stockWarSubEl.textContent = stockMsgEl.textContent;
+      stockWarSubEl.style.color = ok ? '' : 'var(--danger)';
+    }
   });
 }
 

@@ -4138,11 +4138,14 @@ class CatStockPlugin:
                 "b": round(b + rest * (1 - ratio), 1)}
 
     def _war_country_code(self, market: dict, text: str, rows: dict) -> str:
-        """把国家代码或中文名统一成代码"""
+        """把国家代码或中文名统一成代码，代码大小写不敏感"""
         text = str(text or "").strip()
-        codes = set(rows) | set(self._countries_of(market.get("countries") or {}))
-        if text.upper() in codes:
-            return text.upper()
+        codes = list(rows)
+        codes += [c for c in self._countries_of(market.get("countries") or {})
+                  if c not in rows]
+        for code in codes:
+            if text.lower() == str(code).lower():
+                return code
         for code in codes:
             if self._country_name(code) == text:
                 return code
@@ -4294,7 +4297,7 @@ class CatStockPlugin:
     def war_activity(self, qq: int, code: str, country: str, kind: str) -> dict:
         """交战双方股东花 100 猫薄荷，在某个地区挤压对手或宣传自己"""
         code = str(code or "").strip().upper()
-        country = str(country or "").strip().upper()
+        country = str(country or "").strip()
         kind = str(kind or "").strip()
         if kind in ("挤压", "squeeze", "压"):
             kind = "squeeze"

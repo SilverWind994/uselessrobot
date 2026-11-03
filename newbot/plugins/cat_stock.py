@@ -58,6 +58,8 @@ CAT_STOCK_REVERT_COEF = 0.12         # 超出阈值后每 1 偏离度的回归�
 CAT_STOCK_REVERT_MAX = 0.06          # 单小时机械回归上限
 CAT_STOCK_LINK_COUNTRY = 0.35        # 同国企业联动系数
 CAT_STOCK_LINK_SECTOR = 0.25         # 同行业企业联动系数
+CAT_STOCK_SECTOR_COMPETE = 0.35      # 同业竞争：组内相对强弱被反向修正的比例
+CAT_STOCK_SECTOR_COMPETE_MAX = 0.02  # 单小时同业竞争修正上限（绝对值）
 CAT_STOCK_DELIST_BAD_RATIO = 0.6     # 股价低于基准价该比例视为持续低迷
 CAT_STOCK_DELIST_BAD_TICKS = 10      # 连续低迷多少个整点才进入退市候选
 CAT_STOCK_DELIST_FORCE_RATIO = 0.25  # 股价跌破基准价该比例时直接强制退市
@@ -4412,6 +4414,8 @@ class CatStockPlugin:
             "但经营崩坏或遭遇意外的企业，可以直接被摘牌清盘，"
             "持仓按最新价的七成折算，摘牌企业也可能改日重新挂牌。\n"
             "持股：一位股东最多深度介入两家公司的经营，其他公司只允许保留一小把零散股份。\n"
+            "同业竞争：同一门生意里的企业会互相抢客，跑赢同行的涨幅会被对手分流一部分，"
+            "落后的一方反而容易补涨，同事不同命。\n"
             "做空：押注某家企业会跌，需先付五成保证金与 1% 手续费，不设固定期限；"
             "开空后随时可「平空」了结，但开仓当天不能平，要到第二天才能平空。\n"
             "经营方向：企业可以同时做几门营生，最大股东在开市时段可「拓展」新方向或「改营」整体换向。\n"
@@ -4561,6 +4565,10 @@ class CatStockPlugin:
             for eff in effects:
                 self._apply_effect(companies, eff)
 
+            # 2.5) 同行业竞争：同一门生意里的企业互相抢客，
+            #      跑赢同行的让出一点涨幅，落后的补回一点，同行不会无脑同涨同跌
+            self._sector_competition(companies, price_before)
+
             # 3) 大额持仓被针对（轻度）
             pressure_news = self._big_holding_pressure(companies, players)
             self._settle_positions(companies, players)
@@ -4697,6 +4705,42 @@ class CatStockPlugin:
             for comp in companies.values():
                 if comp["country"] != country and sectors & set(self._sectors_of(comp)):
                     comp["price"] = max(1.0, comp["price"] * (1 + pct * CAT_STOCK_LINK_SECTOR))
+
+    def _sector_competition(self, companies: dict, price_before: dict) -> None:
+        """同行业竞争：同一行业里的企业互相抢客源与订单。
+
+        比较本小时各家相对同行的强弱，把跑赢同行的部分反向修正一部分，
+        落后的企业则补回一点，让同行股票走出强弱分化，而不是一起同涨同跌。
+        多家企业同时属于多个行业时，按所属行业数取平均修正。"""
+        groups: Dict[str, List[dict]] = {}
+        for comp in companies.values():
+            for sector in self._sectors_of(comp):
+                groups.setdefault(sector, []).append(comp)
+        adjust: Dict[str, float] = {}
+        counts: Dict[str, int] = {}
+        for comps in groups.values():
+            if len(comps) < 2:
+                continue
+            edges: Dict[str, float] = {}
+            for comp in comps:
+                before = float(price_before.get(comp["code"]) or comp["price"] or 1)
+                edges[comp["code"]] = float(comp["price"]) / before - 1 if before else 0.0
+            mean = sum(edges.values()) / len(edges)
+            for comp in comps:
+                code = comp["code"]
+                edge = edges[code] - mean
+                pull = -edge * CAT_STOCK_SECTOR_COMPETE
+                pull = max(-CAT_STOCK_SECTOR_COMPETE_MAX,
+                           min(CAT_STOCK_SECTOR_COMPETE_MAX, pull))
+                adjust[code] = adjust.get(code, 0.0) + pull
+                counts[code] = counts.get(code, 0) + 1
+        for code, total in adjust.items():
+            comp = companies.get(code)
+            if not comp or counts.get(code, 0) <= 0:
+                continue
+            pull = total / counts[code]
+            if pull:
+                comp["price"] = max(1.0, float(comp["price"]) * (1 + pull))
 
     def _apply_price_limits(self, companies: dict, price_before: dict) -> None:
         """交易所限价：单小时 ±2%，当日累计 ±10%，两个约束同时生效"""
@@ -5667,6 +5711,8 @@ class CatStockPlugin:
             "（抢筹、跟风、空头狙击、逼空或大户撤退），但不要机械地按持仓数字编涨跌。"
             "涨跌可以有戏剧性，但必须有因果依据，"
             "实际盘面会受交易所限价约束，每小时与当日的波动都在规则之内，不要所有股票同涨同跌。"
+            "同行业的企业会互相争抢客源，请时不时写一写同行竞争"
+            "（抢单、降价、挖人、仿制、渠道争夺），让同行业的股票走出强弱分化。"
             + ("\n有企业带着「方针」，那是最大股东制定的经营方向；"
                "请至少让一条新闻体现方针带来的实际经营变化"
                "（新订单、扩产、招聘、政策扶持或收缩裁员），"

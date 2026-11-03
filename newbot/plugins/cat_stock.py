@@ -116,8 +116,6 @@ CAT_STOCK_ERA_DAYS = 30              # 每个时代固定延续的自然日，�
 CAT_STOCK_ERA_COLLAPSE_RATE = 0.5    # 亡国时该国企业持仓的清算比例
 CAT_STOCK_ERA_COUNTRY_MIN = 3        # 至少保留多少个尚存国家
 CAT_STOCK_ERA_WAR_CHANCE = 0.08      # 战事升级为亡国的概率
-CAT_STOCK_SHORT_MIN_HOURS = 12       # 做空最短持有一个开市小时数
-CAT_STOCK_SHORT_MAX_HOURS = 36       # 做空最长持有一个开市小时数
 CAT_STOCK_SHORT_MARGIN = 0.5         # 开空所需保证金比例
 CAT_STOCK_SHORT_FEE = 0.01           # 开空手续费
 CAT_STOCK_SHORT_MIN_SHARES = 1       # 做空也不设最小股数限制
@@ -618,6 +616,15 @@ def _lot_sellable(lot: dict) -> bool:
     except (OSError, ValueError, OverflowError):
         return True
     return bought.date() < datetime.now().date()
+
+
+def _short_coverable(short: dict) -> bool:
+    """T+1：当天开的空单要到第二天才能平空"""
+    try:
+        opened = datetime.fromtimestamp(float(short.get("ts", 0)))
+    except (OSError, ValueError, OverflowError):
+        return True
+    return opened.date() < datetime.now().date()
 
 
 _WORLD_BEARISH = (
@@ -2305,7 +2312,7 @@ class CatStockPlugin:
             lines.append(f"  {i}. {person.get('name', '')}（{person.get('tag', '')}）"
                          f"{person.get('persona', '')}｜持股 {person.get('shares', 0)}")
         lines.append(f"公司方针：{comp.get('policy') or '暂无（最大股东可制定）'}")
-        lines.append(f"买入：喵股市 买 {comp['code']} <股数>｜做空：喵股市 做空 {comp['code']} <股数> [周期]")
+        lines.append(f"买入：喵股市 买 {comp['code']} <股数>｜做空：喵股市 做空 {comp['code']} <股数>（第二天可平空）")
         lines.append(f"改方向：喵股市 改营 {comp['code']} <方向>（拓展：喵股市 拓展 {comp['code']} <方向>）")
         self._sender.send_text(target, "\n".join(lines))
 
@@ -2524,12 +2531,12 @@ class CatStockPlugin:
                 price = float(comp["price"]) if comp else entry
                 pnl = (entry - price) * shares
                 name = (comp or {}).get("name") or code
+                cover_text = "可平空" if _short_coverable(short) else "次日可平空"
                 lines.append(f"  {code} {name}：{shares} 股｜{self._fmt_price(entry)} → "
-                             f"{self._fmt_price(price)}｜浮动 {pnl:+.0f}｜还剩 "
-                             f"{int(short.get('remaining', 0) or 0)} 个开市小时到期")
+                             f"{self._fmt_price(price)}｜浮动 {pnl:+.0f}｜{cover_text}")
             lines.append("")
         lines.append(f"总市值：{total_value:.0f}｜总浮动：{total_pnl:+.0f}｜猫薄荷：{catnip}")
-        lines.append("（当天买入的股份要到第二天才能卖出）")
+        lines.append("（当天买入的股份要到第二天才能卖出，当天开的空单要到第二天才能平空）")
         self._sender.send_text(target, "\n".join(lines))
 
     # ==================== 盈亏排行 ====================
@@ -2768,12 +2775,11 @@ class CatStockPlugin:
         if not self._is_open(now):
             self._sender.send_text(target, "现在是休市时间喵～ 股市每日 08:00~20:00 开市")
             return
-        if len(rest) < 3:
+        if len(rest) < 2:
             self._sender.send_text(
                 target,
-                f"用法：喵股市 做空 <股票代码/名称> <股数> <周期 {CAT_STOCK_SHORT_MIN_HOURS}~"
-                f"{CAT_STOCK_SHORT_MAX_HOURS} 个开市小时>\n"
-                "周期必须写明，到期自动结算，不能提前平空。")
+                "用法：喵股市 做空 <股票代码/名称> <股数>\n"
+                "空单没有固定期限，想平时发「喵股市 平空」；开仓当天不能平，要到第二天才能平空。")
             return
 
         market = self._load_market()
@@ -2796,14 +2802,6 @@ class CatStockPlugin:
         if shares > CAT_STOCK_MAX_SHARES:
             self._sender.send_text(target, f"单笔最多 {CAT_STOCK_MAX_SHARES} 股喵～")
             return
-        try:
-            hours = int(rest[2])
-        except ValueError:
-            self._sender.send_text(
-                target, f"周期要用整数小时（{CAT_STOCK_SHORT_MIN_HOURS}~"
-                f"{CAT_STOCK_SHORT_MAX_HOURS}）喵")
-            return
-        hours = max(CAT_STOCK_SHORT_MIN_HOURS, min(CAT_STOCK_SHORT_MAX_HOURS, hours))
 
         price = float(comp["price"])
         notional = int(round(price * shares))
@@ -2837,7 +2835,6 @@ class CatStockPlugin:
                 "shares": shares,
                 "entry": round(price, 4),
                 "margin": margin,
-                "remaining": hours,
                 "opened": now.strftime("%Y-%m-%d %H:%M"),
                 "ts": time.time(),
             })
@@ -2848,44 +2845,108 @@ class CatStockPlugin:
             target,
             f"做空成交：{comp['code']} {comp['name']} {shares} 股\n"
             f"入场价 {self._fmt_price(price)}｜保证金 {margin}｜手续费 {fee}\n"
-            f"约定周期 {hours} 个开市小时，到期自动结算，不能提前平空\n"
+            f"空单没有固定期限，随时可发「喵股市 平空」了结（开仓当天不能平，要到第二天）\n"
             f"剩余猫薄荷 {new_balance}"
         )
 
     def _cover(self, target: Target, qq: int, rest: List[str]) -> None:
-        """空头只能等到约定周期结束自动结算"""
-        self._sender.send_text(target, "空头必须持有到约定周期结束，不能提前平空喵。")
+        """平空：不填代码则把可平的空单全部了结"""
+        now = datetime.now()
+        if not self._is_open(now):
+            self._sender.send_text(target, "现在是休市时间喵～ 股市每日 08:00~20:00 开市")
+            return
+        market = self._load_market()
+        companies = market["companies"]
+        code = rest[0] if rest else ""
+        if code:
+            comp = self._resolve_company(market, code)
+            if not comp:
+                self._sender.send_text(
+                    target, f"找不到企业「{code}」，发送「喵股市 大盘」查看代码")
+                return
+            code = comp["code"]
+        wanted = None
+        if len(rest) >= 2:
+            try:
+                wanted = int(rest[1])
+            except ValueError:
+                self._sender.send_text(target, "股数必须是正整数喵")
+                return
+            if wanted <= 0:
+                self._sender.send_text(target, "股数必须是正整数喵")
+                return
 
-    def _settle_shorts(self, players: dict, companies: dict, now: datetime) -> None:
-        """每个整点递减空头约定周期，到期自动按现价结算"""
         stamp = now.strftime("%Y-%m-%d %H:%M")
-        for st in players.values():
+
+        with self._lock:
+            players = self._load_stock_players()
+            st = self._stock_player(qq, players)
             shorts = st.get("shorts") or []
-            if not shorts:
-                continue
+            available = sum(
+                int(s.get("shares", 0) or 0) for s in shorts
+                if _short_coverable(s) and (not code or s.get("code") == code))
+            if available <= 0:
+                self._save_stock_players(players)
+                same_day = any(not code or s.get("code") == code for s in shorts)
+                self._sender.send_text(
+                    target,
+                    "当天开的空单要到第二天才能平空喵～" if same_day
+                    else "没有可平的空头仓位喵")
+                return
+            if wanted is not None and wanted > available:
+                self._save_stock_players(players)
+                self._sender.send_text(
+                    target,
+                    f"可平数量不足喵：现在只能平 {available} 股"
+                    f"（当天开的空单要到第二天才能平）")
+                return
+
+            remaining = available if wanted is None else wanted
+            total_return = 0
+            total_pnl = 0.0
             kept = []
+            closed = []
             log = st.setdefault("short_log", [])
             for short in shorts:
-                remaining = int(short.get("remaining", 0) or 0) - 1
-                code = short.get("code")
-                comp = companies.get(code)
-                if remaining > 0 and comp:
-                    short["remaining"] = remaining
+                shares = int(short.get("shares", 0) or 0)
+                take = min(remaining, shares) if shares > 0 and remaining > 0 \
+                    and _short_coverable(short) \
+                    and (not code or short.get("code") == code) else 0
+                if take <= 0:
                     kept.append(short)
                     continue
+                remaining -= take
                 entry = float(short.get("entry", 0) or 0)
-                price = float(comp["price"]) if comp else entry
-                shares = int(short.get("shares", 0) or 0)
-                proceeds = (float(short.get("margin", 0) or 0)
-                            + (entry - price) * shares)
-                st["catnip"] = int(st.get("catnip", 0)) + int(round(proceeds))
-                log.append({"code": code, "name": (comp or {}).get("name") or code,
-                            "shares": shares, "entry": round(entry, 2),
-                            "close": round(price, 2),
-                            "pnl": int(round((entry - price) * shares)),
-                            "at": stamp})
+                cur = companies.get(short.get("code"))
+                price = float(cur["price"]) if cur else entry
+                margin = float(short.get("margin", 0) or 0)
+                part_margin = margin * take / shares if shares else margin
+                pnl = (entry - price) * take
+                returned = int(round(part_margin + pnl))
+                st["catnip"] = int(st.get("catnip", 0)) + returned
+                total_return += returned
+                total_pnl += pnl
+                name = (cur or {}).get("name") or short.get("code")
+                log.append({"code": short.get("code"), "name": name, "shares": take,
+                            "entry": round(entry, 2), "close": round(price, 2),
+                            "pnl": int(round(pnl)), "at": stamp})
+                closed.append(f"  {short.get('code')} {name} {take} 股｜"
+                              f"{self._fmt_price(entry)} → {self._fmt_price(price)}｜"
+                              f"盈亏 {pnl:+.0f}")
+                if shares > take:
+                    left = dict(short)
+                    left["shares"] = shares - take
+                    left["margin"] = round(margin - part_margin, 2)
+                    kept.append(left)
             st["shorts"] = kept
             st["short_log"] = log[-20:]
+            self._save_stock_players(players)
+            new_balance = st["catnip"]
+
+        lines = [f"平空成交 {len(closed)} 笔："] + closed
+        lines.append(f"合计返还 {total_return}｜空头盈亏 {total_pnl:+.0f}｜剩余猫薄荷 {new_balance}")
+        lines.append("（当天开的空单要到第二天才能平空）")
+        self._sender.send_text(target, "\n".join(lines))
 
     def _close_shorts_for(self, st: dict, code: str, price: float, note: str) -> None:
         """企业消失时，相关空头按清算价一次性了结"""
@@ -4204,8 +4265,6 @@ class CatStockPlugin:
                 "bond_influence_shares": CAT_STOCK_BOND_INFLUENCE_SHARES,
                 "bond_price": CAT_STOCK_BOND_PRICE,
                 "era_days": CAT_STOCK_ERA_DAYS,
-                "short_min_hours": CAT_STOCK_SHORT_MIN_HOURS,
-                "short_max_hours": CAT_STOCK_SHORT_MAX_HOURS,
                 "short_margin": CAT_STOCK_SHORT_MARGIN,
                 "short_fee": CAT_STOCK_SHORT_FEE,
                 "short_min_shares": CAT_STOCK_SHORT_MIN_SHARES,
@@ -4310,11 +4369,11 @@ class CatStockPlugin:
                 "price": round(price, 2),
                 "margin": round(margin, 0),
                 "pnl": round(pnl, 0),
-                "remaining": int(short.get("remaining", 0) or 0),
+                "coverable": _short_coverable(short),
                 "opened": short.get("opened", ""),
                 "delisted": comp is None,
             })
-        short_rows.sort(key=lambda r: r["remaining"])
+        short_rows.sort(key=lambda r: r["opened"], reverse=True)
 
         player = self._cat._peek_player(qq) or {}
         return {
@@ -4353,12 +4412,11 @@ class CatStockPlugin:
             "但经营崩坏或遭遇意外的企业，可以直接被摘牌清盘，"
             "持仓按最新价的七成折算，摘牌企业也可能改日重新挂牌。\n"
             "持股：一位股东最多深度介入两家公司的经营，其他公司只允许保留一小把零散股份。\n"
-            "做空：押注某家企业会跌，需先付五成保证金与 1% 手续费；"
-            f"必须在网页企业详情里选定 {CAT_STOCK_SHORT_MIN_HOURS}~{CAT_STOCK_SHORT_MAX_HOURS} 个开市小时的固定周期，"
-            "到期按现价自动了结，不能提前平空。\n"
+            "做空：押注某家企业会跌，需先付五成保证金与 1% 手续费，不设固定期限；"
+            "开空后随时可「平空」了结，但开仓当天不能平，要到第二天才能平空。\n"
             "经营方向：企业可以同时做几门营生，最大股东在开市时段可「拓展」新方向或「改营」整体换向。\n"
             "买卖：喵股市 买 <代码> <股数>｜喵股市 卖 <代码> <股数>\n"
-            "　　　喵股市 做空 <代码> <股数> <周期>\n"
+            "　　　喵股市 做空 <代码> <股数>｜喵股市 平空 [代码] [股数]（不填则全部了结）\n"
             "查看：喵股市 大盘 / 新闻 / 持仓 / 排行 / 国家 / 代码或名称\n"
             "国家：喵股市 国家 查看列国，喵股市 国家 <代码或国名> 查看制度、君主与起源。\n"
             "董事会：持股最多且股份够多时，可在网页召集股东大会，"
@@ -4506,7 +4564,6 @@ class CatStockPlugin:
             # 3) 大额持仓被针对（轻度）
             pressure_news = self._big_holding_pressure(companies, players)
             self._settle_positions(companies, players)
-            self._settle_shorts(players, companies, now)
 
             # 3.4) 全体参与者财富冷热：过热时收紧流动性，过冷时托底
             economy = self._economy_check(market, players)

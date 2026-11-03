@@ -3881,14 +3881,16 @@ function renderStock(data) {
         <td>${Number(s.entry).toFixed(1)}</td>
         <td>${Number(s.price).toFixed(1)}</td>
         <td>${stockPnlCell(s.pnl)}</td>
-        <td>${s.remaining} 小时</td>
+        <td>${s.coverable
+          ? `<button class="btn btn-ghost stock-cover-btn" type="button" data-code="${esc(s.code)}">平空</button>`
+          : '次日可平'}</td>
       </tr>`).join('');
     stockHoldingsEl.innerHTML += `
-      <div class="section-title" style="margin-top:12px;">空头仓位（到期自动结算）</div>
+      <div class="section-title" style="margin-top:12px;">空头仓位（不设期限，开仓次日可平空）</div>
       <div class="stock-table-wrap">
         <table class="stock-table">
           <thead>
-            <tr><th>代码</th><th>名称</th><th>做空股数</th><th>入场价</th><th>现价</th><th>浮动</th><th>剩余</th></tr>
+            <tr><th>代码</th><th>名称</th><th>做空股数</th><th>入场价</th><th>现价</th><th>浮动</th><th>操作</th></tr>
           </thead>
           <tbody>${shortRows}</tbody>
         </table>
@@ -3958,6 +3960,12 @@ async function stockAction(path, body, actionName) {
 }
 
 document.getElementById('btn-stock-refresh').addEventListener('click', () => loadStock());
+
+stockHoldingsEl.addEventListener('click', (e) => {
+  const btn = e.target.closest('.stock-cover-btn');
+  if (!btn) return;
+  stockAction('/api/stock/cover', { code: btn.dataset.code || '' }, '平空');
+});
 
 function closeStockModal() {
   stockModalEl.classList.add('hidden');
@@ -4052,10 +4060,9 @@ function openStockDetail(code) {
     </div>
     <div class="stock-short-box">
       <div class="section-title">押它下跌（做空）</div>
-      <p class="hint">先付五成保证金与 1% 手续费，必须写明 ${Number((((stockLastData || {}).rules || {}).short_min_hours) || 12)}~${Number((((stockLastData || {}).rules || {}).short_max_hours) || 36)} 个开市小时的固定周期，到期按现价自动了结，不能提前平空。</p>
+      <p class="hint">先付五成保证金与 1% 手续费，不设固定期限；开仓当天不能平，要到第二天才能平空。</p>
       <div class="stock-short-row">
         <input id="stock-short-shares" class="stock-short-shares" type="number" min="1" step="1" placeholder="股数" data-code="${esc(c.code)}">
-        <input id="stock-short-hours" class="stock-short-hours" type="number" min="12" max="36" step="1" placeholder="周期(小时)">
         <button class="btn btn-primary btn-sm stock-short-btn" type="button" data-code="${esc(c.code)}">开空</button>
       </div>
     </div>
@@ -4315,21 +4322,13 @@ stockModalBodyEl.addEventListener('click', async (e) => {
   if (shortBtn) {
     const code = shortBtn.dataset.code || '';
     const sharesEl = document.getElementById('stock-short-shares');
-    const hoursEl = document.getElementById('stock-short-hours');
     const shares = sharesEl ? sharesEl.value.trim() : '';
     if (!shares) {
       stockMsgEl.textContent = '先填要做空的股数喵';
       stockMsgEl.classList.remove('ok');
       return;
     }
-    const hours = hoursEl ? hoursEl.value.trim() : '';
-    if (!hours) {
-      stockMsgEl.textContent = '先选一个固定的做空周期喵（12~36 个开市小时）';
-      stockMsgEl.classList.remove('ok');
-      return;
-    }
-    const ok = await stockAction('/api/stock/short',
-      { code, shares, hours }, '开空');
+    const ok = await stockAction('/api/stock/short', { code, shares }, '开空');
     if (ok) closeStockModal();
     return;
   }

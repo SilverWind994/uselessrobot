@@ -62,12 +62,9 @@ def sell(qq: int, code, shares) -> str:
     return _run(_plugin._sell, qq, [str(code or "").strip(), str(shares).strip()])
 
 
-def short(qq: int, code, shares, hours=None) -> str:
-    """开空：押注某家企业下跌"""
-    rest = [str(code or "").strip(), str(shares).strip()]
-    if hours not in (None, ""):
-        rest.append(str(hours).strip())
-    return _run(_plugin._short, qq, rest)
+def short(qq: int, code, shares) -> str:
+    """开空：押注某家企业下跌，不设固定期限，第二天起可平空"""
+    return _run(_plugin._short, qq, [str(code or "").strip(), str(shares).strip()])
 
 
 def cover(qq: int, code=None, shares=None) -> str:

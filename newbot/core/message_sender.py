@@ -31,7 +31,7 @@ class MessageSender:
 
     def _post(self, endpoint: str, payload: Dict[str, Any]) -> Optional[requests.Response]:
         try:
-            return requests.post(f"{self._base_url}/{endpoint}", json=payload)
+            return requests.post(f"{self._base_url}/{endpoint}", json=payload, timeout=15)
         except requests.RequestException as e:
             print(f"[MessageSender] Request failed: {e}")
             return None
@@ -54,13 +54,12 @@ class MessageSender:
         segments.append({"type": "text", "data": {"text": text if at_user_id is None else f" {text}"}})
         return segments
 
-    def send_text(self, target: Target, text: str, at_user_id: Optional[int] = None) -> None:
+    def send_text(self, target: Target, text: str, at_user_id: Optional[int] = None) -> Optional[requests.Response]:
         if not text:
-            return
+            return None
         if at_user_id is not None:
-            self._send_segments(target, self._build_text_segment(text, at_user_id))
-        else:
-            self._send_to_target(target, {"type": "text", "data": {"text": text}})
+            return self._send_segments(target, self._build_text_segment(text, at_user_id))
+        return self._send_to_target(target, {"type": "text", "data": {"text": text}})
 
     def reply(self, ctx, text: str) -> None:
         """按指令上下文回复到对应会话（私聊/群）"""
@@ -84,17 +83,16 @@ class MessageSender:
             return
         self._send_to_target(target, {"type": "record", "data": {"file": file_path}})
 
-    def _send_segments(self, target: Target, segments: List[Dict[str, Any]]) -> None:
+    def _send_segments(self, target: Target, segments: List[Dict[str, Any]]) -> Optional[requests.Response]:
         if target.is_group:
-            self._post("send_group_msg", {
+            return self._post("send_group_msg", {
                 "group_id": target.group_id,
                 "message": segments
             })
-        else:
-            self._post("send_private_msg", {
-                "user_id": target.user_id,
-                "message": segments
-            })
+        return self._post("send_private_msg", {
+            "user_id": target.user_id,
+            "message": segments
+        })
 
     def send_poke_to_group(self, user_id: int, group_id: int) -> None:
         self._post("group_poke", {"group_id": group_id, "user_id": user_id})

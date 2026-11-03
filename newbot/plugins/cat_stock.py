@@ -2969,6 +2969,11 @@ class CatStockPlugin:
             return
 
         price = float(comp["price"])
+        if self._war_for_code(market, comp["code"]):
+            self._sender.send_text(
+                target,
+                f"「{comp['name']}」正卷在商战里，交战双方的股份暂时冻结，不能做空喵")
+            return
         notional = int(round(price * shares))
         margin = int(round(notional * CAT_STOCK_SHORT_MARGIN))
         fee = max(1, int(round(notional * CAT_STOCK_SHORT_FEE)))
@@ -4103,33 +4108,52 @@ class CatStockPlugin:
                 return war
         return None
 
+    @staticmethod
+    def _war_cap_share(comp_a: dict, comp_b: dict) -> float:
+        """按市值算甲方初始占比"""
+        cap_a = float(comp_a["price"]) * float(comp_a.get("base") or comp_a["price"])
+        cap_b = float(comp_b["price"]) * float(comp_b.get("base") or comp_b["price"])
+        return cap_a / (cap_a + cap_b) if cap_a + cap_b > 0 else 0.5
+
+    def _war_seed_row(self, comp_a: dict, comp_b: dict, code: str,
+                      share_a: float) -> dict:
+        """单个地区的初始支持度"""
+        if comp_a.get("country") == comp_b.get("country") == code:
+            a, b = 30.0, 30.0
+        elif comp_a.get("country") == code:
+            a, b = 60.0, 0.0
+        elif comp_b.get("country") == code:
+            a, b = 0.0, 60.0
+        else:
+            a, b = 0.0, 0.0
+        rest = 100.0 - a - b
+        ratio = share_a + random.uniform(-0.12, 0.12)
+        # 本国地界天然更认自家招牌
+        if comp_a.get("country") == code:
+            ratio += 0.06
+        elif comp_b.get("country") == code:
+            ratio -= 0.06
+        ratio = max(0.15, min(0.85, ratio))
+        return {"a": round(a + rest * ratio, 1),
+                "b": round(b + rest * (1 - ratio), 1)}
+
+    def _war_country_code(self, market: dict, text: str, rows: dict) -> str:
+        """把国家代码或中文名统一成代码"""
+        text = str(text or "").strip()
+        codes = set(rows) | set(self._countries_of(market.get("countries") or {}))
+        if text.upper() in codes:
+            return text.upper()
+        for code in codes:
+            if self._country_name(code) == text:
+                return code
+        return ""
+
     def _war_seed(self, market: dict, comp_a: dict, comp_b: dict) -> dict:
         """按地区铺开初始支持度：同国 30-30，不同国本国 60-0，剩下的按市值分"""
         codes = self._countries_of(market.get("countries") or {})
-        cap_a = float(comp_a["price"]) * float(comp_a.get("base") or comp_a["price"])
-        cap_b = float(comp_b["price"]) * float(comp_b.get("base") or comp_b["price"])
-        share_a = cap_a / (cap_a + cap_b) if cap_a + cap_b > 0 else 0.5
-        rows = {}
-        for code in codes:
-            if comp_a["country"] == comp_b["country"] == code:
-                a, b = 30.0, 30.0
-            elif comp_a["country"] == code:
-                a, b = 60.0, 0.0
-            elif comp_b["country"] == code:
-                a, b = 0.0, 60.0
-            else:
-                a, b = 0.0, 0.0
-            rest = 100.0 - a - b
-            ratio = share_a + random.uniform(-0.12, 0.12)
-            # 本国地界天然更认自家招牌
-            if comp_a["country"] == code:
-                ratio += 0.06
-            elif comp_b["country"] == code:
-                ratio -= 0.06
-            ratio = max(0.15, min(0.85, ratio))
-            rows[code] = {"a": round(a + rest * ratio, 1),
-                          "b": round(b + rest * (1 - ratio), 1)}
-        return rows
+        share_a = self._war_cap_share(comp_a, comp_b)
+        return {code: self._war_seed_row(comp_a, comp_b, code, share_a)
+                for code in codes}
 
     def _war_view(self, market: dict, war: dict, players: dict,
                   qq: Optional[int] = None) -> dict:
@@ -4286,9 +4310,19 @@ class CatStockPlugin:
                 return {"ok": False, "msg": "这家公司现在没有在打商战喵"}
             side = "a" if code == war.get("a") else "b"
             other = "b" if side == "a" else "a"
-            slot = (war.get("countries") or {}).get(country)
+            rows = war.setdefault("countries", {})
+            country = self._war_country_code(market, country, rows)
+            if not country:
+                return {"ok": False, "msg": "没有这个地区喵"}
+            slot = rows.get(country)
             if not slot:
-                return {"ok": False, "msg": "这个地区不在本次商战范围内喵"}
+                # 没记录过的地区现场补一条，规则与开战时的初始分配一致
+                a_comp = market["companies"].get(war.get("a")) or {}
+                b_comp = market["companies"].get(war.get("b")) or {}
+                slot = self._war_seed_row(
+                    a_comp, b_comp, country,
+                    self._war_cap_share(a_comp, b_comp))
+                rows[country] = slot
             if self._shares_in(players, qq, code) <= 0:
                 return {"ok": False, "msg": "只有交战双方的股东才能在当地开展活动喵"}
             st = self._stock_player(qq, players)
@@ -5142,7 +5176,7 @@ class CatStockPlugin:
             "商战：持有同业公司一千股以上并成为其最大股东时，可在开市时段"
             "「喵股市 开战 <我方代码> <对手代码>」对另一家有非 AI 大股东的同业公司发动商战"
             "（只写一个代码时，会自动从你控股的同业公司里挑一家出战）；"
-            "双方股份在商战期间冻结，股东可花 100 猫薄荷在当地"
+            "双方股份在商战期间冻结，不能卖出也不能做空，股东可花 100 猫薄荷在当地"
             "「喵股市 商战活动 <代码> <国家> 挤压/宣传」，"
             "每小时还有舆论事件左右支持度，24 小时后按总支持度判胜负："
             "一方在所有地区都过 65% 就直接吞并对手，被吞并方股东按五成拿回，胜方股东也只拿五成；"

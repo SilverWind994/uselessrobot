@@ -88,6 +88,12 @@ CAT_STOCK_MEETING_VOTE_MINUTES = 30  # 讨论结束后给股东确认三套方�
 CAT_STOCK_MEETING_AI_PASS = 0.5      # AI 方针得票超过一半才采用
 CAT_STOCK_MEETING_HOST_PASS = 2 / 3  # 大股东方针得票超过三分之二才采用
 CAT_STOCK_MEETING_MAX_LEN = 80       # 单条发言最大长度
+CAT_STOCK_WAR_HOURS = 24             # 一场商战持续多少小时
+CAT_STOCK_WAR_COST = 100             # 每次地区活动消耗的猫薄荷
+CAT_STOCK_WAR_ANNEX = 0.65           # 全部地区支持度超过该比例即可吞并
+CAT_STOCK_WAR_REWARD = 0.9           # 吞并后获胜方分得的比例
+CAT_STOCK_WAR_WIN_REWARD = 0.45      # 未吞并、仅以总支持度取胜时获胜方分得的比例
+CAT_STOCK_WAR_LOG_MAX = 10           # 战报保留最近多少场
 CAT_STOCK_AUTO_POLICY_MAX = 2        # 收市时 AI 自行制定方针的公司数量上限
 CAT_STOCK_COUNTRY_MIN_LISTED = 2     # 每个国家尽量维持的上市公司数
 CAT_STOCK_COMPANY_MIN = 20           # 市场最少保持的上市公司数
@@ -108,12 +114,11 @@ CAT_STOCK_ECON_HOUR_HOT = 0.01       # 单小时持仓账户财富上涨 1% 视�
 CAT_STOCK_ECON_HOUR_COLD = 0.01      # 单小时持仓账户财富下跌 1% 视为过冷
 CAT_STOCK_ECON_LOG_PATH = os.path.join(STOCK_DIR, "econ_reports.jsonl")
 CAT_STOCK_ECON_LOG_DAYS = 3           # 冷热观测消息记录只保留最近三天
-CAT_STOCK_ECON_DRAG_MAX = 0.02       # 过热时每整点对多头仓位施加的最大收紧力度
-CAT_STOCK_ECON_DRAG_COEF = 0.40      # 超出过热线的涨幅换算成收紧力度
-CAT_STOCK_ECON_SUPPORT_MAX = 0.02    # 过冷时每整点对持仓施加的最大托底力度
-CAT_STOCK_ECON_SUPPORT_COEF = 0.15   # 低于过冷线的比例换算成托底力度
-CAT_STOCK_ECON_FEE_MAX = 0.05        # 过热时卖出手续费最多上浮多少
-CAT_STOCK_ECON_FEE_COEF = 0.50       # 超出过热线的涨幅换算成手续费上浮
+CAT_STOCK_ECON_DRAG_MAX = 0.008      # 过热时每整点对多头仓位施加的最大收紧力度
+CAT_STOCK_ECON_DRAG_COEF = 0.12      # 超出过热线的涨幅换算成收紧力度
+CAT_STOCK_ECON_SUPPORT_MAX = 0.008   # 过冷时每整点对持仓施加的最大托底力度
+CAT_STOCK_ECON_SUPPORT_COEF = 0.06   # 低于过冷线的比例换算成托底力度
+CAT_STOCK_PENDING_MAX = 20           # 休市期间每人最多挂多少笔次日开盘单
 CAT_STOCK_ERA_DAYS = 30              # 每个时代固定延续的自然日，到期按可能性随机翻页
 CAT_STOCK_ERA_COLLAPSE_RATE = 0.5    # 亡国时该国企业持仓的清算比例
 CAT_STOCK_ERA_COUNTRY_MIN = 3        # 至少保留多少个尚存国家
@@ -2093,6 +2098,12 @@ class CatStockPlugin:
                 "持股最多、且股份够多的股东，去网页版股票详情里按下「召集股东大会」，"
                 "十分钟内议出新路子，再由在场股东确认三套方针。"
             )
+        elif sub in ("商战", "war"):
+            self._show_wars(target, ctx.user_id)
+        elif sub in ("开战", "发动商战", "declare"):
+            self._declare_war(target, ctx.user_id, rest)
+        elif sub in ("商战活动", "waract"):
+            self._war_act_cmd(target, ctx.user_id, rest)
         else:
             # 直接输入企业代码/名称时给出该股详情
             comp = self._resolve_company(self._load_market(), parts[0])
@@ -2253,7 +2264,7 @@ class CatStockPlugin:
         now = datetime.now()
         if self._is_open(now):
             return f"开市中（08:00~20:00）｜当前 {now.strftime('%H:%M')}"
-        return f"休市中（08:00~20:00）｜当前 {now.strftime('%H:%M')}"
+        return f"休市中（08:00~20:00）｜当前 {now.strftime('%H:%M')}｜可挂单到次日开盘"
 
     def _show_market(self, target: Target, full: bool) -> None:
         market = self._load_market()
@@ -2470,11 +2481,12 @@ class CatStockPlugin:
             holdings = {k: list(v) for k, v in st.get("holdings", {}).items()}
             bond_lots = {k: list(v) for k, v in st.get("bonds", {}).items()}
             shorts = [dict(s) for s in (st.get("shorts") or [])]
+            pending = [dict(o) for o in (st.get("pending_orders") or [])]
             self._save_stock_players(players)
 
         lines = [f"【喵股市 · 我的持仓】{self._market_status_line()}"]
         lines.append(f"猫薄荷：{catnip}｜约合猫眼石：{catnip // CAT_STOCK_CATNIP_TO_STONE}（提现 105:1）")
-        if not holdings and not bond_lots and not shorts:
+        if not holdings and not bond_lots and not shorts and not pending:
             lines.append("当前空仓，也没有在押的空头")
             self._sender.send_text(target, "\n".join(lines))
             return
@@ -2536,6 +2548,13 @@ class CatStockPlugin:
                 cover_text = "可平空" if _short_coverable(short) else "次日可平空"
                 lines.append(f"  {code} {name}：{shares} 股｜{self._fmt_price(entry)} → "
                              f"{self._fmt_price(price)}｜浮动 {pnl:+.0f}｜{cover_text}")
+            lines.append("")
+        if pending:
+            lines.append(f"待开盘挂单（次日 {CAT_STOCK_OPEN_HOUR:02d}:00 按开盘价成交）：")
+            for item in pending:
+                kind = "买入" if item.get("kind") == "buy" else "卖出"
+                lines.append(f"  {item.get('code', '')} {item.get('name', '')} "
+                             f"{int(item.get('shares', 0) or 0)} 股{kind}")
             lines.append("")
         lines.append(f"总市值：{total_value:.0f}｜总浮动：{total_pnl:+.0f}｜猫薄荷：{catnip}")
         lines.append("（当天买入的股份要到第二天才能卖出，当天开的空单要到第二天才能平空）")
@@ -2615,9 +2634,6 @@ class CatStockPlugin:
 
     def _buy(self, target: Target, qq: int, rest: List[str]) -> None:
         now = datetime.now()
-        if not self._is_open(now):
-            self._sender.send_text(target, "现在是休市时间喵～ 股市每日 08:00~20:00 开市")
-            return
         if len(rest) < 2:
             self._sender.send_text(target, "用法：喵股市 买 <股票代码/名称> <股数>")
             return
@@ -2642,6 +2658,11 @@ class CatStockPlugin:
         if shares < CAT_STOCK_MIN_SHARES:
             self._sender.send_text(
                 target, f"单笔最少买 {CAT_STOCK_MIN_SHARES} 股喵～")
+            return
+
+        if not self._is_open(now):
+            # 休市期间的买入挂到次日开盘，按开盘价成交
+            self._queue_order(target, qq, comp, shares, "buy")
             return
 
         price = float(comp["price"])
@@ -2685,9 +2706,6 @@ class CatStockPlugin:
 
     def _sell(self, target: Target, qq: int, rest: List[str]) -> None:
         now = datetime.now()
-        if not self._is_open(now):
-            self._sender.send_text(target, "现在是休市时间喵～ 股市每日 08:00~20:00 开市")
-            return
         if len(rest) < 2:
             self._sender.send_text(target, "用法：喵股市 卖 <股票代码/名称> <股数>")
             return
@@ -2707,6 +2725,17 @@ class CatStockPlugin:
             return
 
         price = float(comp["price"])
+
+        if self._war_for_code(market, comp["code"]):
+            self._sender.send_text(
+                target,
+                f"「{comp['name']}」正卷在商战里，交战双方的股份暂时冻结，不能卖出喵")
+            return
+
+        if not self._is_open(now):
+            # 休市期间的卖出挂到次日开盘，按开盘价成交
+            self._queue_order(target, qq, comp, shares, "sell")
+            return
 
         with self._lock:
             players = self._load_stock_players()
@@ -2756,8 +2785,7 @@ class CatStockPlugin:
                 st["holdings"].pop(comp["code"], None)
 
             proceeds = int(round(price * shares))
-            surcharge = float((market.get("economy") or {}).get("sell_surcharge", 0) or 0)
-            fee = max(1, int(round(proceeds * (CAT_STOCK_SELL_FEE + surcharge))))
+            fee = max(1, int(round(proceeds * CAT_STOCK_SELL_FEE)))
             net = proceeds - fee
             st["catnip"] = int(st.get("catnip", 0)) + net
             self._save_stock_players(players)
@@ -2769,6 +2797,140 @@ class CatStockPlugin:
             f"成交价 {self._fmt_price(price)}｜成交额 {proceeds}｜手续费 {fee}｜到手 {net}\n"
             f"剩余猫薄荷 {new_balance}"
         )
+
+    # ==================== 休市挂单 ====================
+
+    def _queue_order(self, target: Target, qq: int, comp: dict,
+                     shares: int, kind: str) -> None:
+        """休市期间下的买卖单不立即成交，挂到下一个开市整点按开盘价执行"""
+        code = comp["code"]
+        name = comp.get("name", code)
+        with self._lock:
+            players = self._load_stock_players()
+            st = self._stock_player(qq, players)
+            pending = st.setdefault("pending_orders", [])
+            if not isinstance(pending, list):
+                pending = []
+                st["pending_orders"] = pending
+            if len(pending) >= CAT_STOCK_PENDING_MAX:
+                self._save_stock_players(players)
+                self._sender.send_text(
+                    target, f"待成交挂单最多 {CAT_STOCK_PENDING_MAX} 笔喵～")
+                return
+            if kind == "buy":
+                existing = self._shares_of(st.get("holdings", {}).get(code, []))
+                queued = sum(int(item.get("shares", 0) or 0) for item in pending
+                             if item.get("kind") == "buy" and item.get("code") == code)
+                limit_msg = self._holding_limit_error(st, code, existing + queued + shares)
+                if limit_msg:
+                    self._save_stock_players(players)
+                    self._sender.send_text(target, limit_msg)
+                    return
+            else:
+                held = self._shares_of(st.get("holdings", {}).get(code, []))
+                queued = sum(int(item.get("shares", 0) or 0) for item in pending
+                             if item.get("kind") == "sell" and item.get("code") == code)
+                if held - queued < shares:
+                    self._save_stock_players(players)
+                    self._sender.send_text(
+                        target,
+                        f"可挂单卖出的股份不足喵：{code} 最多还能挂 "
+                        f"{max(0, held - queued)} 股（已挂单的不重复计入）")
+                    return
+            pending.append({"kind": kind, "code": code, "name": name,
+                            "shares": int(shares), "ts": time.time()})
+            self._save_stock_players(players)
+
+        action = "买入" if kind == "buy" else "卖出"
+        self._sender.send_text(
+            target,
+            f"已挂单：{code} {name} {shares} 股{action}\n"
+            f"现在是休市时间，这笔操作会在 {CAT_STOCK_OPEN_HOUR:02d}:00 开盘时"
+            f"按开盘价成交，相当于明天的{action}")
+
+    def _settle_pending_orders(self, market: dict, players: dict) -> List[Tuple[int, str]]:
+        """开市第一个整点：按开盘价执行休市期间挂下的买卖单"""
+        companies = market.get("companies") or {}
+        results: List[Tuple[int, str]] = []
+        for key, st in players.items():
+            pending = st.get("pending_orders")
+            if not isinstance(pending, list) or not pending:
+                continue
+            st.setdefault("holdings", {})
+            done, failed = [], []
+            for order in pending:
+                code = str(order.get("code") or "")
+                comp = companies.get(code)
+                shares = int(order.get("shares", 0) or 0)
+                if not comp:
+                    failed.append(f"{code} {order.get('name', '')} {shares} 股（已退市，挂单作废）")
+                    continue
+                price = float(comp["price"])
+                if order.get("kind") == "buy":
+                    cost = int(round(price * shares))
+                    fee = max(1, int(round(cost * CAT_STOCK_BUY_FEE)))
+                    total = cost + fee
+                    if shares <= 0 or int(st.get("catnip", 0)) < total:
+                        failed.append(f"{code} {shares} 股买入（猫薄荷不足，挂单作废）")
+                        continue
+                    existing = self._shares_of(st["holdings"].get(code, []))
+                    if self._holding_limit_error(st, code, existing + shares):
+                        failed.append(f"{code} {shares} 股买入（超出持股上限，挂单作废）")
+                        continue
+                    st["catnip"] = int(st["catnip"]) - total
+                    st["holdings"].setdefault(code, []).append(
+                        {"shares": shares,
+                         "price": round((cost + fee) / shares, 4), "ts": time.time()})
+                    done.append(f"买入 {code} {comp.get('name', code)} {shares} 股"
+                                f"｜成交价 {self._fmt_price(price)}｜手续费 {fee}")
+                else:
+                    if self._war_for_code(market, code):
+                        failed.append(f"{code} {shares} 股卖出（商战期间股份冻结，挂单作废）")
+                        continue
+                    lots = st["holdings"].get(code, [])
+                    sellable = sum(int(l.get("shares", 0)) for l in lots if _lot_sellable(l))
+                    if shares <= 0 or sellable < shares:
+                        failed.append(f"{code} {shares} 股卖出（可卖股份不足，挂单作废）")
+                        continue
+                    remaining = shares
+                    kept_lots = []
+                    for lot in lots:
+                        if remaining <= 0:
+                            kept_lots.append(lot)
+                            continue
+                        lot_shares = int(lot.get("shares", 0))
+                        if not _lot_sellable(lot) or lot_shares <= 0:
+                            kept_lots.append(lot)
+                            continue
+                        take = min(remaining, lot_shares)
+                        remaining -= take
+                        if lot_shares > take:
+                            kept = dict(lot)
+                            kept["shares"] = lot_shares - take
+                            kept_lots.append(kept)
+                    if remaining > 0:
+                        failed.append(f"{code} {shares} 股卖出（核对异常，挂单作废）")
+                        continue
+                    if kept_lots:
+                        st["holdings"][code] = kept_lots
+                    else:
+                        st["holdings"].pop(code, None)
+                    proceeds = int(round(price * shares))
+                    fee = max(1, int(round(proceeds * CAT_STOCK_SELL_FEE)))
+                    net = proceeds - fee
+                    st["catnip"] = int(st.get("catnip", 0)) + net
+                    done.append(f"卖出 {code} {comp.get('name', code)} {shares} 股"
+                                f"｜成交价 {self._fmt_price(price)}｜到手 {net}")
+            st["pending_orders"] = []
+            try:
+                qq = int(key)
+            except (TypeError, ValueError):
+                continue
+            lines = [f"【喵股市 · 开盘成交】{CAT_STOCK_OPEN_HOUR:02d}:00 按开盘价执行"]
+            lines.extend(done)
+            lines.extend(failed)
+            results.append((qq, "\n".join(lines)))
+        return results
 
     # ==================== 做空 ====================
 
@@ -3139,8 +3301,7 @@ class CatStockPlugin:
                 st["bonds"].pop(country, None)
 
             proceeds = int(round(price * shares))
-            surcharge = float((market.get("economy") or {}).get("sell_surcharge", 0) or 0)
-            fee = max(1, int(round(proceeds * (CAT_STOCK_SELL_FEE + surcharge))))
+            fee = max(1, int(round(proceeds * CAT_STOCK_SELL_FEE)))
             net = proceeds - fee
             st["catnip"] = int(st.get("catnip", 0)) + net
             self._save_stock_players(players)
@@ -3418,7 +3579,7 @@ class CatStockPlugin:
             if meeting.get("status") == "open":
                 meeting["end_ts"] = time.time() - 1
             elif meeting.get("status") == "confirm":
-                meeting["confirm_end"] = time.time() - 1
+                return {"ok": False, "msg": "确认阶段要等半小时走完，让股东都来得及回来投票喵"}
             self._save_market(market)
         return self.meeting_state(qq, code)
 
@@ -3444,12 +3605,6 @@ class CatStockPlugin:
                 need_summary = code
             elif status == "confirm" and now_ts >= float(meeting.get("confirm_end") or 0):
                 need_summary = "__finalize__"
-            elif status == "confirm":
-                players = self._load_stock_players()
-                holders = self._meeting_holders(players, code)
-                votes = meeting.get("votes") or {}
-                if holders and all(str(h["qq"]) in votes for h in holders):
-                    need_summary = "__finalize__"
             meeting_snapshot = {"messages": [dict(m) for m in meeting.get("messages") or []],
                                 "comp": dict(market["companies"].get(code) or {}),
                                 "host_policy": str(meeting.get("host_policy") or "")}
@@ -3468,6 +3623,34 @@ class CatStockPlugin:
             return {"ok": True, "active": True,
                     "meeting": self._meeting_view(market, meeting, players, qq)}
 
+    def _meeting_ballots(self, meeting: dict, holders: List[dict],
+                         ai_board: List[dict], comp: dict) -> dict:
+        """按持股比例计票：持股股东按当前持股，董事按常驻份额，未表态计旧方针"""
+        counts = {"ai": 0.0, "host": 0.0, "old": 0.0}
+        voted = {str(k): str(v) for k, v in (meeting.get("votes") or {}).items()}
+        holder_shares: Dict[str, float] = {}
+        for h in holders:
+            shares = float(h.get("shares", 0) or 0)
+            holder_shares[str(h["qq"])] = shares
+            choice = voted.get(str(h["qq"]))
+            counts[choice if choice in counts else "old"] += shares
+        board_shares = {str(b.get("name") or ""): float(b.get("shares", 0) or 0)
+                        for b in self._company_board(comp)}
+        eligible = sum(holder_shares.values())
+        for vote in ai_board:
+            shares = float(vote.get("shares", 0) or 0)
+            if shares <= 0:
+                shares = board_shares.get(str(vote.get("name") or ""), 0.0)
+            eligible += shares
+            choice = str(vote.get("choice") or "")
+            counts[choice if choice in counts else "old"] += shares
+        # 大股东没有另拟方针时，投给他的票等同于沿用旧方针
+        if not str(meeting.get("host_policy") or "").strip():
+            counts["old"] += counts["host"]
+            counts["host"] = 0.0
+        return {"counts": counts, "eligible": eligible,
+                "holder_shares": holder_shares}
+
     def _meeting_view(self, market: dict, meeting: dict, players: dict, qq: int) -> dict:
         comp = market["companies"].get(meeting["code"]) or {}
         holders = self._meeting_holders(players, meeting["code"])
@@ -3482,18 +3665,13 @@ class CatStockPlugin:
             remain = 0
         votes = meeting.get("votes") or {}
         ai_board = meeting.get("ai_votes") or []
-        counts = {"ai": 0, "host": 0, "old": 0}
-        for choice in votes.values():
-            if choice in counts:
-                counts[choice] += 1
-        for vote in ai_board:
-            choice = str(vote.get("choice") or "")
-            if choice in counts:
-                counts[choice] += 1
-        # 老股东与持股股东一起计入表决人数
-        eligible = len(holders) + len(ai_board)
-        # 确认期内没有表态的持股股东，按沿用旧方针计算
-        counts["old"] += max(0, len(holders) - len(votes))
+        ballots = self._meeting_ballots(meeting, holders, ai_board, comp)
+        counts = ballots["counts"]
+        eligible = ballots["eligible"]
+        holder_shares = ballots["holder_shares"]
+        # 董事会的票始终在确认阶段计入；持股股东只算已经表态的份额
+        board_total = eligible - sum(holder_shares.values())
+        voted_shares = sum(holder_shares.get(str(k), 0.0) for k in votes)
         options = self._meeting_options(meeting, comp)
         board = self._company_board(comp)
         return {
@@ -3507,7 +3685,7 @@ class CatStockPlugin:
             "my_shares": int(mine),
             "can_speak": status == "open" and mine > CAT_STOCK_MEETING_MIN_SHARES,
             "can_vote": status == "confirm" and mine > CAT_STOCK_MEETING_MIN_SHARES,
-            "can_finish": int(qq) == int(meeting.get("host", 0)) and status in ("open", "confirm"),
+            "can_finish": int(qq) == int(meeting.get("host", 0)) and status == "open",
             "can_set_policy": int(qq) == int(meeting.get("host", 0)) and status == "open",
             "my_vote": votes.get(str(qq)) if str(qq) in votes else None,
             "host_policy": meeting.get("host_policy") or "",
@@ -3515,11 +3693,15 @@ class CatStockPlugin:
             "draft_sectors": list(meeting.get("sectors") or []),
             "options": options,
             "votes": {
-                "ai": counts["ai"], "host": counts["host"], "old": counts["old"],
-                "total": len(votes) + len(ai_board), "eligible": eligible,
-                "human": [{"name": self._player_nick(int(k)), "choice": v}
+                "ai": int(round(counts["ai"])), "host": int(round(counts["host"])),
+                "old": int(round(counts["old"])),
+                "total": int(round(voted_shares + board_total)),
+                "eligible": int(round(eligible)),
+                "human": [{"name": self._player_nick(int(k)), "choice": v,
+                           "shares": int(holder_shares.get(str(k), 0) or 0)}
                           for k, v in votes.items()],
                 "board": [{"name": v.get("name") or "", "tag": v.get("tag") or "",
+                           "shares": int(v.get("shares", 0) or 0),
                            "choice": v.get("choice") or ""} for v in ai_board],
             },
             "holders": holders,
@@ -3570,6 +3752,7 @@ class CatStockPlugin:
             name = str(member.get("name") or "")
             choice = picked.get(name) or self._fallback_board_vote(member, has_host)
             votes.append({"name": name, "tag": str(member.get("tag") or ""),
+                          "shares": int(member.get("shares", 0) or 0),
                           "choice": choice})
         return votes
 
@@ -3646,6 +3829,7 @@ class CatStockPlugin:
                 "也可以在必要时调整公司的经营范围。不要罗列规则，不要超过 100 字。\n"
                 "同时请按每位老股东的人设与会议内容，替他们各自表态："
                 "ai 表示支持书记员汇总，host 表示支持大股东方针，old 表示沿用旧方针；"
+                "大股东定了方针也不代表老股东都买账，请按人设独立表态，不要一律投给大股东方针；"
                 "每人只能选一个，不要漏人。\n"
                 '只输出 JSON：{"policy":"一句话方针","sectors":["行业1","行业2"],'
                 '"board_votes":[{"name":"老股东姓名","choice":"ai|host|old"}]}'
@@ -3736,30 +3920,18 @@ class CatStockPlugin:
                 return
             players = self._load_stock_players()
             holders = self._meeting_holders(players, code)
-            votes = dict(meeting.get("votes") or {})
             ai_board = list(meeting.get("ai_votes") or [])
+            comp_now = market["companies"].get(code) or {}
             if not ai_board:
                 # 兼容本次更新前已进入确认阶段的会议，临时补上老股东的表态
-                comp_now = market["companies"].get(code) or {}
                 ai_board = self._normalize_board_votes(
                     self._company_board(comp_now), [],
                     bool(str(meeting.get("host_policy") or "").strip()))
                 meeting["ai_votes"] = ai_board
-            counts = {"ai": 0, "host": 0, "old": 0}
-            for choice in votes.values():
-                if choice in counts:
-                    counts[choice] += 1
-            for vote in ai_board:
-                choice = str(vote.get("choice") or "")
-                if choice in counts:
-                    counts[choice] += 1
-            # 大股东没有另拟方针时，投给他的票等同于沿用旧方针
-            if not str(meeting.get("host_policy") or "").strip():
-                counts["old"] += counts["host"]
-                counts["host"] = 0
-            # 未在确认期内表态的持股股东，默认沿用旧方针
-            counts["old"] += max(0, len(holders) - len(votes))
-            eligible = len(holders) + len(ai_board)
+            # 按持股比例计票：股东按当前持股，董事按常驻份额，未表态计旧方针
+            ballots = self._meeting_ballots(meeting, holders, ai_board, comp_now)
+            counts = ballots["counts"]
+            eligible = ballots["eligible"]
             choice = "old"
             if eligible:
                 if counts["ai"] / eligible > CAT_STOCK_MEETING_AI_PASS:
@@ -3790,8 +3962,8 @@ class CatStockPlugin:
             meeting["result"] = result_text
             meeting["result_choice"] = choice
             meeting["result_counts"] = {
-                "ai": counts["ai"], "host": counts["host"],
-                "old": counts["old"], "eligible": eligible,
+                "ai": int(round(counts["ai"])), "host": int(round(counts["host"])),
+                "old": int(round(counts["old"])), "eligible": int(round(eligible)),
                 "board": len(ai_board),
             }
             meeting["finished_at"] = time.time()
@@ -3901,6 +4073,408 @@ class CatStockPlugin:
             if entries:
                 market["news"] = self._recent_news(entries + (market.get("news") or []))[:CAT_STOCK_NEWS_MAX]
             self._save_market(market)
+
+    # ==================== 商战 ====================
+
+    def _war_major(self, players: dict, code: str) -> Tuple[int, int]:
+        """取这家公司最大的人类股东；AI 董事固定只握几百股，不会压过门槛"""
+        holder, biggest = 0, 0
+        for key in players:
+            if not str(key).isdigit():
+                continue
+            shares = self._shares_in(players, int(key), code)
+            if shares > biggest:
+                holder, biggest = int(key), shares
+        return holder, biggest
+
+    def _war_list(self, market: dict) -> dict:
+        wars = market.get("trade_wars")
+        if not isinstance(wars, dict):
+            wars = {}
+            market["trade_wars"] = wars
+        return wars
+
+    def _war_for_code(self, market: dict, code: str) -> Optional[dict]:
+        """某家公司正在打的商战"""
+        for war in self._war_list(market).values():
+            if war.get("status") == "active" and str(code or "").upper() in (
+                    war.get("a"), war.get("b")):
+                return war
+        return None
+
+    def _war_seed(self, market: dict, comp_a: dict, comp_b: dict) -> dict:
+        """按地区铺开初始支持度：同国 30-30，不同国本国 60-0，剩下的按市值分"""
+        codes = self._countries_of(market.get("countries") or {})
+        cap_a = float(comp_a["price"]) * float(comp_a.get("base") or comp_a["price"])
+        cap_b = float(comp_b["price"]) * float(comp_b.get("base") or comp_b["price"])
+        share_a = cap_a / (cap_a + cap_b) if cap_a + cap_b > 0 else 0.5
+        rows = {}
+        for code in codes:
+            if comp_a["country"] == comp_b["country"] == code:
+                a, b = 30.0, 30.0
+            elif comp_a["country"] == code:
+                a, b = 60.0, 0.0
+            elif comp_b["country"] == code:
+                a, b = 0.0, 60.0
+            else:
+                a, b = 0.0, 0.0
+            rest = 100.0 - a - b
+            ratio = share_a + random.uniform(-0.12, 0.12)
+            # 本国地界天然更认自家招牌
+            if comp_a["country"] == code:
+                ratio += 0.06
+            elif comp_b["country"] == code:
+                ratio -= 0.06
+            ratio = max(0.15, min(0.85, ratio))
+            rows[code] = {"a": round(a + rest * ratio, 1),
+                          "b": round(b + rest * (1 - ratio), 1)}
+        return rows
+
+    def _war_view(self, market: dict, war: dict, players: dict,
+                  qq: Optional[int] = None) -> dict:
+        """商战面板：逐地区支持度、双方投入与我的身份"""
+        companies = market.get("companies") or {}
+        a_comp = companies.get(war.get("a")) or {}
+        b_comp = companies.get(war.get("b")) or {}
+        rows = []
+        total_a = total_b = 0.0
+        for code, values in (war.get("countries") or {}).items():
+            a = float(values.get("a", 0) or 0)
+            b = float(values.get("b", 0) or 0)
+            total_a += a
+            total_b += b
+            whole = a + b
+            rows.append({
+                "code": code, "name": self._country_name(code),
+                "a": round(a, 1), "b": round(b, 1),
+                "a_pct": round(a / whole * 100, 1) if whole else 0.0,
+                "b_pct": round(b / whole * 100, 1) if whole else 0.0,
+            })
+        rows.sort(key=lambda r: r["code"])
+        my_side = ""
+        if qq is not None:
+            for side, code in (("a", war.get("a")), ("b", war.get("b"))):
+                if self._shares_in(players, qq, code) > 0:
+                    my_side = side
+                    break
+        return {
+            "id": war.get("id", ""),
+            "status": war.get("status", "active"),
+            "a": {"code": a_comp.get("code", war.get("a", "")),
+                  "name": a_comp.get("name", war.get("a", "")),
+                  "country_name": self._country_name(a_comp.get("country", ""))},
+            "b": {"code": b_comp.get("code", war.get("b", "")),
+                  "name": b_comp.get("name", war.get("b", "")),
+                  "country_name": self._country_name(b_comp.get("country", ""))},
+            "countries": rows,
+            "total": {"a": round(total_a, 1), "b": round(total_b, 1)},
+            "cost_a": int(war.get("cost_a", 0) or 0),
+            "cost_b": int(war.get("cost_b", 0) or 0),
+            "start_ts": float(war.get("start_ts", 0) or 0),
+            "end_ts": float(war.get("end_ts", 0) or 0),
+            "left_seconds": max(0, int(float(war.get("end_ts", 0) or 0) - time.time())),
+            "my_side": my_side,
+            "activity": list(war.get("activity") or [])[-8:],
+            "result": war.get("result") or "",
+            "annex": bool(war.get("annex")),
+            "payout": int(war.get("payout", 0) or 0),
+        }
+
+    def start_trade_war(self, qq: int, code: str) -> dict:
+        """大股东对同业公司发动商战"""
+        code = str(code or "").strip().upper()
+        if not code:
+            return {"ok": False, "msg": "先选定要开战的那家公司喵"}
+        if not self._is_open(datetime.now()):
+            return {"ok": False, "msg": "休市期间不好兴师动众，开市后再来喵"}
+        with self._lock:
+            market = self._load_market()
+            companies = market["companies"]
+            players = self._load_stock_players()
+            target = companies.get(code)
+            if not target:
+                return {"ok": False, "msg": "这家企业已经不在市了喵"}
+            my_codes = []
+            for c in sorted(companies):
+                holder, biggest = self._war_major(players, c)
+                if holder == qq and biggest >= CAT_STOCK_MEETING_HOST_SHARES and c != code:
+                    my_codes.append(c)
+            if not my_codes:
+                return {"ok": False,
+                        "msg": f"要先持有某家公司 {CAT_STOCK_MEETING_HOST_SHARES} 股、"
+                               "并成为它最大的股东，才有资格发动商战喵"}
+            my_code = next((c for c in my_codes
+                            if set(self._sectors_of(companies[c]))
+                            & set(self._sectors_of(target))), "")
+            if not my_code:
+                return {"ok": False, "msg": "两家做的营生没有交集，师出无名喵"}
+            if self._war_for_code(market, my_code) or self._war_for_code(market, code):
+                return {"ok": False, "msg": "这两家里已经有一方卷在商战里了喵"}
+            _holder, rival = self._war_major(players, code)
+            if rival < CAT_STOCK_MEETING_HOST_SHARES:
+                return {"ok": False,
+                        "msg": "对手没有非 AI 的大股东坐镇，商战打不起来喵"}
+            mine = companies[my_code]
+            now_ts = time.time()
+            war = {
+                "id": f"W{int(now_ts)}",
+                "a": my_code, "b": code,
+                "start_ts": now_ts,
+                "end_ts": now_ts + CAT_STOCK_WAR_HOURS * 3600,
+                "status": "active", "countries": self._war_seed(market, mine, target),
+                "cost_a": 0, "cost_b": 0, "activity": [], "result": "",
+                "annex": False, "payout": 0,
+            }
+            self._war_list(market)[war["id"]] = war
+            # 战报只留最近若干场，避免存档无限膨胀
+            done = [wid for wid, w in market["trade_wars"].items()
+                    if w.get("status") != "active"]
+            for wid in done[:-CAT_STOCK_WAR_LOG_MAX]:
+                market["trade_wars"].pop(wid, None)
+            stamp = datetime.now().strftime("%m-%d %H:%M")
+            entry = {
+                "time": stamp, "ts": now_ts,
+                "title": f"{mine['name']}对{target['name']}发动商战",
+                "detail": (f"双方在各自地界争夺客源，{CAT_STOCK_WAR_HOURS} 小时内"
+                           "股东可投入猫薄荷开展活动；任一方在所有地区支持度过 65% 即吞并对手。"),
+            }
+            market["news"] = self._recent_news([entry] + (market.get("news") or []))[:CAT_STOCK_NEWS_MAX]
+            self._save_market(market)
+            view = self._war_view(market, war, players, qq)
+        return {"ok": True, "msg": f"商战已开打：{mine['name']} 对 {target['name']}", "war": view}
+
+    def war_activity(self, qq: int, code: str, country: str, kind: str) -> dict:
+        """交战双方股东花 100 猫薄荷，在某个地区挤压对手或宣传自己"""
+        code = str(code or "").strip().upper()
+        country = str(country or "").strip().upper()
+        kind = str(kind or "").strip()
+        if kind in ("挤压", "squeeze", "压"):
+            kind = "squeeze"
+        elif kind in ("宣传", "boost", "广告"):
+            kind = "boost"
+        else:
+            return {"ok": False, "msg": "活动类型只能是挤压或宣传喵"}
+        if not self._is_open(datetime.now()):
+            return {"ok": False, "msg": "休市期间不方便在各地张罗活动喵"}
+        with self._lock:
+            market = self._load_market()
+            players = self._load_stock_players()
+            war = self._war_for_code(market, code)
+            if not war:
+                return {"ok": False, "msg": "这家公司现在没有在打商战喵"}
+            side = "a" if code == war.get("a") else "b"
+            other = "b" if side == "a" else "a"
+            slot = (war.get("countries") or {}).get(country)
+            if not slot:
+                return {"ok": False, "msg": "这个地区不在本次商战范围内喵"}
+            if self._shares_in(players, qq, code) <= 0:
+                return {"ok": False, "msg": "只有交战双方的股东才能在当地开展活动喵"}
+            st = self._stock_player(qq, players)
+            if int(st.get("catnip", 0) or 0) < CAT_STOCK_WAR_COST:
+                return {"ok": False,
+                        "msg": f"猫薄荷不足喵，每次活动需要 {CAT_STOCK_WAR_COST}"}
+            st["catnip"] = int(st.get("catnip", 0)) - CAT_STOCK_WAR_COST
+            own = float(slot.get(side, 0) or 0)
+            opp = float(slot.get(other, 0) or 0)
+            if kind == "squeeze":
+                # 对手底盘越稳越难撬动
+                factor = opp / (opp + 40.0)
+                delta = max(1, int(round(random.uniform(1, 6) * factor)))
+                slot[other] = round(max(0.0, opp - delta), 1)
+                text = (f"在{self._country_name(country)}挤压了 {delta} 点对手支持度，"
+                        f"对方剩 {slot[other]:.1f}")
+            else:
+                # 自家声势越盛越难再往上推
+                factor = 1.0 / (1.0 + own / 50.0)
+                delta = max(1, int(round(random.uniform(2, 7) * factor)))
+                slot[side] = round(own + delta, 1)
+                text = (f"在{self._country_name(country)}宣传活动，"
+                        f"自家支持度 +{delta}，现在 {slot[side]:.1f}")
+            war["cost_" + side] = int(war.get("cost_" + side, 0) or 0) + CAT_STOCK_WAR_COST
+            war.setdefault("activity", []).append({
+                "ts": time.time(), "side": side, "country": country,
+                "kind": kind, "delta": delta, "by": self._player_nick(qq),
+            })
+            war["activity"] = war["activity"][-40:]
+            self._save_market(market)
+            self._save_stock_players(players)
+            view = self._war_view(market, war, players, qq)
+        return {"ok": True, "msg": text, "war": view}
+
+    def _war_annex_side(self, war: dict) -> str:
+        """某一方在所有地区都超过吞并线时返回该方"""
+        rows = list((war.get("countries") or {}).values())
+        if not rows:
+            return ""
+        for side in ("a", "b"):
+            other = "b" if side == "a" else "a"
+            if all(float(r.get(side, 0) or 0) + float(r.get(other, 0) or 0) > 0
+                   and float(r.get(side, 0) or 0) / (
+                       float(r.get(side, 0) or 0) + float(r.get(other, 0) or 0)
+                   ) > CAT_STOCK_WAR_ANNEX for r in rows):
+                return side
+        return ""
+
+    def _war_settle(self, market: dict, players: dict, war: dict,
+                    annex_side: str = "") -> List[dict]:
+        """结算商战：吞并对手，或按总支持度判出胜负"""
+        companies = market["companies"]
+        a_code, b_code = war.get("a"), war.get("b")
+        a_comp, b_comp = companies.get(a_code), companies.get(b_code)
+        if not (a_comp and b_comp):
+            war["status"] = "done"
+            war["result"] = "交战的一方已不在市，商战自然终止。"
+            war["ended_ts"] = time.time()
+            return [{"title": "商战无疾而终", "detail": war["result"]}]
+        row = war.get("countries") or {}
+        total_a = sum(float(v.get("a", 0) or 0) for v in row.values())
+        total_b = sum(float(v.get("b", 0) or 0) for v in row.values())
+        side = annex_side or ("a" if total_a >= total_b else "b")
+        annex = bool(annex_side)
+        win_code, lose_code = (a_code, b_code) if side == "a" else (b_code, a_code)
+        win_comp, lose_comp = (a_comp, b_comp) if side == "a" else (b_comp, a_comp)
+        cost_total = int(war.get("cost_a", 0) or 0) + int(war.get("cost_b", 0) or 0)
+        lose_value = 0
+        if annex:
+            lose_price = float(lose_comp["price"])
+            for st in players.values():
+                lots = (st.get("holdings") or {}).get(lose_code)
+                if lots:
+                    lose_value += int(round(self._shares_of(lots) * lose_price))
+                    st["holdings"].pop(lose_code, None)
+                self._close_shorts_for(st, lose_code, lose_price, "商战吞并清算")
+            companies.pop(lose_code, None)
+            (market.get("meetings") or {}).pop(lose_code, None)
+            market["company_directives"] = [
+                d for d in (market.get("company_directives") or [])
+                if d.get("code") != lose_code]
+        rate = CAT_STOCK_WAR_REWARD if annex else CAT_STOCK_WAR_WIN_REWARD
+        payout = int(round(rate * (cost_total + lose_value)))
+        # 获胜公司的非 AI 股东按持股比例分享这笔钱，直接折进股价里（不受限价约束）
+        total_shares = 0
+        for st in players.values():
+            total_shares += self._shares_of(
+                (st.get("holdings") or {}).get(win_code) or [])
+        if total_shares > 0 and payout > 0:
+            win_comp["price"] = round(
+                float(win_comp["price"]) + payout / total_shares, 2)
+        war["status"] = "done"
+        war["annex"] = annex
+        war["winner"] = side
+        war["payout"] = payout
+        war["lose_value"] = lose_value
+        war["ended_ts"] = time.time()
+        if annex:
+            war["result"] = (
+                f"{win_comp['name']}在全部地区压过 {lose_comp['name']}，"
+                f"将其吞并。对手股东共损失 {lose_value:,} 猫薄荷，"
+                f"双方活动投入 {cost_total:,}；获胜方股东按持股分享 {payout:,} 猫薄荷，"
+                "已折入股价。")
+        else:
+            war["result"] = (
+                f"商战到期，{win_comp['name']}以总支持度 "
+                f"{max(total_a, total_b):,.1f}:{min(total_a, total_b):,.1f} 胜出；"
+                f"未能在所有地区压过 65%，不吞并对手，"
+                f"获胜方股东分享 {payout:,} 猫薄荷，已折入股价。")
+        return [{"title": f"商战结算：{win_comp['name']}胜出",
+                 "detail": war["result"]}]
+
+    def _war_step(self, market: dict, players: dict, now: datetime) -> List[dict]:
+        """每个整点推进商战：舆论事件、吞并检查、到期结算"""
+        news = []
+        for war in list(self._war_list(market).values()):
+            if war.get("status") != "active":
+                continue
+            if not (market["companies"].get(war.get("a"))
+                    and market["companies"].get(war.get("b"))):
+                news.extend(self._war_settle(market, players, war))
+                continue
+            if now.timestamp() > float(war.get("end_ts", 0) or 0):
+                news.extend(self._war_settle(market, players, war))
+                continue
+            rows = war.get("countries") or {}
+            if rows:
+                country = random.choice(list(rows))
+                side = random.choice(("a", "b"))
+                other = "b" if side == "a" else "a"
+                slot = rows[country]
+                gain = random.randint(2, 6)
+                slot[side] = round(float(slot.get(side, 0) or 0) + gain, 1)
+                if random.random() < 0.5:
+                    slot[other] = round(max(
+                        0.0, float(slot.get(other, 0) or 0) - random.randint(1, 3)), 1)
+                backing = market["companies"].get(
+                    war.get("a") if side == "a" else war.get("b")) or {}
+                news.append({
+                    "title": f"商战舆论：{self._country_name(country)}倒向{backing.get('name', '')}",
+                    "detail": (f"街谈巷议让{backing.get('name', '交战的这家')}在当地支持度 +{gain}，"
+                               f"对手随之动摇。"),
+                })
+            annex_side = self._war_annex_side(war)
+            if annex_side:
+                news.extend(self._war_settle(market, players, war, annex_side))
+        return news
+
+    def _war_text(self, view: dict) -> str:
+        """商战的纯文本简报"""
+        rows = "\n".join(
+            f"· {r['name']}：{view['a']['name']} {r['a']:.1f}"
+            f"（{r['a_pct']:.0f}%）／{view['b']['name']} {r['b']:.1f}"
+            f"（{r['b_pct']:.0f}%）"
+            for r in view.get("countries") or [])
+        left = int(view.get("left_seconds", 0) or 0)
+        hours, minutes = left // 3600, left % 3600 // 60
+        return (f"【商战 {view.get('id', '')}】{view['a']['name']} vs {view['b']['name']}\n"
+                f"剩余 {hours} 小时 {minutes} 分｜"
+                f"投入 {view.get('cost_a', 0):,} : {view.get('cost_b', 0):,}\n"
+                f"总支持度 {view.get('total', {}).get('a', 0):.1f}"
+                f" : {view.get('total', {}).get('b', 0):.1f}\n"
+                f"{rows}\n"
+                "任意一方在所有地区过 65% 即吞并对手；"
+                f"股东可花 {CAT_STOCK_WAR_COST} 猫薄荷在当地挤压或宣传。")
+
+    def _show_wars(self, target: Target, qq: int) -> None:
+        with self._lock:
+            market = self._load_market()
+            players = self._load_stock_players()
+            views = [self._war_view(market, war, players, qq)
+                     for war in self._war_list(market).values()
+                     if war.get("status") == "active"]
+        if not views:
+            self._sender.send_text(target, "现在没有正在进行的商战喵")
+            return
+        self._sender.send_text(target, "\n\n".join(self._war_text(v) for v in views))
+
+    def _declare_war(self, target: Target, qq: int, rest: List[str]) -> None:
+        if not rest:
+            self._sender.send_text(target, "用法：喵股市 开战 <对手公司代码/名称>")
+            return
+        market = self._load_market()
+        comp = self._resolve_company(market, rest[0])
+        if not comp:
+            self._sender.send_text(target, f"找不到企业「{rest[0]}」喵")
+            return
+        result = self.start_trade_war(qq, comp["code"])
+        if not result.get("ok"):
+            self._sender.send_text(target, result.get("msg") or "商战发动失败喵")
+            return
+        self._sender.send_text(target, f"{result.get('msg')}\n\n"
+                                         f"{self._war_text(result.get('war') or {})}")
+
+    def _war_act_cmd(self, target: Target, qq: int, rest: List[str]) -> None:
+        if len(rest) < 3:
+            self._sender.send_text(
+                target, "用法：喵股市 商战活动 <公司代码> <国家代码> <挤压/宣传>")
+            return
+        market = self._load_market()
+        comp = self._resolve_company(market, rest[0])
+        if not comp:
+            self._sender.send_text(target, f"找不到企业「{rest[0]}」喵")
+            return
+        result = self.war_activity(qq, comp["code"], rest[1], rest[2])
+        self._sender.send_text(target, result.get("msg") or "活动没办成喵")
+        if result.get("ok") and result.get("war"):
+            self._sender.send_text(target, self._war_text(result["war"]))
 
     # ==================== 猫眼石 / 猫薄荷兑换 ====================
 
@@ -4075,6 +4649,13 @@ class CatStockPlugin:
             })
         rows.sort(key=lambda r: (r["country"], r["code"]))
         up = sum(1 for r in rows if r["pct"] >= 0)
+        war_codes: Dict[str, str] = {}
+        for war in self._war_list(market).values():
+            if war.get("status") == "active":
+                war_codes[war.get("a")] = war.get("id")
+                war_codes[war.get("b")] = war.get("id")
+        for row in rows:
+            row["war"] = war_codes.get(row["code"], "")
 
         # 各公司的前三大股东（同一玩家多笔持仓合并计算）
         players = self._load_stock_players()
@@ -4246,6 +4827,9 @@ class CatStockPlugin:
             "world": world_view,
             "era": era_view,
             "countries": country_rows,
+            "wars": [self._war_view(market, war, players, qq)
+                     for war in self._war_list(market).values()
+                     if war.get("status") == "active"],
             "rules": {
                 "initial_catnip": CAT_STOCK_INITIAL_CATNIP,
                 "stone_to_catnip": CAT_STOCK_STONE_TO_CATNIP,
@@ -4270,6 +4854,9 @@ class CatStockPlugin:
                 "short_margin": CAT_STOCK_SHORT_MARGIN,
                 "short_fee": CAT_STOCK_SHORT_FEE,
                 "short_min_shares": CAT_STOCK_SHORT_MIN_SHARES,
+                "war_hours": CAT_STOCK_WAR_HOURS,
+                "war_cost": CAT_STOCK_WAR_COST,
+                "war_annex": CAT_STOCK_WAR_ANNEX,
             },
         }
         if qq is not None:
@@ -4286,6 +4873,7 @@ class CatStockPlugin:
             raw = {code: list(lots) for code, lots in st.get("holdings", {}).items()}
             raw_bonds = {c: list(lots) for c, lots in st.get("bonds", {}).items()}
             raw_shorts = [dict(s) for s in (st.get("shorts") or [])]
+            raw_pending = [dict(o) for o in (st.get("pending_orders") or [])]
             self._save_stock_players(players)
 
         rows = []
@@ -4295,10 +4883,24 @@ class CatStockPlugin:
             comp = companies.get(code)
             shares = self._shares_of(lots)
             cost = sum(float(lot.get("price", 0)) * int(lot.get("shares", 0)) for lot in lots)
+            cur_price = float(comp["price"]) if comp else 0.0
+            lot_rows = []
+            for lot in lots:
+                lot_shares = int(lot.get("shares", 0) or 0)
+                lot_cost = float(lot.get("price", 0) or 0)
+                ts = float(lot.get("ts", 0) or 0)
+                lot_rows.append({
+                    "shares": lot_shares,
+                    "cost": round(lot_cost, 2),
+                    "pnl": round((cur_price - lot_cost) * lot_shares, 0) if comp else 0,
+                    "sellable": _lot_sellable(lot),
+                    "time": (datetime.fromtimestamp(ts).strftime("%m-%d %H:%M")
+                             if ts else ""),
+                })
             if not comp:
                 rows.append({"code": code, "name": code, "shares": shares, "sellable": 0,
                              "locked": shares, "avg_cost": 0, "price": 0, "value": 0,
-                             "pnl": 0, "delisted": True})
+                             "pnl": 0, "delisted": True, "lots": lot_rows})
                 continue
             value = shares * comp["price"]
             total_value += value
@@ -4316,6 +4918,7 @@ class CatStockPlugin:
                 "value": round(value, 0),
                 "pnl": round(value - cost, 0),
                 "delisted": False,
+                "lots": lot_rows,
             })
         rows.sort(key=lambda r: r["value"], reverse=True)
 
@@ -4385,6 +4988,14 @@ class CatStockPlugin:
             "holdings": rows,
             "bonds": bond_rows,
             "shorts": short_rows,
+            "pending": [{
+                "kind": "buy" if item.get("kind") == "buy" else "sell",
+                "code": item.get("code", ""),
+                "name": item.get("name", ""),
+                "shares": int(item.get("shares", 0) or 0),
+                "time": (datetime.fromtimestamp(float(item.get("ts", 0))).strftime("%m-%d %H:%M")
+                         if item.get("ts") else ""),
+            } for item in raw_pending],
             "short_pnl": round(total_short_pnl, 0),
             "total_value": round(total_value, 0),
             "total_pnl": round(total_value - total_cost, 0),
@@ -4402,7 +5013,9 @@ class CatStockPlugin:
             "每个时代会在某条走向走到尽头时翻页，"
             "世界可能因技术、战乱或灾变改道，列国也会在战火中存亡更迭。\n"
             f"开市时间：每天 {CAT_STOCK_OPEN_HOUR:02d}:00 ~ {CAT_STOCK_CLOSE_HOUR:02d}:00，"
-            "每个整点交易所会发布世界快报并重新挂出价格；收市后只可观望。\n"
+            "开盘那一小时不出新闻，其余整点交易所会发布世界快报并重新挂出价格；"
+            f"{CAT_STOCK_CLOSE_HOUR:02d}:00 会发布当天的收盘盘点；"
+            "休市期间也可以买卖，挂单会在次日开盘按开盘价成交。\n"
             f"入市资金：新开户赠送 {CAT_STOCK_INITIAL_CATNIP} 猫薄荷，也可用猫眼石换取；"
             f"「喵股市 充值 <猫眼石数>」按 1 猫眼石 = {CAT_STOCK_STONE_TO_CATNIP} 猫薄荷，"
             f"「喵股市 提现 <猫眼石数>」按 {CAT_STOCK_CATNIP_TO_STONE} 猫薄荷 = 1 猫眼石。\n"
@@ -4419,15 +5032,22 @@ class CatStockPlugin:
             "做空：押注某家企业会跌，需先付五成保证金与 1% 手续费，不设固定期限；"
             "开空后随时可「平空」了结，但开仓当天不能平，要到第二天才能平空。\n"
             "经营方向：企业可以同时做几门营生，最大股东在开市时段可「拓展」新方向或「改营」整体换向。\n"
-            "买卖：喵股市 买 <代码> <股数>｜喵股市 卖 <代码> <股数>\n"
+            "买卖：喵股市 买 <代码> <股数>｜喵股市 卖 <代码> <股数>（休市期间下单会挂到次日开盘）\n"
             "　　　喵股市 做空 <代码> <股数>｜喵股市 平空 [代码] [股数]（不填则全部了结）\n"
             "查看：喵股市 大盘 / 新闻 / 持仓 / 排行 / 国家 / 代码或名称\n"
             "国家：喵股市 国家 查看列国，喵股市 国家 <代码或国名> 查看制度、君主与起源。\n"
             "董事会：持股最多且股份够多时，可在网页召集股东大会，"
             "先讨论十分钟，再由大股东定稿一份方针、书记员汇总一份，连同旧方针一起交股东确认；"
-            "散会后三十分钟内不确认的按沿用旧方针计，"
+            "召集人定稿后仍可自由投给任意一份，"
+            "散会后三十分钟内都可回来投票或改票，不确认的按沿用旧方针计，"
             "AI 方针得票超过一半、或大股东方针超过三分之二才启用。"
             "没有大股东拍板的公司，收市后由董事会自行定下新的经营方向。\n"
+            "商战：持有同业公司一千股以上并成为其最大股东时，可在开市时段"
+            "「喵股市 开战 <对手代码>」对另一家有非 AI 大股东的同业公司发动商战；"
+            "双方股份在商战期间冻结，股东可花 100 猫薄荷在当地"
+            "「喵股市 商战活动 <代码> <国家> 挤压/宣传」，"
+            "每小时还有舆论事件左右支持度，24 小时后按支持度判胜负，"
+            "一方在所有地区都过 65% 就直接吞并对手。\n"
             "（提示：大额持仓可能被空头盯上，别把猫薄荷都押在一只股上）"
         )
 
@@ -4448,7 +5068,7 @@ class CatStockPlugin:
 
     def _catch_up(self, now: datetime) -> None:
         """补齐因停机/休市错过、且仍在开市时段内的整点，每个整点各补一次"""
-        if not self._is_open(now):
+        if not (self._is_open(now) or now.hour == CAT_STOCK_CLOSE_HOUR):
             return
         current = now.replace(minute=0, second=0, microsecond=0)
         last = self._load_market().get("last_tick") or ""
@@ -4461,10 +5081,67 @@ class CatStockPlugin:
         while cursor <= current:
             if CAT_STOCK_OPEN_HOUR <= cursor.hour < CAT_STOCK_CLOSE_HOUR:
                 slots.append(cursor)
+            elif cursor.hour == CAT_STOCK_CLOSE_HOUR:
+                # 收盘整点也要补一次，用来发当天的收盘新闻
+                slots.append(cursor)
             cursor += timedelta(hours=1)
         for slot in slots[-CAT_STOCK_CATCHUP_MAX:]:
-            self._tick(slot)
+            if slot.hour == CAT_STOCK_CLOSE_HOUR:
+                self._close_tick(slot)
+            else:
+                self._tick(slot)
             time.sleep(0.5)
+
+    def _close_tick(self, now: datetime) -> None:
+        """20:00 收盘：盘面不再变动，只发布当天的收盘新闻与盘点"""
+        key = now.strftime("%Y-%m-%d %H")
+        with self._lock:
+            market = self._load_market()
+            if market.get("last_tick") == key:
+                return
+            news = self._close_news(market)
+            stamp = now.strftime("%m-%d %H:%M")
+            stamp_ts = now.timestamp()
+            entries = [{"time": stamp, "ts": stamp_ts,
+                        "title": item.get("title", ""),
+                        "detail": item.get("detail", "")} for item in news]
+            market["news"] = self._recent_news(
+                entries + (market.get("news") or []))[:CAT_STOCK_NEWS_MAX]
+            market["last_tick"] = key
+            self._save_market(market)
+            moved = []
+            for comp in (market.get("companies") or {}).values():
+                base = float(comp.get("prev_close") or comp.get("price") or 1) or 1
+                moved.append((comp, (float(comp["price"]) / base - 1) * 100))
+
+        self._broadcast(now, market, moved, news, head="收盘快报")
+
+    def _close_news(self, market: dict) -> List[dict]:
+        """按当天涨跌生成收盘新闻，本身不改变任何价格"""
+        companies = market.get("companies") or {}
+        rows = []
+        for comp in companies.values():
+            base = float(comp.get("prev_close") or comp.get("price") or 1) or 1
+            rows.append((comp, (float(comp["price"]) / base - 1) * 100))
+        if not rows:
+            return []
+        up = sum(1 for _, pct in rows if pct > 0.05)
+        down = sum(1 for _, pct in rows if pct < -0.05)
+        flat = len(rows) - up - down
+        rows.sort(key=lambda r: r[1], reverse=True)
+        best = rows[:3]
+        worst = [r for r in rows[-3:][::-1] if r[1] < 0]
+        parts = [f"上涨 {up} 家｜下跌 {down} 家｜平盘 {flat} 家"]
+        if best:
+            parts.append("领涨 " + "，".join(
+                f"{c['name']} {self._fmt_pct(pct)}" for c, pct in best))
+        if worst:
+            parts.append("领跌 " + "，".join(
+                f"{c['name']} {self._fmt_pct(pct)}" for c, pct in worst))
+        return [{
+            "title": f"收盘：今日上涨 {up} 家、下跌 {down} 家",
+            "detail": "；".join(parts) + "。休市期间可挂单，次日开盘按开盘价成交。",
+        }]
 
     def _tick(self, now: datetime) -> None:
         key = now.strftime("%Y-%m-%d %H")
@@ -4477,10 +5154,15 @@ class CatStockPlugin:
                  if int(d.get("remaining", 0)) > 0
                  and d.get("from") == CAT_STOCK_WORLD_ADMIN]
         world_tone = _world_tone(world)
+        # 开盘第一小时不出新闻，让价格从昨收自然起步；其余整点照常生成
         # AI 生成新闻较慢，先不占用锁，避免玩家交易被阻塞
-        ai_news, effects, world_update, ai_actions = self._make_news(snapshot, now, world)
+        if now.hour == CAT_STOCK_OPEN_HOUR:
+            ai_news, effects, world_update, ai_actions = [], [], None, None
+        else:
+            ai_news, effects, world_update, ai_actions = self._make_news(snapshot, now, world)
 
         economy = None
+        pending_results: List[Tuple[int, str]] = []
         with self._lock:
             market = self._load_market()
             if market.get("last_tick") == key:
@@ -4573,8 +5255,11 @@ class CatStockPlugin:
             pressure_news = self._big_holding_pressure(companies, players)
             self._settle_positions(companies, players)
 
+            # 3.05) 休市挂单：开市第一个整点按开盘价执行
+            pending_results = self._settle_pending_orders(market, players)
+
             # 3.4) 全体参与者财富冷热：过热时收紧流动性，过冷时托底
-            economy = self._economy_check(market, players)
+            economy = self._economy_check(market, players, price_before)
 
             # 3.5) 交易所限价：单小时最多上下 2%，当日累计最多 ±10%
             #      当日涨跌互相抵消，隔日重新计算；经营崩坏仍可由交易所直接摘牌
@@ -4600,6 +5285,9 @@ class CatStockPlugin:
             event_news.extend(self._era_step(market, players, ai_actions))
             # 时代事件也会改价，收尾时再按交易所限价压一次
             self._apply_price_limits(companies, price_before)
+
+            # 4.6) 商战：舆论推移、吞并检查与到期结算（股价拉升不受限价约束）
+            event_news.extend(self._war_step(market, players, now))
 
             stamp = now.strftime("%m-%d %H:%M")
 
@@ -4654,6 +5342,8 @@ class CatStockPlugin:
                 moved.append((comp, (comp["price"] - before) / before * 100))
 
         self._broadcast(now, market, moved, news_entries)
+        for qq, text in pending_results:
+            self._sender.send_text(Target(user_id=qq), text)
         if economy:
             self._economy_report(now, market, economy)
 
@@ -4828,7 +5518,8 @@ class CatStockPlugin:
                 continue
             comp["price"] = max(1.0, price * (1 - pressure))
 
-    def _economy_check(self, market: dict, players: dict) -> dict:
+    def _economy_check(self, market: dict, players: dict,
+                       price_before: dict) -> dict:
         """按这一小时持仓账户的财富变化判断冷热，并立刻定向调节个股。
 
         财富 = 现金 + 持股 + 国债 + 空头权益（保证金 + 浮盈），
@@ -4914,6 +5605,7 @@ class CatStockPlugin:
         shared = [k for k in accounts if k in prev_accounts]
         base_wealth = sum(prev_accounts[k] for k in shared)
         now_wealth = sum(accounts[k] for k in shared)
+        hour_gain = now_wealth - base_wealth
         hourly_change = now_wealth / base_wealth - 1 if base_wealth > 1.0 else 0.0
         hot_excess = max(hourly_change - CAT_STOCK_ECON_HOUR_HOT, 0.0)
         cold_excess = max(-hourly_change - CAT_STOCK_ECON_HOUR_COLD, 0.0)
@@ -4924,12 +5616,9 @@ class CatStockPlugin:
         breadth = up_count / listed_count if listed_count else 0.0
         drag = 0.0
         support = 0.0
-        surcharge = 0.0
         if hot_excess > 0:
             drag = min(CAT_STOCK_ECON_DRAG_MAX,
                        hot_excess * CAT_STOCK_ECON_DRAG_COEF)
-            surcharge = min(CAT_STOCK_ECON_FEE_MAX,
-                            hot_excess * CAT_STOCK_ECON_FEE_COEF)
         elif cold_excess > 0:
             support = min(CAT_STOCK_ECON_SUPPORT_MAX,
                           cold_excess * CAT_STOCK_ECON_SUPPORT_COEF)
@@ -4962,7 +5651,7 @@ class CatStockPlugin:
                 "code": code, "name": comp.get("name", code),
                 "longs": int(longs), "shorts": int(shorts),
                 "net": round(net, 3), "step": round(step, 4),
-                "before": round(before, 2),
+                "open": round(float(price_before.get(code) or before), 2),
             })
         details.sort(key=lambda d: abs(d["net"]), reverse=True)
 
@@ -4974,6 +5663,7 @@ class CatStockPlugin:
 
         economy = {
             "hour_change": round(hourly_change, 5),
+            "hour_gain": int(round(hour_gain)),
             "shared_active": len(shared),
             "hot_excess": round(hot_excess, 4), "cold_excess": round(cold_excess, 4),
             "per_capita": round(per_capita, 2), "active": active,
@@ -4983,7 +5673,7 @@ class CatStockPlugin:
             "cash_total": int(round(cash_total)), "stock_total": int(round(stock_total)),
             "bond_total": int(round(bond_total)), "short_total": int(round(short_total)),
             "drag": round(drag, 4), "support": round(support, 4),
-            "sell_surcharge": round(surcharge, 4), "adjusted": adjusted,
+            "adjusted": adjusted,
             "details": details, "accounts": accounts, "at": now_ts,
         }
         market["economy"] = economy
@@ -5007,6 +5697,7 @@ class CatStockPlugin:
                           if wealth else f"{label} {value:,.0f}")
         lines.append("玩家财富构成：" + "｜".join(chunks))
         lines.append(
+            f"本小时总收益 {int(economy.get('hour_gain', 0) or 0):+,} 猫薄荷｜"
             f"单小时变动 {float(economy.get('hour_change', 0) or 0):+.2%}"
             f"（参与比对 {int(economy.get('shared_active', 0))} 个账户）｜"
             f"过热线 +{CAT_STOCK_ECON_HOUR_HOT:.0%}／"
@@ -5014,8 +5705,7 @@ class CatStockPlugin:
         if economy.get("drag"):
             lines.append(
                 f"判定：过热，超出 {float(economy.get('hot_excess', 0) or 0):.2%} → "
-                f"多头占优个股收紧 {float(economy['drag']):.2%}/小时，"
-                f"卖出费 +{float(economy.get('sell_surcharge', 0) or 0):.2%}")
+                f"多头占优个股收紧 {float(economy['drag']):.2%}/小时")
         else:
             lines.append(
                 f"判定：过冷，超出 {float(economy.get('cold_excess', 0) or 0):.2%} → "
@@ -5025,8 +5715,8 @@ class CatStockPlugin:
             lines.append(f"定向调整 {int(economy.get('adjusted', 0))} 家：")
             for item in details:
                 comp = (market.get("companies") or {}).get(item.get("code")) or {}
-                now_price = float(comp.get("price") or item.get("before", 0) or 0)
-                before = float(item.get("before", 0) or 0)
+                now_price = float(comp.get("price") or item.get("open", 0) or 0)
+                before = float(item.get("open", 0) or 0)
                 move = now_price / before - 1 if before else 0.0
                 side = "净多" if item.get("net", 0) > 0 else "净空"
                 lines.append(
@@ -5917,7 +6607,7 @@ class CatStockPlugin:
     # ==================== 整点播报 ====================
 
     def _broadcast(self, now: datetime, market: dict, moved: List[Tuple[dict, float]],
-                   news: List[dict]) -> None:
+                   news: List[dict], head: str = "整点快报") -> None:
         group_id = getattr(Config, "STOCK_NEWS_GROUP", 1011679851)
         target = Target(user_id=0, group_id=group_id, is_group=True)
 
@@ -5925,7 +6615,7 @@ class CatStockPlugin:
         up = sum(1 for c in comps.values() if c["price"] >= c.get("prev_close", c["price"]))
         down = len(comps) - up
 
-        lines = [f"【喵股市 · {now.strftime('%H:%M')} 整点快报】"]
+        lines = [f"【喵股市 · {now.strftime('%H:%M')} {head}】"]
         era = market.get("era") or {}
         if era:
             lines.append(f"纪元 · 第 {int(era.get('index', 0)) + 1} 时代"

@@ -129,3 +129,14 @@ def meeting_vote(qq: int, code, choice) -> dict:
 
 def meeting_finish(qq: int, code) -> dict:
     return _plugin.meeting_finish(qq, str(code or "").strip())
+
+
+# ==================== 商战 ====================
+
+def war_start(qq: int, code) -> dict:
+    return _plugin.start_trade_war(qq, str(code or "").strip())
+
+
+def war_activity(qq: int, code, country, kind) -> dict:
+    return _plugin.war_activity(qq, str(code or "").strip(),
+                                str(country or "").strip(), str(kind or "").strip())

@@ -3718,6 +3718,75 @@ function stockPctCell(pct) {
   return `<td class="${v >= 0 ? 'stock-up' : 'stock-down'}">${v >= 0 ? '▲' : '▼'}${Math.abs(v).toFixed(1)}%</td>`;
 }
 
+const stockWarsEl = document.getElementById('stock-wars');
+const stockWarSubEl = document.getElementById('stock-war-sub');
+const stockWarCodeEl = document.getElementById('stock-war-code');
+
+function stockWarLeft(seconds) {
+  const left = Math.max(0, Math.round(Number(seconds || 0)));
+  return `${Math.floor(left / 3600)} 小时 ${Math.floor(left % 3600 / 60)} 分`;
+}
+
+function stockWarPanel(w) {
+  const regions = (w.countries || []).map((r) => {
+    const acts = w.my_side ? `
+      <div class="stock-war-acts">
+        <button class="btn btn-ghost btn-sm stock-war-act" type="button"
+                data-code="${esc(w.my_side === 'a' ? w.a.code : w.b.code)}"
+                data-country="${esc(r.code)}" data-kind="squeeze">挤压</button>
+        <button class="btn btn-primary btn-sm stock-war-act" type="button"
+                data-code="${esc(w.my_side === 'a' ? w.a.code : w.b.code)}"
+                data-country="${esc(r.code)}" data-kind="boost">宣传</button>
+      </div>` : '';
+    return `
+      <div class="stock-war-region">
+        <div class="stock-war-region-head">
+          <span>${esc(r.name)}</span>
+          <span class="stock-war-nums">${Number(r.a).toFixed(1)} : ${Number(r.b).toFixed(1)}</span>
+        </div>
+        <div class="stock-war-bar">
+          <div class="stock-war-bar-a" style="width:${Math.max(0, Math.min(100, Number(r.a_pct || 0)))}%"></div>
+          <div class="stock-war-bar-b" style="width:${Math.max(0, Math.min(100, Number(r.b_pct || 0)))}%"></div>
+        </div>
+        <div class="stock-war-pcts">
+          <span class="stock-war-up">${esc(w.a.name)} ${Number(r.a_pct || 0).toFixed(0)}%</span>
+          <span class="stock-war-down">${esc(w.b.name)} ${Number(r.b_pct || 0).toFixed(0)}%</span>
+        </div>
+        ${acts}
+      </div>`;
+  }).join('');
+  const mine = w.my_side
+    ? `<div class="stock-war-mine">你是 ${esc(w.my_side === 'a' ? w.a.name : w.b.name)} 一方，可以在各地区开展活动（每次 100 猫薄荷）</div>`
+    : '';
+  return `
+    <div class="stock-war">
+      <div class="stock-war-head">
+        <span class="stock-war-title">${esc(w.a.name)} vs ${esc(w.b.name)}</span>
+        <span class="stock-war-left">剩余 ${stockWarLeft(w.left_seconds)}</span>
+      </div>
+      <div class="stock-war-meta">
+        总支持度 ${Number(w.total.a).toFixed(1)} : ${Number(w.total.b).toFixed(1)}
+        ｜活动投入 ${stockMoney(w.cost_a)} : ${stockMoney(w.cost_b)}
+        ｜任一方在所有地区过 65% 即吞并对手
+      </div>
+      ${mine}
+      <div class="stock-war-regions">${regions}</div>
+    </div>`;
+}
+
+function renderStockWars(data) {
+  if (!stockWarsEl) return;
+  const wars = data.wars || [];
+  if (stockWarSubEl) {
+    stockWarSubEl.textContent = wars.length
+      ? `正在进行 ${wars.length} 场商战｜股东可花 100 猫薄荷在当地开展活动`
+      : '持股一千股以上且为最大股东，可对同业公司开战';
+  }
+  stockWarsEl.innerHTML = wars.length
+    ? wars.map(stockWarPanel).join('')
+    : '<p class="room-empty">当前没有正在进行的商战喵</p>';
+}
+
 function renderStock(data) {
   stockLastData = data;
   const r = data.rules || {};
@@ -3731,7 +3800,7 @@ function renderStock(data) {
   stockRulesEl.textContent =
     `开市 ${data.open_hour}:00~${data.close_hour}:00｜1 猫眼石 = ${r.stone_to_catnip} 猫薄荷｜`
     + `${r.catnip_to_stone} 猫薄荷 = 1 猫眼石｜手续费 ${Math.round((r.buy_fee || 0) * 100)}%｜`
-    + `当天买入的股份要到第二天才能卖`;
+    + `当天买入的股份要到第二天才能卖｜开盘 8 点不出新闻，20 点发收盘盘点｜休市可挂单到次日开盘`;
   stockExchangeEl.textContent =
     `充值 1 猫眼石 → ${r.stone_to_catnip} 猫薄荷，提现 ${r.catnip_to_stone} 猫薄荷 → 1 猫眼石；`
     + `当前猫薄荷约可提现 ${stockMoney(p.catnip_to_stone_est)} 猫眼石`;
@@ -3779,7 +3848,7 @@ function renderStock(data) {
   stockMarketBodyEl.innerHTML = companies.map((c) => `
     <tr>
       <td><button class="stock-detail-btn" type="button" data-code="${esc(c.code)}" title="查看最近走势">${esc(c.code)}</button></td>
-      <td>${esc(c.name)}${c.policy ? `<div class="stock-policy">方针：${esc(c.policy)}</div>` : ''}</td>
+      <td>${esc(c.name)}${c.war ? '<span class="stock-war-tag">商战中</span>' : ''}${c.policy ? `<div class="stock-policy">方针：${esc(c.policy)}</div>` : ''}</td>
       <td>${esc(c.country_name)}</td>
       <td>${esc((c.sectors && c.sectors.length ? c.sectors : [c.sector]).join('、'))}</td>
       <td>${Number(c.price).toFixed(1)}</td>
@@ -3838,6 +3907,7 @@ function renderStock(data) {
   stockWorldEl.innerHTML = world.arc
     ? `主线：${esc(world.arc)}${relLines ? `<br>国家关系：${relLines}` : ''}`
     : '世界局势暂时平静，等待下一次风吹草动。';
+  renderStockWars(data);
 
   stockHoldSubEl.textContent =
     `总市值 ${stockMoney(Math.round(p.total_value || 0))}｜总浮动 ${stockMoney(p.total_pnl)}`;
@@ -3845,7 +3915,18 @@ function renderStock(data) {
   if (!holdings.length) {
     stockHoldingsEl.innerHTML = '<p class="room-empty">当前空仓喵，先去大盘挑一只吧</p>';
   } else {
-    const rows = holdings.map((h) => `
+    const rows = holdings.map((h) => {
+      const lots = (h.lots || []).map((l) => {
+        const pnl = Number(l.pnl || 0);
+        return `<div class="stock-lot">
+          <span class="stock-lot-time">${esc(l.time || '—')}</span>
+          <span>${l.shares} 股</span>
+          <span>成本 ${Number(l.cost).toFixed(1)}</span>
+          <span class="${pnl >= 0 ? 'stock-up' : 'stock-down'}">${pnl >= 0 ? '+' : ''}${stockMoney(pnl)}</span>
+          <span class="stock-lot-state">${l.sellable ? '可卖' : '锁定'}</span>
+        </div>`;
+      }).join('');
+      return `
       <tr>
         <td>${esc(h.code)}</td>
         <td>${esc(h.name)}</td>
@@ -3856,7 +3937,9 @@ function renderStock(data) {
         <td>${h.price ? Number(h.price).toFixed(1) : '—'}</td>
         <td>${stockMoney(Math.round(h.value))}</td>
         ${stockPnlCell(h.pnl)}
-      </tr>`).join('');
+      </tr>
+      ${lots ? `<tr class="stock-lot-row"><td colspan="9"><div class="stock-lots">${lots}</div></td></tr>` : ''}`;
+    }).join('');
     stockHoldingsEl.innerHTML = `
       <div class="stock-table-wrap">
         <table class="stock-table">
@@ -3893,6 +3976,27 @@ function renderStock(data) {
             <tr><th>代码</th><th>名称</th><th>做空股数</th><th>入场价</th><th>现价</th><th>浮动</th><th>操作</th></tr>
           </thead>
           <tbody>${shortRows}</tbody>
+        </table>
+      </div>`;
+  }
+
+  const pending = p.pending || [];
+  if (pending.length) {
+    stockHoldingsEl.innerHTML += `
+      <div class="section-title" style="margin-top:12px;">待开盘挂单（次日开盘按开盘价成交）</div>
+      <div class="stock-table-wrap">
+        <table class="stock-table">
+          <thead>
+            <tr><th>方向</th><th>代码</th><th>名称</th><th>股数</th><th>挂单时间</th></tr>
+          </thead>
+          <tbody>${pending.map((o) => `
+            <tr>
+              <td>${o.kind === 'buy' ? '买入' : '卖出'}</td>
+              <td>${esc(o.code)}</td>
+              <td>${esc(o.name)}</td>
+              <td>${o.shares}</td>
+              <td>${esc(o.time || '—')}</td>
+            </tr>`).join('')}</tbody>
         </table>
       </div>`;
   }
@@ -3966,6 +4070,30 @@ stockHoldingsEl.addEventListener('click', (e) => {
   if (!btn) return;
   stockAction('/api/stock/cover', { code: btn.dataset.code || '' }, '平空');
 });
+
+if (stockWarsEl) {
+  stockWarsEl.addEventListener('click', (e) => {
+    const btn = e.target.closest('.stock-war-act');
+    if (!btn) return;
+    stockAction('/api/stock/war/activity', {
+      code: btn.dataset.code || '',
+      country: btn.dataset.country || '',
+      kind: btn.dataset.kind || '',
+    }, btn.dataset.kind === 'squeeze' ? '挤压对手' : '宣传自己');
+  });
+}
+
+const stockWarStartBtn = document.getElementById('btn-stock-war-start');
+if (stockWarStartBtn) {
+  stockWarStartBtn.addEventListener('click', () => {
+    const code = (stockWarCodeEl && stockWarCodeEl.value || '').trim();
+    if (!code) {
+      stockMsgEl.textContent = '先填上对手公司的代码喵';
+      return;
+    }
+    stockAction('/api/stock/war/start', { code }, '发动商战');
+  });
+}
 
 function closeStockModal() {
   stockModalEl.classList.add('hidden');
@@ -4503,10 +4631,14 @@ function renderStockMeeting(m) {
     + `你的持股 ${stockMoney(m.my_shares)} 股`;
 
   const remain = Number(m.remaining || 0);
-  if (status === 'open') {
-    stockMeetingTimerEl.textContent = remain > 0 ? `讨论剩余 ${remain}s` : '时间到，书记员落笔中…';
-  } else if (status === 'confirm') {
+  if (status === 'confirm') {
     stockMeetingTimerEl.textContent = remain > 0 ? `确认剩余 ${remain}s` : '确认时间到，正在定案…';
+    const picked = { ai: '书记员汇总', host: '大股东方针', old: '沿用旧方针' }[m.my_vote];
+    stockMeetingSubEl.textContent += picked
+      ? `｜你已投：${picked}（可改投）`
+      : (m.can_vote ? '｜你还没投票，三选一随便挑' : '');
+  } else if (status === 'open') {
+    stockMeetingTimerEl.textContent = remain > 0 ? `讨论剩余 ${remain}s` : '时间到，书记员落笔中…';
   } else {
     stockMeetingTimerEl.textContent = '会议已结束';
   }
@@ -4547,18 +4679,18 @@ function renderStockMeeting(m) {
     const humanLine = (votes.human || []).map((x) => {
       const label = x.choice === 'ai' ? '书记员汇总'
         : x.choice === 'host' ? '大股东方针' : '沿用旧方针';
-      return `${esc(x.name)} ${label}`;
+      return `${esc(x.name)}（${stockMoney(x.shares || 0)} 股）${label}`;
     }).join('｜');
     const boardLine = (votes.board || []).map((x) => {
       const label = x.choice === 'ai' ? '书记员汇总'
         : x.choice === 'host' ? '大股东方针' : '沿用旧方针';
-      return `${esc(x.name)} ${label}`;
+      return `${esc(x.name)}（${stockMoney(x.shares || 0)} 股）${label}`;
     }).join('｜');
     stockMeetingVotesEl.classList.remove('hidden');
     stockMeetingVotesEl.innerHTML = `
       <div class="section-title">${status === 'confirm' ? '股东确认中' : '确认结果'}</div>
-      <p>书记员汇总 ${votes.ai || 0} · 大股东方针 ${votes.host || 0} · 沿用旧方针 ${votes.old || 0}</p>
-      <p class="hint">已确认 ${votes.total || 0} / ${votes.eligible || 0} 人，未表态者按沿用旧方针计</p>
+      <p>书记员汇总 ${stockMoney(votes.ai || 0)} 股 · 大股东方针 ${stockMoney(votes.host || 0)} 股 · 沿用旧方针 ${stockMoney(votes.old || 0)} 股</p>
+      <p class="hint">已确认 ${stockMoney(votes.total || 0)} / ${stockMoney(votes.eligible || 0)} 股（按持股比例计票；确认阶段半小时内随时可以回来投票或改票，未表态者按沿用旧方针计）</p>
       ${humanLine ? `<p class="hint">在场股东：${humanLine}</p>` : ''}
       ${boardLine ? `<p class="hint">董事会老股东：${boardLine}</p>` : ''}`;
   } else {
@@ -4573,7 +4705,7 @@ function renderStockMeeting(m) {
     stockMeetingResultEl.innerHTML = `
       <p>${esc(m.result || '会议结束')}</p>
       ${rc.eligible
-        ? `<p class="hint">确认票数：书记员汇总 ${rc.ai || 0} · 大股东方针 ${rc.host || 0} · 沿用旧方针 ${rc.old || 0}（共 ${rc.eligible} 人）</p>`
+        ? `<p class="hint">确认票数：书记员汇总 ${stockMoney(rc.ai || 0)} 股 · 大股东方针 ${stockMoney(rc.host || 0)} 股 · 沿用旧方针 ${stockMoney(rc.old || 0)} 股（共 ${stockMoney(rc.eligible)} 股）</p>`
         : ''}
       ${m.policy ? `<p class="hint">当前方针：${esc(m.policy)}</p>` : ''}`;
   } else {
@@ -4595,7 +4727,7 @@ function renderStockMeeting(m) {
   stockMeetingOptionsEl.classList.toggle('hidden', status !== 'confirm' || !options.length);
   stockMeetingOptionsEl.innerHTML = status === 'confirm'
     ? options.map((o) => `<button class="btn btn-ghost btn-sm${m.my_vote === o.key ? ' is-active' : ''}"
-        type="button" data-choice="${esc(o.key)}"${m.can_vote ? '' : ' disabled'}>${esc(o.label || o.key)}</button>`).join('')
+        type="button" data-choice="${esc(o.key)}"${m.can_vote ? '' : ' disabled'}>${m.my_vote === o.key ? '✓ ' : ''}${esc(o.label || o.key)}</button>`).join('')
     : '';
 
   stockMeetingFinishEl.classList.toggle('hidden', !m.can_finish);

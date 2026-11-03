@@ -783,6 +783,15 @@ code { background: #120f0d; border: 1px solid var(--line); border-radius: 6px; p
 }
 .stock-table td { padding: 8px 10px; border-bottom: 1px solid rgba(58, 49, 40, 0.6); white-space: nowrap; }
 .stock-table tbody tr:last-child td { border-bottom: none; }
+.stock-lot-row td { padding: 0 10px 8px; border-bottom: 1px solid rgba(58, 49, 40, 0.6); }
+.stock-lots { display: flex; flex-direction: column; gap: 4px; }
+.stock-lot {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 12px;
+  background: #141110; border: 1px dashed var(--line); border-radius: 8px;
+  padding: 5px 10px; font-size: 12px; color: var(--text-dim); white-space: normal;
+}
+.stock-lot-time { color: var(--gold); }
+.stock-lot-state { margin-left: auto; font-size: 11px; }
 .stock-up { color: var(--danger); font-weight: 600; }
 .stock-down { color: #4fbf7a; font-weight: 600; }
 .stock-policy { color: var(--accent, #d8a657); font-size: 11px; margin-top: 3px; white-space: normal; }
@@ -798,6 +807,36 @@ code { background: #120f0d; border: 1px solid var(--line); border-radius: 6px; p
 .stock-table td.stock-holders { font-size: 11px; line-height: 1.55; color: var(--text-dim); white-space: normal; min-width: 128px; }
 .stock-holder-shares { color: var(--text); }
 .stock-empty-cell { opacity: 0.45; }
+
+/* 商战 */
+.stock-war-tag {
+  display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: 8px;
+  background: rgba(211, 86, 77, 0.18); color: var(--danger); font-size: 11px; font-weight: 700;
+}
+#stock-wars { display: flex; flex-direction: column; gap: 12px; margin-top: 12px; }
+.stock-war {
+  border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px;
+  background: #141110;
+}
+.stock-war-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.stock-war-title { font-weight: 700; font-size: 15px; color: var(--gold); }
+.stock-war-left { font-size: 12px; color: var(--text-dim); }
+.stock-war-meta { margin-top: 4px; font-size: 12px; color: var(--text-dim); }
+.stock-war-mine { margin-top: 8px; font-size: 12px; color: var(--accent, #d8a657); }
+.stock-war-regions { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+.stock-war-region { border-top: 1px dashed var(--line); padding-top: 8px; }
+.stock-war-region-head, .stock-war-pcts {
+  display: flex; justify-content: space-between; font-size: 12px; color: var(--text-dim);
+}
+.stock-war-nums { color: var(--text); }
+.stock-war-bar {
+  display: flex; height: 8px; margin: 5px 0 4px;
+  background: #100d0b; border-radius: 4px; overflow: hidden;
+}
+.stock-war-bar-a { background: var(--danger); }
+.stock-war-bar-b { background: var(--blue); }
+.stock-war-acts { display: flex; gap: 8px; margin-top: 6px; }
+.stock-war-acts .btn { padding: 5px 12px; font-size: 12px; width: auto; }
 
 .stock-detail-btn {
   background: none; border: none; padding: 0; cursor: pointer;

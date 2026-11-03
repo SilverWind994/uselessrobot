@@ -1338,6 +1338,29 @@ def stock_meeting_finish(payload: dict, cat_token: str = Cookie(default="")) -> 
     return _meeting_response(stock_web.meeting_finish(qq, payload.get("code")), qq)
 
 
+@app.post("/api/stock/war/start")
+def stock_war_start(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
+    """大股东对同业公司发动商战"""
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    data = stock_web.war_start(qq, payload.get("code"))
+    data["overview"] = stock_web.overview(qq)
+    return JSONResponse(data)
+
+
+@app.post("/api/stock/war/activity")
+def stock_war_activity(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
+    """交战股东在当地花钱挤压对手或宣传自己"""
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    data = stock_web.war_activity(qq, payload.get("code"),
+                                  payload.get("country"), payload.get("kind"))
+    data["overview"] = stock_web.overview(qq)
+    return JSONResponse(data)
+
+
 # ==================== 意见栏 ====================
 
 _FEEDBACK_PATH = os.path.join(_NEWBOT_DIR, "assets", "feedback.json")

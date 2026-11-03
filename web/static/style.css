@@ -822,6 +822,7 @@ code { background: #120f0d; border: 1px solid var(--line); border-radius: 6px; p
   font-size: 13px; padding: 6px 2px; border-bottom: 1px dashed var(--line);
 }
 .stock-detail-holder:last-child { border-bottom: none; }
+.stock-detail-holder.stock-holder-me { color: var(--gold); }
 
 .stock-news { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
 .stock-news-item { background: #120f0d; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }

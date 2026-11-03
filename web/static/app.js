@@ -4003,7 +4003,9 @@ function stockTrendChart(history) {
 function openStockDetail(code) {
   const c = ((stockLastData || {}).companies || []).find((x) => x.code === code);
   if (!c) return;
-  const holders = c.holders || [];
+  const holders = c.all_holders || c.holders || [];
+  const mine = (((stockLastData || {}).portfolio || {}).holdings || [])
+    .find((h) => h.code === code);
   const hist = c.history || [];
   const pct = Number(c.pct || 0);
   stockModalTitleEl.textContent = `${c.name}（${c.code}）`;
@@ -4023,12 +4025,20 @@ function openStockDetail(code) {
         <span>${stockMoney(b.shares)} 股</span></div>
         ${b.persona ? `<div class="hint">${esc(b.persona)}</div>` : ''}`).join('')}
     </div>` : ''}
+    <div class="stock-detail-holders">
+      <div class="section-title">我的持股</div>
+      ${mine
+        ? `<div class="stock-detail-holder"><span>${stockMoney(mine.shares)} 股（可卖 ${stockMoney(mine.sellable)}｜锁定 ${stockMoney(mine.locked)}）</span>
+            <span>成本 ${Number(mine.avg_cost).toFixed(1)} → 现价 ${Number(mine.price || 0).toFixed(1)}</span></div>
+          <div class="hint">市值 ${stockMoney(Math.round(mine.value))}｜浮动 ${mine.pnl >= 0 ? '+' : ''}${stockMoney(mine.pnl)}</div>`
+        : '<p class="room-empty">你还没有买入这只股票喵</p>'}
+    </div>
     ${stockTrendChart(hist)}
     <p class="hint">最近 ${hist.length} 个整点的收盘价走势，每个整点更新</p>
     <div class="stock-detail-holders">
-      <div class="section-title">前三大股东</div>
+      <div class="section-title">全部股东 · ${holders.length} 人</div>
       ${holders.length
-        ? holders.map((h, i) => `<div class="stock-detail-holder"><span>${h.rank || i + 1}. ${esc(h.nick)}</span><span>${stockMoney(h.shares)} 股</span></div>`).join('')
+        ? holders.map((h, i) => `<div class="stock-detail-holder${h.is_me ? ' stock-holder-me' : ''}"><span>${h.rank || i + 1}. ${esc(h.nick)}${h.is_me ? ' <span class="era-path-kind">你</span>' : ''}</span><span>${stockMoney(h.shares)} 股</span></div>`).join('')
         : '<p class="room-empty">暂无股东喵</p>'}
     </div>
     <div class="stock-detail-meeting">

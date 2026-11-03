@@ -15,6 +15,13 @@ except ImportError:   # 没有 Pillow 时只是不画世界地图，不影响行
     ImageDraw = None
     ImageFont = None
 
+try:
+    from pypinyin import Style as _PinyinStyle
+    from pypinyin import lazy_pinyin as _lazy_pinyin
+except ImportError:   # 没装拼音库时退回旧编号，至少不会让行情起不来
+    _PinyinStyle = None
+    _lazy_pinyin = None
+
 from config import Config
 from core.message_sender import MessageSender, Target
 from core.command_router import CommandRouter, CommandContext
@@ -654,6 +661,7 @@ class CatStockPlugin:
         self._ensure_market()
         self._migrate_economy()
         self._migrate_era()
+        self._migrate_company_codes()
         # 网页端复用同一个插件时不需要再起一条调度线程，避免整点重复跑 tick
         if start_scheduler:
             self._start_scheduler()
@@ -682,11 +690,12 @@ class CatStockPlugin:
         if os.path.exists(MARKET_PATH):
             return
         countries = self._default_countries()
-        companies = {c["code"]: c for c in self._era_pool(0, countries)}
+        used_codes: set = set()
+        companies = {c["code"]: c for c in self._era_pool(0, countries, used=used_codes)}
         state = {
             "day": "",
             "companies": companies,
-            "catalog": self._era_catalog(0, countries),
+            "catalog": self._era_catalog(0, countries, used=used_codes),
             "countries": countries,
             "era": self._new_era_state({}, 0),
             "era_version": 2,
@@ -898,11 +907,31 @@ class CatStockPlugin:
         return bool(ends) and datetime.now().strftime("%Y-%m-%d") >= ends
 
     @staticmethod
-    def _era_code(index: int, seq: int) -> str:
-        """给每个时代的企业编三位大写代码：首字母标记时代，后两位区分企业"""
-        return (chr(65 + (index % 26))
-                + chr(65 + (seq // 26) % 26)
-                + chr(65 + seq % 26))
+    def _name_code(name: str) -> str:
+        """把企业名缩成拼音首字母代码，取前四位"""
+        text = str(name or "").strip()
+        if _lazy_pinyin and _PinyinStyle and text:
+            parts = _lazy_pinyin(text, style=_PinyinStyle.FIRST_LETTER)
+            letters = "".join(ch for part in parts for ch in part if ch.isalpha())
+        else:
+            # 没装拼音库时用字元和稳定地映射成四个字母
+            seed = sum(ord(ch) for ch in text) or 1
+            letters = "".join(chr(65 + (seed // (26 ** i)) % 26) for i in range(4))
+        letters = "".join(ch for ch in letters.upper() if "A" <= ch <= "Z")
+        return letters[:4] or "XQ"
+
+    @classmethod
+    def _unique_name_code(cls, name: str, used: set) -> str:
+        """在同一批企业里保证代码不重复，重码时补数字后缀"""
+        base = cls._name_code(name)
+        code = base
+        serial = 1
+        while code in used:
+            suffix = str(serial)
+            code = base[:max(1, 4 - len(suffix))] + suffix
+            serial += 1
+        used.add(code)
+        return code
 
     def _board_for(self, code: str, index: int) -> List[dict]:
         """每家公司常驻三位 AI 董事：抽签固定，份额 900/700/500，不同公司面孔不同"""
@@ -949,42 +978,45 @@ class CatStockPlugin:
         }
 
     def _era_pool(self, index: int, countries: Optional[dict] = None,
-                  size: int = 0) -> List[dict]:
+                  size: int = 0, used: Optional[set] = None) -> List[dict]:
         """用该时代手写好的企业名录铺出企业池，不再用前后缀临时拼名字"""
         data = self._era_base(index)
         countries = countries or self._default_countries()
         alive = self._countries_of(countries)
+        used = used if used is not None else set()
         # 初期企业克制些，之后每个时代缓慢扩容，总数不超过 40 家
         limit = min(CAT_STOCK_COMPANY_MAX,
                     CAT_STOCK_COMPANY_START + CAT_STOCK_COMPANY_GROWTH * max(0, index))
         if size > 0:
             limit = min(limit, size)
         pool: List[dict] = []
-        for seq, item in enumerate((data.get("companies") or [])[:limit]):
+        for item in (data.get("companies") or [])[:limit]:
             country = item.get("country") if item.get("country") in alive else random.choice(alive)
             secs = item.get("sectors") or item.get("sector") or "综合"
+            name = str(item.get("name") or "无名商号")[:10]
             pool.append(self._era_company(
-                self._era_code(index, seq), str(item.get("name") or "无名商号")[:10],
+                self._unique_name_code(name, used), name,
                 country, secs, item.get("base") or 30, index,
                 item.get("intro") or "", item.get("tags")))
         return pool
 
     def _era_catalog(self, index: int, countries: Optional[dict] = None,
-                     size: int = 0) -> List[dict]:
-        """同时代后期可以补位上市的企业，代码段与在池企业错开"""
+                     size: int = 0, used: Optional[set] = None) -> List[dict]:
+        """同时代后期可以补位上市的企业，与在池企业共用一套不重复代码"""
         data = self._era_base(index)
         countries = countries or self._default_countries()
         alive = self._countries_of(countries)
+        used = used if used is not None else set()
         catalog: List[dict] = []
         items = list(data.get("catalog") or [])
         if size > 0:
             items = items[:size]
-        for seq, item in enumerate(items):
+        for item in items:
             country = item.get("country") if item.get("country") in alive else random.choice(alive)
             secs = item.get("sectors") or item.get("sector") or "综合"
-            code = self._era_code(index, 60 + seq)
+            name = str(item.get("name") or "无名商号")[:10]
             catalog.append(self._era_company(
-                code, str(item.get("name") or "无名商号")[:10],
+                self._unique_name_code(name, used), name,
                 country, secs, item.get("base") or 30, index,
                 item.get("intro") or "", item.get("tags")))
         return catalog
@@ -1279,8 +1311,10 @@ class CatStockPlugin:
                 st["shorts"] = []
             countries = self._default_countries()
             state["countries"] = countries
-            state["companies"] = {c["code"]: c for c in self._era_pool(0, countries)}
-            state["catalog"] = self._era_catalog(0, countries)
+            used_codes: set = set()
+            state["companies"] = {c["code"]: c
+                                  for c in self._era_pool(0, countries, used=used_codes)}
+            state["catalog"] = self._era_catalog(0, countries, used=used_codes)
             state["era"] = self._new_era_state({}, 0)
             state["era_version"] = 2
             state["meetings"] = {}
@@ -1291,6 +1325,71 @@ class CatStockPlugin:
             state["last_tick"] = ""
             self._save_stock_players(players)
             self._save_market(state)
+        finally:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            try:
+                os.remove(lock_path)
+            except OSError:
+                pass
+
+    def _migrate_company_codes(self) -> None:
+        """把旧版按顺序编的三位代码换成企业名拼音首字母，持仓与会议一并搬家"""
+        state = self._load_market()
+        if int(state.get("code_version", 1) or 1) >= 2:
+            return
+        lock_path = MARKET_PATH + ".codes"
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            return
+        try:
+            state = self._load_market()
+            if int(state.get("code_version", 1) or 1) >= 2:
+                return
+            mapping: Dict[str, str] = {}
+            used: set = set()
+            companies = state.get("companies") or {}
+            for old_code, comp in companies.items():
+                name = str(comp.get("name") or old_code)
+                mapping[str(old_code)] = self._unique_name_code(name, used)
+                comp["code"] = mapping[str(old_code)]
+            state["companies"] = {comp["code"]: comp for comp in companies.values()}
+            for item in state.get("catalog") or []:
+                old_code = str(item.get("code") or "")
+                if old_code and old_code in mapping:
+                    item["code"] = mapping[old_code]
+                    continue
+                name = str(item.get("name") or old_code or "无名商号")
+                new_code = self._unique_name_code(name, used)
+                if old_code:
+                    mapping[old_code] = new_code
+                item["code"] = new_code
+            meetings = {}
+            for old_code, meeting in (state.get("meetings") or {}).items():
+                new_code = mapping.get(str(old_code), str(old_code))
+                meeting["code"] = new_code
+                meetings[new_code] = meeting
+            state["meetings"] = meetings
+            for item in state.get("company_directives") or []:
+                item["code"] = mapping.get(str(item.get("code")), item.get("code"))
+            # 观测记录里的代码属于旧编号，不再沿用
+            if isinstance(state.get("economy"), dict):
+                state["economy"]["details"] = []
+            players = self._load_stock_players()
+            for st in players.values():
+                st["holdings"] = {
+                    mapping.get(str(code), code): lots
+                    for code, lots in (st.get("holdings") or {}).items()}
+                for short in st.get("shorts") or []:
+                    short["code"] = mapping.get(str(short.get("code")), short.get("code"))
+                for log in st.get("short_log") or []:
+                    log["code"] = mapping.get(str(log.get("code")), log.get("code"))
+            state["code_version"] = 2
+            self._save_market(state)
+            self._save_stock_players(players)
         finally:
             try:
                 os.close(fd)
@@ -1492,12 +1591,14 @@ class CatStockPlugin:
             comp["limit_exempt"] = True
             survivors.append(comp)
 
+        used_codes: set = {c["code"] for c in survivors}
         pool = self._era_pool(next_index, countries,
-                              size=max(1, CAT_STOCK_COMPANY_MAX - len(survivors)))
+                              size=max(1, CAT_STOCK_COMPANY_MAX - len(survivors)),
+                              used=used_codes)
         companies.clear()
         companies.update({c["code"]: c for c in pool})
         companies.update({c["code"]: c for c in survivors})
-        market["catalog"] = self._era_catalog(next_index, countries)
+        market["catalog"] = self._era_catalog(next_index, countries, used=used_codes)
         market["meetings"] = {}
 
         history = list(old.get("history") or [])
@@ -3946,15 +4047,20 @@ class CatStockPlugin:
                 and row["my_shares"] >= CAT_STOCK_MEETING_HOST_SHARES
                 and row["my_shares"] >= max_human_shares.get(code, 0))
             entries = sorted(ranks.get(row["code"], []),
-                             key=lambda x: (-x[0], x[1], x[2]))[:3]
+                             key=lambda x: (-x[0], x[1], x[2]))
             holders = []
             last_shares = None
             last_rank = 0
-            for idx, (shares, _ts, _qq, nick) in enumerate(entries, 1):
+            for idx, (shares, _ts, key, nick) in enumerate(entries, 1):
                 rank = last_rank if shares == last_shares else idx
                 last_shares, last_rank = shares, rank
-                holders.append({"nick": nick, "shares": int(shares), "rank": rank})
-            row["holders"] = holders
+                holders.append({
+                    "nick": nick, "shares": int(shares), "rank": rank,
+                    "is_me": bool(qq is not None and key == str(qq)),
+                })
+            # 大盘只保留前三，详情页用完整名单
+            row["holders"] = holders[:3]
+            row["all_holders"] = holders
 
         # 各国国债：价格走势 + 国债持有人 + 我的持有量
         bonds = market.get("bonds") or {}
@@ -4309,6 +4415,7 @@ class CatStockPlugin:
         # AI 生成新闻较慢，先不占用锁，避免玩家交易被阻塞
         ai_news, effects, world_update, ai_actions = self._make_news(snapshot, now, world)
 
+        economy = None
         with self._lock:
             market = self._load_market()
             if market.get("last_tick") == key:
@@ -4399,7 +4506,7 @@ class CatStockPlugin:
             self._settle_shorts(players, companies, now)
 
             # 3.4) 全体参与者财富冷热：过热时收紧流动性，过冷时托底
-            self._economy_check(market, players)
+            economy = self._economy_check(market, players)
 
             # 3.5) 交易所限价：单小时最多上下 2%，当日累计最多 ±10%
             #      当日涨跌互相抵消，隔日重新计算；经营崩坏仍可由交易所直接摘牌
@@ -4479,6 +4586,8 @@ class CatStockPlugin:
                 moved.append((comp, (comp["price"] - before) / before * 100))
 
         self._broadcast(now, market, moved, news_entries)
+        if economy:
+            self._economy_report(now, market, economy)
 
     def _apply_effect(self, companies: dict, eff: dict) -> None:
         pct = eff.get("pct", 0)
@@ -4686,12 +4795,14 @@ class CatStockPlugin:
         week_low, week_high = min(week_values), max(week_values)
         daily_low = max(1.0, daily_low)
         week_low = max(1.0, week_low)
+        daily_drop = 1 - per_capita / max(1.0, daily_high)
+        week_drop = 1 - per_capita / max(1.0, week_high)
         daily_growth = per_capita / daily_low - 1
         week_growth = per_capita / week_low - 1
         hot_excess = max(daily_growth - CAT_STOCK_ECON_DAILY_HOT,
                          week_growth - CAT_STOCK_ECON_WEEK_HOT, 0.0)
-        cold_excess = max(CAT_STOCK_ECON_DAILY_COLD - per_capita / max(1.0, daily_high),
-                          CAT_STOCK_ECON_WEEK_COLD - per_capita / max(1.0, week_high), 0.0)
+        cold_excess = max(daily_drop - (1 - CAT_STOCK_ECON_DAILY_COLD),
+                          week_drop - (1 - CAT_STOCK_ECON_WEEK_COLD), 0.0)
         drag = 0.0
         support = 0.0
         surcharge = 0.0
@@ -4705,6 +4816,7 @@ class CatStockPlugin:
                           cold_excess * CAT_STOCK_ECON_SUPPORT_COEF)
 
         adjusted = 0
+        details = []
         for code, comp in companies.items():
             longs = long_pos.get(code, 0.0)
             shorts = short_pos.get(code, 0.0)
@@ -4724,22 +4836,86 @@ class CatStockPlugin:
                 step = support * abs(net)
             if not step:
                 continue
-            comp["price"] = float(comp["price"]) * (1 + step)
+            before = float(comp["price"])
+            comp["price"] = before * (1 + step)
             adjusted += 1
+            details.append({
+                "code": code, "name": comp.get("name", code),
+                "longs": int(longs), "shorts": int(shorts),
+                "net": round(net, 3), "step": round(step, 4),
+                "before": round(before, 2),
+            })
+        details.sort(key=lambda d: abs(d["net"]), reverse=True)
 
         history.append([now_ts, round(per_capita, 2)])
         economy = {
             "heat": round(per_capita / max(1.0, week_low), 3),
             "daily_growth": round(daily_growth, 4), "week_growth": round(week_growth, 4),
+            "daily_drop": round(daily_drop, 4), "week_drop": round(week_drop, 4),
             "hot_excess": round(hot_excess, 4), "cold_excess": round(cold_excess, 4),
             "per_capita": round(per_capita, 2), "active": active,
             "wealth": int(round(wealth)), "window_days": CAT_STOCK_ECON_WINDOW_DAYS,
+            "cash_total": int(round(cash_total)), "stock_total": int(round(stock_total)),
+            "bond_total": int(round(bond_total)), "short_total": int(round(short_total)),
             "drag": round(drag, 4), "support": round(support, 4),
             "sell_surcharge": round(surcharge, 4), "adjusted": adjusted,
-            "history": history, "at": now_ts,
+            "details": details, "history": history, "at": now_ts,
         }
         market["economy"] = economy
         return economy
+
+    def _economy_report(self, now: datetime, market: dict, economy: dict) -> None:
+        """把本轮的冷热判断与定向调整整理成一条私聊，发给掌管者核对"""
+        if not (economy.get("drag") or economy.get("support")):
+            return
+        lines = [f"【喵股市 · 冷热观测 {now.strftime('%m-%d %H:%M')}】",
+                 f"参与账户 {int(economy.get('active', 0))}｜"
+                 f"人均财富 {float(economy.get('per_capita', 0) or 0):,.1f}"]
+        wealth = float(economy.get("wealth", 0) or 0)
+        chunks = []
+        for label, key in (("现金", "cash_total"), ("持股", "stock_total"),
+                           ("国债", "bond_total"), ("空头权益", "short_total")):
+            value = float(economy.get(key, 0) or 0)
+            chunks.append(f"{label} {value:,.0f}（{value / wealth:.0%}）"
+                          if wealth else f"{label} {value:,.0f}")
+        lines.append("构成：" + "｜".join(chunks))
+        lines.append(
+            f"日窗口 {float(economy.get('daily_growth', 0) or 0):+.2%}"
+            f"（过热线 +{CAT_STOCK_ECON_DAILY_HOT:.0%}）｜"
+            f"周窗口 {float(economy.get('week_growth', 0) or 0):+.2%}"
+            f"（过热线 +{CAT_STOCK_ECON_WEEK_HOT:.0%}）")
+        lines.append(
+            f"日回撤 -{float(economy.get('daily_drop', 0) or 0):.2%}"
+            f"（过冷线 -{1 - CAT_STOCK_ECON_DAILY_COLD:.0%}）｜"
+            f"周回撤 -{float(economy.get('week_drop', 0) or 0):.2%}"
+            f"（过冷线 -{1 - CAT_STOCK_ECON_WEEK_COLD:.0%}）")
+        if economy.get("drag"):
+            lines.append(
+                f"判定：过热，超出 {float(economy.get('hot_excess', 0) or 0):.2%} → "
+                f"多头占优个股收紧 {float(economy['drag']):.2%}/小时，"
+                f"卖出费 +{float(economy.get('sell_surcharge', 0) or 0):.2%}")
+        else:
+            lines.append(
+                f"判定：过冷，超出 {float(economy.get('cold_excess', 0) or 0):.2%} → "
+                f"有持仓个股托底 {float(economy['support']):.2%}/小时")
+        details = economy.get("details") or []
+        if details:
+            lines.append(f"定向调整 {int(economy.get('adjusted', 0))} 家：")
+            for item in details[:8]:
+                comp = (market.get("companies") or {}).get(item.get("code")) or {}
+                now_price = float(comp.get("price") or item.get("before", 0) or 0)
+                before = float(item.get("before", 0) or 0)
+                move = now_price / before - 1 if before else 0.0
+                side = "净多" if item.get("net", 0) > 0 else "净空"
+                lines.append(
+                    f"· {item.get('code', '')} {item.get('name', '')} "
+                    f"多 {int(item.get('longs', 0))} / 空 {int(item.get('shorts', 0))}"
+                    f"（{side} {abs(float(item.get('net', 0) or 0)):.0%}）"
+                    f" {self._fmt_price(before)}→{self._fmt_price(now_price)}"
+                    f" {self._fmt_pct(move * 100)}")
+            if len(details) > 8:
+                lines.append(f"……另有 {len(details) - 8} 家未列出")
+        self._sender.send_text(Target(user_id=CAT_STOCK_WORLD_ADMIN), "\n".join(lines))
 
     def _maybe_delist(self, market: dict, players: dict) -> List[dict]:
         companies = market["companies"]
@@ -5032,7 +5208,7 @@ class CatStockPlugin:
             "新企业的行业与产品必须属于当前时代的产业水平，"
             "禁止把后续时代的技术、制度或金融产物提前上市。\n"
             "只输出一个 JSON 对象，不要解释："
-            '{"code":"三位大写字母","name":"企业名（不超过10字）",'
+            '{"name":"企业名（不超过10字）",'
             '"country":"国家代码","sector":"行业名（不超过4字）","base":20到300的整数}'
         )
         try:
@@ -5067,19 +5243,17 @@ class CatStockPlugin:
         for item in actions.get("listings") or []:
             if len(companies) >= CAT_STOCK_COMPANY_MAX:
                 break
-            code = str(item.get("code") or "").strip().upper()
             name = str(item.get("name") or "").strip()[:10]
             country = str(item.get("country") or "").strip()
             sector = str(item.get("sector") or "").strip()[:4]
             base = item.get("base")
-            if (not re.fullmatch(r"[A-Z]{3}", code) or code in companies
-                    or code in catalog_codes or not name
-                    or name in existing_names or name in catalog_names
+            if (not name or name in existing_names or name in catalog_names
                     or not sector
                     or not (market.get("countries") or {}).get(country, {}).get("alive", False)
                     or not isinstance(base, (int, float)) or not 20 <= base <= 300):
                 continue
             base = int(base)
+            code = self._unique_name_code(name, set(companies) | catalog_codes)
             price = float(max(10, int(base * random.uniform(0.95, 1.05))))
             sectors = self._normalize_sectors(sector, item.get("sectors"))
             cname = self._country_name(country)

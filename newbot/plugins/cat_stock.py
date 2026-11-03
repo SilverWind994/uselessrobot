@@ -77,12 +77,11 @@ CAT_STOCK_BOND_MIN_SHARES = 100      # 单笔最少买卖多少张国债
 CAT_STOCK_BOND_INFLUENCE_SHARES = 10000  # 持有多少张国债可以影响国家发展方针
 CAT_STOCK_BOND_NOISE = 0.003         # 国债每整点基础波动（远小于股票）
 CAT_STOCK_BOND_POLICY_MAX_LEN = 100  # 国家发展方针文本最大长度
-CAT_STOCK_DAILY_UP = 0.01            # 当日软限价上沿：比昨收最多高 1%
-CAT_STOCK_DAILY_DOWN = 0.03          # 当日软限价下沿：比昨收最多低 3%
-CAT_STOCK_WEEKLY_UP = 0.05           # 当周软限价上沿：比周开盘最多高 5%
-CAT_STOCK_WEEKLY_DOWN = 0.15         # 当周软限价下沿：比周开盘最多低 15%
-CAT_STOCK_SOFT_LIMIT_PULL = 0.99     # 冲出软限价带后每整点回拉的比例（近乎硬限）
-CAT_STOCK_DAILY_GAIN_BUDGET = 0.01   # 全市场当日涨幅加总上限：额度用完后想涨的股票得由别人下跌抵消
+CAT_STOCK_DAILY_UP = 0.01            # 全市场加权总涨跌的当日上沿
+CAT_STOCK_DAILY_DOWN = 0.03          # 全市场加权总涨跌的当日下沿
+CAT_STOCK_WEEKLY_UP = 0.05           # 全市场加权总涨跌的当周上沿
+CAT_STOCK_WEEKLY_DOWN = 0.15         # 全市场加权总涨跌的当周下沿
+CAT_STOCK_STOCK_DAILY_CAP = 0.10     # 单只股票当日相对昨收的涨跌停幅度（±10%）
 CAT_STOCK_SMALL_HOLDING_MAX = 100    # 非重点持股公司的持股上限
 CAT_STOCK_MAJOR_COMPANIES_MAX = 2    # 最多深度持股几家公司
 CAT_STOCK_MEETING_MIN_SHARES = 100   # 可参与股东大会的最低持股
@@ -2110,6 +2109,8 @@ class CatStockPlugin:
             self._declare_war(target, ctx.user_id, rest)
         elif sub in ("商战活动", "waract"):
             self._war_act_cmd(target, ctx.user_id, rest)
+        elif sub in ("重跑", "回退", "rerun", "rewind"):
+            self._rerun_hour(target, ctx.user_id, rest)
         else:
             # 直接输入企业代码/名称时给出该股详情
             comp = self._resolve_company(self._load_market(), parts[0])
@@ -4981,11 +4982,6 @@ class CatStockPlugin:
                 "lock_note": "当天买入的股份要到第二天才能卖出",
                 "max_shares": CAT_STOCK_MAX_SHARES,
                 "delist_rate": CAT_STOCK_DELIST_RATE,
-                "daily_up": CAT_STOCK_DAILY_UP,
-                "daily_down": CAT_STOCK_DAILY_DOWN,
-                "weekly_up": CAT_STOCK_WEEKLY_UP,
-                "weekly_down": CAT_STOCK_WEEKLY_DOWN,
-                "daily_gain_budget": CAT_STOCK_DAILY_GAIN_BUDGET,
                 "small_holding_max": CAT_STOCK_SMALL_HOLDING_MAX,
                 "major_companies_max": CAT_STOCK_MAJOR_COMPANIES_MAX,
                 "meeting_min_shares": CAT_STOCK_MEETING_MIN_SHARES,
@@ -5167,11 +5163,7 @@ class CatStockPlugin:
             f"交易：买入与卖出各收 {CAT_STOCK_BUY_FEE:.0%} 手续费（每笔最低 1 猫薄荷）；"
             f"当天买入的股份要到第二天才能卖出；"
             f"单笔最多 {CAT_STOCK_MAX_SHARES} 股，不设最少购入限制。\n"
-            "行情：交易所挂的是软限价，不是硬性涨跌停——"
-            "单日最多涨 1%、最多跌 3%，单周最多涨 5%、最多跌 15%，越界基本当场被拉回带内；"
-            "而且全市场当日涨幅加总只有 1% 的额度，额度用完后还想让某只股票涨，就只能让别的股票跌，"
-            "隔日、隔周重新起算；"
-            "但经营崩坏或遭遇意外的企业，可以直接被摘牌清盘，"
+            "行情：经营崩坏或遭遇意外的企业，可以直接被摘牌清盘，"
             "持仓按最新价的七成折算，摘牌企业也可能改日重新挂牌。\n"
             "持股：一位股东最多深度介入两家公司的经营，其他公司只允许保留一小把零散股份。\n"
             "同业竞争：同一门生意里的企业会互相抢客，跑赢同行的涨幅会被对手分流一部分，"
@@ -5217,9 +5209,9 @@ class CatStockPlugin:
                 print(f"[cat_stock] tick error: {e}")
             time.sleep(30)
 
-    def _catch_up(self, now: datetime) -> None:
+    def _catch_up(self, now: datetime, force: bool = False) -> None:
         """补齐因停机/休市错过、且仍在开市时段内的整点，每个整点各补一次"""
-        if not (self._is_open(now) or now.hour == CAT_STOCK_CLOSE_HOUR):
+        if not force and not (self._is_open(now) or now.hour == CAT_STOCK_CLOSE_HOUR):
             return
         current = now.replace(minute=0, second=0, microsecond=0)
         last = self._load_market().get("last_tick") or ""
@@ -5242,6 +5234,132 @@ class CatStockPlugin:
             else:
                 self._tick(slot)
             time.sleep(0.5)
+
+    # ==================== 整点重跑（数据修复） ====================
+
+    @staticmethod
+    def _parse_hour_slot(text: str, now: datetime) -> Optional[datetime]:
+        """解析 11-03 18 / 11月3日18点 / 18 这类写法，默认按今年"""
+        text = (text or "").strip()
+        m = re.fullmatch(r"(\d{1,2})[点时]?", text)
+        if m:
+            year, month, day, hour = now.year, now.month, now.day, int(m.group(1))
+        else:
+            m = re.search(r"(\d{4})-(\d{1,2})-(\d{1,2})\s+(\d{1,2})(?:[点时]|:\d{2})?", text)
+            if m:
+                year, month, day, hour = (int(g) for g in m.groups())
+            else:
+                m = re.search(r"(\d{1,2})月(\d{1,2})日?\s*(\d{1,2})(?:[点时]|:\d{2})?", text)
+                if m:
+                    year, month, day, hour = now.year, *(int(g) for g in m.groups())
+                else:
+                    m = re.search(r"(\d{1,2})-(\d{1,2})\s+(\d{1,2})(?:[点时]|:\d{2})?", text)
+                    if not m:
+                        return None
+                    year, month, day, hour = now.year, *(int(g) for g in m.groups())
+        try:
+            slot = datetime(year, month, day, hour)
+        except ValueError:
+            return None
+        if slot > now + timedelta(hours=1):
+            try:
+                slot = slot.replace(year=slot.year - 1)
+            except ValueError:
+                return None
+        return slot
+
+    @staticmethod
+    def _history_key(stamp: str, ref: datetime) -> Optional[tuple]:
+        """把 history 里的 MM-DD HH:MM 换算成可比较的时间键"""
+        try:
+            dt = datetime.strptime(stamp, "%m-%d %H:%M").replace(year=ref.year)
+        except (TypeError, ValueError):
+            return None
+        if dt > ref + timedelta(days=180):
+            try:
+                dt = dt.replace(year=ref.year - 1)
+            except ValueError:
+                return None
+        return (dt.year, dt.month, dt.day, dt.hour)
+
+    def _rewind_to(self, slot: datetime) -> Optional[datetime]:
+        """把行情、整点历史与新闻回退到 slot 的前一个整点"""
+        prev = slot - timedelta(hours=1)
+        slot_key = (slot.year, slot.month, slot.day, slot.hour)
+        slot_ts = slot.timestamp()
+        with self._lock:
+            market = self._load_market()
+            companies = market.get("companies") or {}
+            bonds = market.get("bonds") or {}
+            restored = 0
+            for item in list(companies.values()) + list(bonds.values()):
+                hist = item.get("history")
+                if not isinstance(hist, list) or not hist:
+                    continue
+                keep = []
+                last_price = None
+                prev_price = None
+                for entry in hist:
+                    key = self._history_key(str(entry.get("t") or ""), slot)
+                    price = float(entry.get("p") or 0)
+                    if key is None or key >= slot_key or price <= 0:
+                        continue
+                    prev_price = last_price
+                    last_price = price
+                    keep.append(entry)
+                if last_price is None:
+                    continue
+                item["history"] = keep[-CAT_STOCK_HISTORY_KEEP:]
+                item["price"] = last_price
+                item["momentum"] = round(max(-0.6, min(0.6, last_price / prev_price - 1)), 3) \
+                    if prev_price and prev_price > 0 else 0.0
+                restored += 1
+            if not restored:
+                return None
+            # 目标整点及之后生成的新闻一并撤掉，交给重跑重新生成
+            market["news"] = [
+                entry for entry in (market.get("news") or [])
+                if not isinstance(entry.get("ts"), (int, float))
+                or float(entry["ts"]) < slot_ts
+            ]
+            market["last_tick"] = prev.strftime("%Y-%m-%d %H")
+            self._save_market(market)
+        return prev
+
+    def _rerun_hour(self, target: Target, user_id: int, rest: List[str]) -> None:
+        """掌管者指令：把某个整点回退重算，用于修复上一小时算错的行情"""
+        now = datetime.now()
+        if not Config.is_admin(int(user_id)):
+            self._sender.send_text(
+                target,
+                "没有这个子命令喵～ 可用：大盘 / 新闻 / 持仓 / 买 / 卖 / 充值 / 提现 / 排行\n"
+                "发送「喵股市 帮助」查看完整说明"
+            )
+            return
+        if not rest:
+            self._sender.send_text(target, "重跑哪个整点？")
+            return
+        slot = self._parse_hour_slot(" ".join(rest), now)
+        if slot is None:
+            self._sender.send_text(target, "时间看不懂喵")
+            return
+        if slot.date() != now.date():
+            self._sender.send_text(target, "只能重跑今天的整点喵")
+            return
+        if not (CAT_STOCK_OPEN_HOUR <= slot.hour <= CAT_STOCK_CLOSE_HOUR):
+            self._sender.send_text(target, "这个点没有整点行情喵")
+            return
+        if slot > now.replace(minute=0, second=0, microsecond=0):
+            self._sender.send_text(target, "这个整点还没到喵")
+            return
+        prev = self._rewind_to(slot)
+        if prev is None:
+            self._sender.send_text(target, "行情里没有可用的记录喵")
+            return
+        self._sender.send_text(target, f"已重跑 {slot.strftime('%m-%d %H:00')} 喵")
+        # 重跑要调 AI 生成新闻，放到后台线程里做，别卡住指令处理
+        threading.Thread(target=self._catch_up, args=(datetime.now(),), kwargs={"force": True},
+                         daemon=True).start()
 
     def _close_tick(self, now: datetime) -> None:
         """20:00 收盘：盘面不再变动，只发布当天的收盘新闻与盘点"""
@@ -5328,7 +5446,7 @@ class CatStockPlugin:
                 for bond in (market.get("bonds") or {}).values():
                     bond["prev_close"] = bond["price"]
                 market["day"] = today
-            # 旧存档可能没有 prev_close：当天也要补上一个基准，否则日线限价失效
+            # 旧存档可能没有 prev_close：当天也要补上一个基准，否则日线总涨跌失效
             for comp in companies.values():
                 comp.setdefault("prev_close", comp["price"])
             for bond in (market.get("bonds") or {}).values():
@@ -5420,7 +5538,7 @@ class CatStockPlugin:
             # 3.4) 全体参与者财富冷热：过热时收紧流动性，过冷时托底
             economy = self._economy_check(market, players, price_before)
 
-            # 3.5) 软限价：当日 -3% ~ +1%、当周 -15% ~ +5%，越界只做冷热回调
+            # 3.5) 指数级软限价：全市场加权总涨跌当日 -3% ~ +1%、当周 -15% ~ +5%
             #      当日涨跌互相抵消，隔日重新计算；经营崩坏仍可由交易所直接摘牌
             self._apply_price_limits(companies, price_before)
 
@@ -5591,76 +5709,56 @@ class CatStockPlugin:
             if pull:
                 comp["price"] = max(1.0, float(comp["price"]) * (1 + pull))
 
-    def _soft_pull(self, price: float, low: float, high: float) -> float:
-        """软限价：冲出涨跌带的价格每整点被拉回带边，越界幅度基本当场收回"""
-        if price > high:
-            return price - (price - high) * CAT_STOCK_SOFT_LIMIT_PULL
-        if price < low:
-            return price + (low - price) * CAT_STOCK_SOFT_LIMIT_PULL
-        return price
-
-    def _apply_daily_gain_budget(self, companies: dict, price_before: dict) -> None:
-        """全市场当日涨幅加总最多 1%：额度用完后，还想涨的股票只能由别人下跌来抵消"""
-        total = 0.0
+    @staticmethod
+    def _index_change(companies: dict, base_key: str) -> Optional[float]:
+        """按市值加权的全市场涨跌幅（相对 base_key 记下的基准价）"""
+        base_value = 0.0
+        now_value = 0.0
         for comp in companies.values():
-            base = float(comp.get("prev_close") or 0)
-            if base > 0:
-                total += float(comp["price"]) / base - 1
-        excess = total - CAT_STOCK_DAILY_GAIN_BUDGET
-        if excess <= 1e-9:
-            return
-        # 优先让本小时没涨的股票下跌来吸收额度，最多跌到当日下沿
-        quiet = [comp for comp in companies.values()
-                 if float(comp["price"]) <= float(
-                     price_before.get(comp["code"], comp["price"]))]
-        for _ in range(6):
-            if excess <= 1e-9 or not quiet:
-                break
-            share = excess / len(quiet)
-            progressed = False
-            for comp in quiet:
-                base = float(comp.get("prev_close") or 0)
-                if base <= 0:
-                    continue
-                pct = float(comp["price"]) / base - 1
-                drop = min(share, max(0.0, pct + CAT_STOCK_DAILY_DOWN))
-                if drop <= 1e-9:
-                    continue
-                comp["price"] = max(1.0, float(comp["price"]) * (1 - drop))
-                excess -= drop
-                progressed = True
-            if not progressed:
-                break
-        if excess <= 1e-9:
-            return
-        # 全员都在涨、没人能分摊：剩余额度从涨幅最大的股票里扣
-        gainers = sorted(
-            (comp for comp in companies.values()
-             if float(comp["price"]) > float(price_before.get(comp["code"], 0))),
-            key=lambda c: float(c["price"]), reverse=True)
-        if gainers:
-            share = excess / len(gainers)
-            for comp in gainers:
-                comp["price"] = max(1.0, float(comp["price"]) * (1 - share))
+            weight = float(comp.get("base") or 0)
+            base = float(comp.get(base_key) or comp.get("prev_close")
+                         or comp.get("price") or 0)
+            price = float(comp.get("price") or 0)
+            if weight <= 0 or base <= 0 or price <= 0:
+                continue
+            base_value += base * weight
+            now_value += price * weight
+        if base_value <= 0:
+            return None
+        return now_value / base_value - 1
 
     def _apply_price_limits(self, companies: dict, price_before: dict) -> None:
-        """软限价：当日 -3% ~ +1%、当周 -15% ~ +5%，越界只做冷热回调，不硬性截断"""
-        for comp in companies.values():
+        """指数级软限价：全市场加权总涨跌单日限制在 -3% ~ +1%、单周 -15% ~ +5%；
+           个股另有涨跌停：单只相对昨收最多 +10% / -10%"""
+        alive = {}
+        for code, comp in companies.items():
             if comp.pop("limit_exempt", False):
                 # 时代翻页时整体重估的企业，当日 / 当周基准已同步重置，不参与本次回调
                 continue
-            before = float(price_before.get(comp["code"]) or comp["price"] or 1)
-            day_base = float(comp.get("prev_close") or before) or before
-            week_base = float(comp.get("week_open") or day_base) or day_base
-            price = float(comp.get("price"))
-            price = self._soft_pull(price,
-                                    day_base * (1 - CAT_STOCK_DAILY_DOWN),
-                                    day_base * (1 + CAT_STOCK_DAILY_UP))
-            price = self._soft_pull(price,
-                                    week_base * (1 - CAT_STOCK_WEEKLY_DOWN),
-                                    week_base * (1 + CAT_STOCK_WEEKLY_UP))
-            comp["price"] = max(1.0, price)
-        self._apply_daily_gain_budget(companies, price_before)
+            alive[code] = comp
+        for base_key, down, up in (
+                ("prev_close", CAT_STOCK_DAILY_DOWN, CAT_STOCK_DAILY_UP),
+                ("week_open", CAT_STOCK_WEEKLY_DOWN, CAT_STOCK_WEEKLY_UP)):
+            index = self._index_change(alive, base_key)
+            if index is None:
+                continue
+            if index > up:
+                adjust = index - up
+            elif index < -down:
+                adjust = index + down
+            else:
+                continue
+            # 越界部分由全市场按同一比例回调，涨得多的回吐多，别人也要跟着让一让
+            for comp in alive.values():
+                comp["price"] = max(1.0, float(comp["price"]) * (1 - adjust))
+        # 个股涨跌停：以昨收为基准，涨停 / 跌停各 10%
+        for comp in alive.values():
+            day_base = float(comp.get("prev_close") or comp.get("price") or 0)
+            if day_base <= 0:
+                continue
+            comp["price"] = max(day_base * (1 - CAT_STOCK_STOCK_DAILY_CAP),
+                                min(day_base * (1 + CAT_STOCK_STOCK_DAILY_CAP),
+                                    float(comp["price"])))
 
     def _big_holding_pressure(self, companies: dict, players: dict) -> List[dict]:
         """大额持仓可能被空头狙击：概率低、幅度有限，只影响一只股票"""
@@ -6621,7 +6719,8 @@ class CatStockPlugin:
             "如果上面有玩家资金动向，请至少有一条新闻写出资金面带来的具体后果"
             "（抢筹、跟风、空头狙击、逼空或大户撤退），但不要机械地按持仓数字编涨跌。"
             "涨跌可以有戏剧性，但必须有因果依据；"
-            "交易所只挂当日与当周的软限价，越界后会被冷热回调慢慢拉回，"
+            "交易所只盯全市场按市值加权的总涨跌（单日 -3% ~ +1%、单周 -15% ~ +5%），"
+            "个股本身可以大涨大跌，只要大盘不越界；越界时全体一起回调，"
             "所以可以写出大起大落，但不要所有股票同涨同跌。"
             "同行业的企业会互相争抢客源，请时不时写一写同行竞争"
             "（抢单、降价、挖人、仿制、渠道争夺），让同行业的股票走出强弱分化。"

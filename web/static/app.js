@@ -3809,8 +3809,10 @@ function renderStock(data) {
   stockWalletEl.innerHTML = [
     ['猫薄荷', stockMoney(p.catnip)],
     ['猫眼石', stockMoney(p.stone)],
+    ['总资产', stockMoney(Math.round(p.total_assets || 0))],
     ['持仓市值', stockMoney(Math.round(p.total_value || 0))],
-    ['总浮动', `${Number(p.total_pnl || 0) >= 0 ? '+' : ''}${stockMoney(p.total_pnl)}`],
+    ['总盈利', `${Number(p.total_pnl || 0) >= 0 ? '+' : ''}${stockMoney(p.total_pnl)}`],
+    ['今日盈亏', `${Number(p.day_pnl || 0) >= 0 ? '+' : ''}${stockMoney(p.day_pnl)}`],
   ].map(([label, val]) => `
     <div class="stat"><div class="stat-num">${esc(val)}</div><div class="stat-label">${label}</div></div>`).join('');
 
@@ -3911,7 +3913,8 @@ function renderStock(data) {
   renderStockWars(data);
 
   stockHoldSubEl.textContent =
-    `总市值 ${stockMoney(Math.round(p.total_value || 0))}｜总浮动 ${stockMoney(p.total_pnl)}`;
+    `总资产 ${stockMoney(Math.round(p.total_assets || 0))}｜总盈利 ${stockMoney(p.total_pnl)}`
+    + `｜今日盈亏 ${Number(p.day_pnl || 0) >= 0 ? '+' : ''}${stockMoney(p.day_pnl)}`;
 
   if (!holdings.length) {
     stockHoldingsEl.innerHTML = '<p class="room-empty">当前空仓喵，先去大盘挑一只吧</p>';

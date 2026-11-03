@@ -107,6 +107,9 @@ CAT_STOCK_COMPANY_GROWTH = 2         # 每个时代额外增加的企业数量
 CAT_STOCK_AI_ACTION_CHANCE = 0.25    # 无外部设定时，AI 推动上市/摘牌被采纳的概率
 CAT_STOCK_NEWS_TICK_MIN = 4          # 每个整点最少生成几条新闻
 CAT_STOCK_NEWS_TICK_MAX = 8          # 每个整点最多生成几条新闻
+CAT_STOCK_NEWS_IMPORTANT_MAX = 1     # 每个整点最多几条重要事件
+CAT_STOCK_NEWS_CALM_PCT = 0.05       # 平缓事件的股价影响上限
+CAT_STOCK_NEWS_FUN_MAX = 4           # 每个整点最多几条纯娱乐新闻（无 effects）
 CAT_STOCK_HISTORY_KEEP = 96          # 每只股票保留多少个整点的价格记录
 CAT_STOCK_HISTORY_SHOW = 48          # 网页端展示最近多少个整点的走势
 CAT_STOCK_WORLD_BIAS = 0.03          # 局势设定对全盘每整点的收紧/抬升力度
@@ -2489,11 +2492,20 @@ class CatStockPlugin:
             bond_lots = {k: list(v) for k, v in st.get("bonds", {}).items()}
             shorts = [dict(s) for s in (st.get("shorts") or [])]
             pending = [dict(o) for o in (st.get("pending_orders") or [])]
+            today = datetime.now().strftime("%Y-%m-%d")
+            day_asset = st.get("day_asset")
+            if not isinstance(day_asset, dict) or day_asset.get("day") != today:
+                day_asset = {"day": today,
+                             "value": round(self._assets_of(
+                                 st, market["companies"], market.get("bonds") or {}), 0)}
+                st["day_asset"] = day_asset
             self._save_stock_players(players)
 
         lines = [f"【喵股市 · 我的持仓】{self._market_status_line()}"]
         lines.append(f"猫薄荷：{catnip}｜约合猫眼石：{catnip // CAT_STOCK_CATNIP_TO_STONE}（提现 105:1）")
         if not holdings and not bond_lots and not shorts and not pending:
+            day_pnl = catnip - float(day_asset.get("value") or 0)
+            lines.append(f"总资产：{catnip}｜今日盈亏：{day_pnl:+.0f}")
             lines.append("当前空仓，也没有在押的空头")
             self._sender.send_text(target, "\n".join(lines))
             return
@@ -2563,7 +2575,10 @@ class CatStockPlugin:
                 lines.append(f"  {item.get('code', '')} {item.get('name', '')} "
                              f"{int(item.get('shares', 0) or 0)} 股{kind}")
             lines.append("")
-        lines.append(f"总市值：{total_value:.0f}｜总浮动：{total_pnl:+.0f}｜猫薄荷：{catnip}")
+        assets = self._assets_of(st, market["companies"], market.get("bonds") or {})
+        day_pnl = assets - float(day_asset.get("value") or 0)
+        lines.append(f"总资产：{assets:.0f}｜今日盈亏：{day_pnl:+.0f}"
+                     f"｜总市值：{total_value:.0f}｜总浮动：{total_pnl:+.0f}｜猫薄荷：{catnip}")
         lines.append("（当天买入的股份要到第二天才能卖出，当天开的空单要到第二天才能平空）")
         self._sender.send_text(target, "\n".join(lines))
 
@@ -5004,6 +5019,25 @@ class CatStockPlugin:
             data["portfolio"] = self._portfolio_view(qq, companies, bonds)
         return data
 
+    def _assets_of(self, st: dict, companies: dict, bonds: dict) -> float:
+        """玩家总资产：猫薄荷 + 持仓市值 + 国债市值 + 空头保证金与浮盈"""
+        total = float(st.get("catnip", 0) or 0)
+        for code, lots in (st.get("holdings") or {}).items():
+            comp = companies.get(code)
+            if comp:
+                total += self._shares_of(lots) * float(comp["price"])
+        for country, lots in (st.get("bonds") or {}).items():
+            bond = bonds.get(country)
+            if bond:
+                total += self._shares_of(lots) * float(bond["price"])
+        for short in st.get("shorts") or []:
+            comp = companies.get(short.get("code"))
+            entry = float(short.get("entry", 0) or 0)
+            shares = int(short.get("shares", 0) or 0)
+            price = float(comp["price"]) if comp else entry
+            total += float(short.get("margin", 0) or 0) + (entry - price) * shares
+        return total
+
     def _portfolio_view(self, qq: int, companies: dict, bonds: Optional[dict] = None) -> dict:
         """某个玩家的持仓明细（含可卖 / 锁定股数）"""
         bonds = bonds or {}
@@ -5015,6 +5049,12 @@ class CatStockPlugin:
             raw_bonds = {c: list(lots) for c, lots in st.get("bonds", {}).items()}
             raw_shorts = [dict(s) for s in (st.get("shorts") or [])]
             raw_pending = [dict(o) for o in (st.get("pending_orders") or [])]
+            today = datetime.now().strftime("%Y-%m-%d")
+            day_asset = st.get("day_asset")
+            if not isinstance(day_asset, dict) or day_asset.get("day") != today:
+                day_asset = {"day": today,
+                             "value": round(self._assets_of(st, companies, bonds), 0)}
+                st["day_asset"] = day_asset
             self._save_stock_players(players)
 
         rows = []
@@ -5140,6 +5180,8 @@ class CatStockPlugin:
             "short_pnl": round(total_short_pnl, 0),
             "total_value": round(total_value, 0),
             "total_pnl": round(total_value - total_cost, 0),
+            "total_assets": round(catnip + total_value, 0),
+            "day_pnl": round(catnip + total_value - float(day_asset.get("value") or 0), 0),
         }
 
     # ==================== 帮助 ====================
@@ -5445,6 +5487,13 @@ class CatStockPlugin:
                     comp["prev_close"] = comp["price"]
                 for bond in (market.get("bonds") or {}).values():
                     bond["prev_close"] = bond["price"]
+                # 同时给每位玩家记下开盘总资产，用于网页端今日盈亏
+                for st in players.values():
+                    st["day_asset"] = {
+                        "day": today,
+                        "value": round(self._assets_of(
+                            st, companies, market.get("bonds") or {}), 0),
+                    }
                 market["day"] = today
             # 旧存档可能没有 prev_close：当天也要补上一个基准，否则日线总涨跌失效
             for comp in companies.values():
@@ -6705,14 +6754,18 @@ class CatStockPlugin:
             + recent_block + world_block + state_block + era_block + flow_block
             + self._geography_prompt() +
             f"\n\n请生成 {CAT_STOCK_NEWS_TICK_MIN}~{CAT_STOCK_NEWS_TICK_MAX} 条本小时的世界新闻，"
-            "不要写成十几条，也不要只有一条。新闻要有长有短：既有影响盘面的重头消息，"
-            "也有交易所里流传的短讯、传闻、人物动向，读起来像一整个热闹的新闻流。"
+            "不要写成十几条，也不要只有一条。每条新闻都要带 level，取值为「娱乐」「平缓」「重要」。"
+            "数量分配：约一半是「娱乐」，只写人物动向、节庆、奇闻、传闻，不给 effects，负责让新闻流热闹；"
+            "约四分之一是「平缓」，有 effects 但幅度很小，pct 控制在 ±0.05 以内；"
+            "「重要」最多 1 条，只有真正改变行业格局、战争灾变、政策转向这类事件才算，"
+            "大多数整点可以完全没有重要事件。"
+            "同一家公司一天最多当一次重要事件的主角，不要每小时都写转折、暴雷、暴涨暴跌；"
+            "娱乐与平缓新闻不必都扯到具体公司，重要新闻才必须给出能由它解释的明确股价影响。"
             "事件类型必须丰富：这一小时可以夹杂意外、灾祸、奇遇、丑闻、发现、节庆、"
             "迁徙、骗局、魔物、宫廷秘闻、技术尝试等不同性质的事件，"
             "不要连续几小时重复同一种灾祸或同一种战争，也不要套用固定模板。"
             f"本小时可以借用这些灵感方向：{'、'.join(sparks)}；只是灵感，不必全部使用，"
             "更不要写成千篇一律的模板。"
-            "其中至少一半的新闻必须与股市直接相关，并给出能由这条新闻解释的股价影响。"
             "新闻要参考企业最近的走势和前面的新闻，保持事件连续性，"
             "但具体事件如何发展完全由你自由创作，不要套用固定剧情或固定行业对应关系，"
             "也不要每小时都凭空另起炉灶。"
@@ -6745,13 +6798,14 @@ class CatStockPlugin:
             "新闻里可以在合适的时候顺手提到他们（比如某位大师接了大单、某位名人现身商会），"
             "但不必强行出场，也不必每条新闻都提到。\n"
             "只输出一个 JSON 对象，不要解释，格式：\n"
-            '{"news":[{"title":"新闻标题","detail":"一句话详情",'
+            '{"news":[{"title":"新闻标题","detail":"一句话详情","level":"娱乐/平缓/重要",'
             '"effects":[{"code":"股票代码","pct":0.15},{"country":"国家代码","pct":-0.1}]}],'
             '"world":{"story":"世界发展脉络（150字以内，在原有基础上延续推进，不要重写世界观）",'
             '"arc":"当前世界局势主线（一句话）",'
             '"relations":[{"a":"国家代码","b":"国家代码","state":"同盟/敌对/贸易往来/边境摩擦"}]}}\n'
-            "pct 是小数涨跌幅，范围 -0.35 ~ 0.25（局势设定直接引发的重大事件可到 ±0.35），"
-            "正数为涨；code 和 country 二选一；每条新闻给 1~2 条 effects。"
+            "pct 是小数涨跌幅，平缓事件 -0.05 ~ 0.05，重要事件 0.10 ~ 0.35"
+            "（局势设定直接引发的重大事件可到 ±0.35），正数为涨；code 和 country 二选一；"
+            "每条有 effects 的新闻给 1~2 条 effects。"
             "没有明确的全局利好或全局利空时，本小时 effects 的正负数量与总幅度要大致平衡，"
             "利空和利好各占一半左右，不要默认把新闻写成上涨。"
             "world 是可选的：如果本小时故事有推进，就给出更新后的世界发展脉络"
@@ -6817,8 +6871,49 @@ class CatStockPlugin:
                 return True
             return any(self._country_name(c) == country for c in country_codes)
 
-        news = []
-        effects = []
+        name_to_code = {c["name"]: c["code"] for c in companies.values()}
+
+        def _eff_code(eff) -> str:
+            code = str(eff.get("code") or "").strip().upper()
+            if not code:
+                return ""
+            if code not in codes:
+                code = name_to_code.get(str(eff.get("code")).strip(), "")
+            return code
+
+        def _peak_pct(effects_list) -> float:
+            peak = 0.0
+            for eff in effects_list:
+                pct = abs(float(eff.get("pct", 0) or 0))
+                if pct > 1:
+                    pct /= 100.0
+                peak = max(peak, pct)
+            return peak
+
+        def _level_of(raw, effects_list) -> str:
+            text = str(raw or "").strip()
+            if text in ("娱乐", "平缓", "重要"):
+                return text
+            lower = text.lower()
+            if lower in ("important", "major", "big"):
+                return "重要"
+            if lower in ("calm", "minor", "normal"):
+                return "平缓"
+            if lower in ("fun", "flavor", "entertainment"):
+                return "娱乐"
+            if not effects_list:
+                return "娱乐"
+            return "重要" if _peak_pct(effects_list) >= 0.10 else "平缓"
+
+        def _calm(effects_list) -> None:
+            for eff in effects_list:
+                pct = float(eff.get("pct", 0) or 0)
+                if abs(pct) > 1:
+                    pct /= 100.0
+                eff["pct"] = max(-CAT_STOCK_NEWS_CALM_PCT,
+                                 min(CAT_STOCK_NEWS_CALM_PCT, pct))
+
+        records = []
         flavor_count = 0
         for item in data.get("news") or []:
             if not isinstance(item, dict):
@@ -6829,17 +6924,49 @@ class CatStockPlugin:
             entry = {"title": title[:60],
                      "detail": str(item.get("detail") or "").strip()[:120]}
             item_effects = [e for e in item.get("effects") or [] if _valid(e)]
+            level = _level_of(item.get("level"), item_effects)
             if not item_effects:
-                # 没有股价影响的短讯最多留 3 条，用来丰富新闻流气氛
-                if flavor_count >= 3:
+                level = "娱乐"
+                # 纯娱乐短讯最多留几条，用来丰富新闻流气氛
+                if flavor_count >= CAT_STOCK_NEWS_FUN_MAX:
                     continue
                 flavor_count += 1
-                news.append(entry)
-            else:
-                news.append(entry)
-                effects.extend(item_effects)
-            if len(news) >= CAT_STOCK_NEWS_TICK_MAX:
+            elif level == "娱乐":
+                level = "平缓"
+            if level == "平缓":
+                _calm(item_effects)
+            records.append({
+                "entry": entry,
+                "level": level,
+                "effects": item_effects,
+                "codes": [c for c in (_eff_code(e) for e in item_effects) if c],
+            })
+            if len(records) >= CAT_STOCK_NEWS_TICK_MAX:
                 break
+
+        # 重要事件限量：每小时最多一条，同一家公司一天最多当一次主角；
+        # 有局势设定时以设定为主轴，不做降级
+        today_key = now.strftime("%m-%d")
+        important_dates = {
+            str(k): str(v) for k, v in (market.get("important_events") or {}).items()}
+        important_dates = {k: v for k, v in important_dates.items() if v == today_key}
+        important_used = 0
+        for rec in sorted(records, key=lambda r: -_peak_pct(r["effects"])):
+            if rec["level"] != "重要" or world:
+                continue
+            if (important_used >= CAT_STOCK_NEWS_IMPORTANT_MAX
+                    or any(important_dates.get(code) == today_key
+                           for code in rec["codes"])):
+                rec["level"] = "平缓"
+                _calm(rec["effects"])
+                continue
+            important_used += 1
+            for code in rec["codes"]:
+                important_dates[code] = today_key
+        market["important_events"] = important_dates
+
+        news = [rec["entry"] for rec in records]
+        effects = [e for rec in records for e in rec["effects"]]
 
         # 兼容模型把 effects 放在顶层的写法
         if not news:

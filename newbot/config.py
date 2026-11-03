@@ -79,6 +79,12 @@ class Config:
     # ==================== 喵股市 ====================
     STOCK_NEWS_GROUP = 1011679851   # 喵股市整点快报推送群
 
+    # ==================== B 站开播提醒 ====================
+    # 真实值请写进 config_local.py（该文件不入库），模板见 config.example.py
+    BILIBILI_LIVE_NOTIFY_QQ = 2544910201   # 开播/下播私聊发往这个 QQ
+    BILIBILI_LIVE_ROOMS = []               # 要盯的直播间号（房间号，不是 UID）
+    BILIBILI_LIVE_POLL_SECONDS = 60        # 轮询间隔（秒）
+
     # ==================== 锦标赛 ====================
     # 锦标赛管理员：默认管理员都能开出带奖励的锦标赛并强制结束
     TOURNAMENT_ADMIN_QQ = 2544910201  # 兼容旧字段，实际权限以 is_admin 为准

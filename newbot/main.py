@@ -24,6 +24,7 @@ from plugins.farkle import FarklePlugin
 from plugins.tournament import TournamentPlugin
 from plugins.cat_stock import CatStockPlugin
 from plugins.red_packet import RedPacketPlugin
+from plugins.bilibili_live import BilibiliLivePlugin
 
 # AI 自动回复读取的群聊上下文条数
 GROUP_CHAT_CONTEXT_LEN = 20
@@ -101,6 +102,10 @@ class Bot:
         # 喵红包（鱼干 / 猫眼石 / 猫薄荷，猫薄荷走股市账本且不影响盈亏排行）
         self._red_packet = RedPacketPlugin(self._sender, cat_game, self._stock)
         self._red_packet.register(self._router)
+
+        # B 站开播 / 下播提醒（私聊通知固定 QQ）
+        self._bili_live = BilibiliLivePlugin(self._sender)
+        self._bili_live.register(self._router)
 
         # 何切阿瓦隆问答插件
         self._avalon = AvalonQuizPlugin(self._sender)

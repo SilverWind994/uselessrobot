@@ -942,4 +942,59 @@ code { background: #120f0d; border: 1px solid var(--line); border-radius: 6px; p
   .stock-era-paths { gap: 8px; }
 }
 
+/* ==================== 意见栏 ==================== */
+
+.feedback-text {
+  width: 100%;
+  min-height: 96px;
+  resize: vertical;
+  padding: 11px 13px;
+  background: #100d0b;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  color: var(--text);
+  font-size: 15px;
+  font-family: inherit;
+  line-height: 1.6;
+}
+.feedback-text:focus { outline: none; border-color: var(--gold); }
+.feedback-text::placeholder { color: #6d6357; }
+
+.feedback-list { display: flex; flex-direction: column; gap: 10px; }
+.feedback-item {
+  padding: 12px 14px;
+  background: #120f0d;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.feedback-item.is-mine { border-color: var(--gold); }
+.feedback-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.feedback-nick { font-weight: 700; }
+.feedback-time { color: var(--text-dim); font-size: 12px; }
+.feedback-status {
+  margin-left: auto;
+  padding: 2px 9px;
+  border: 1px solid var(--line);
+  border-radius: 99px;
+  font-size: 12px;
+}
+.feedback-status.is-pending { color: var(--text-dim); }
+.feedback-status.is-approved { color: var(--gold); border-color: var(--gold); }
+.feedback-status.is-rejected { color: var(--danger); border-color: var(--danger); }
+.feedback-body { margin-top: 8px; white-space: pre-wrap; word-break: break-word; }
+.feedback-reply {
+  margin-top: 8px;
+  padding: 8px 10px;
+  background: #171310;
+  border-left: 3px solid var(--gold);
+  border-radius: 6px;
+  font-size: 14px;
+  color: var(--text-dim);
+}
+.feedback-reply b { color: var(--gold); font-weight: 600; }
+.feedback-admin-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
+.feedback-admin-row .btn { width: auto; }
+.feedback-btn.is-on { color: var(--gold); border-color: var(--gold); }
+.feedback-reply-input { flex: 1; min-width: 160px; }
+
 

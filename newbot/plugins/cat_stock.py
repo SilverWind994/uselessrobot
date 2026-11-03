@@ -4904,7 +4904,7 @@ class CatStockPlugin:
             value = float(economy.get(key, 0) or 0)
             chunks.append(f"{label} {value:,.0f}（{value / wealth:.0%}）"
                           if wealth else f"{label} {value:,.0f}")
-        lines.append("构成：" + "｜".join(chunks))
+        lines.append("玩家财富构成：" + "｜".join(chunks))
         lines.append(
             f"单小时变动 {float(economy.get('hour_change', 0) or 0):+.2%}"
             f"（参与比对 {int(economy.get('shared_active', 0))} 个账户）｜"

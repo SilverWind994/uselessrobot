@@ -2674,7 +2674,8 @@ wireChat('gold', '/api/mahjong_gold/say', () => goldCode, goldMsg);
 // ==================== 顶部导航（喵喵远征队 / 小游戏 / 个人 / 开发中 / 管理） ====================
 
 const mainNav = document.getElementById('main-nav');
-const TAB_NAMES = ['expedition', 'games', 'stock', 'tournament', 'ucml', 'profile', 'dev', 'admin'];
+const TAB_NAMES = ['expedition', 'games', 'stock', 'feedback',
+  'tournament', 'ucml', 'profile', 'dev', 'admin'];
 let currentTab = 'expedition';
 
 function showTabNav() {
@@ -2717,6 +2718,7 @@ function switchTab(name) {
   else stopTournamentPolling();
   if (name === 'expedition') switchSub(currentSub);
   if (name === 'stock') loadStock();
+  if (name === 'feedback') loadFeedback();
   if (name === 'ucml') loadUcml();
   if (name === 'profile') loadProfile();
 }
@@ -4659,3 +4661,126 @@ stockMeetingOptionsEl.addEventListener('click', (e) => {
 stockMeetingFinishEl.addEventListener('click', () => stockMeetingAct('/api/stock/meeting/finish', {}, '请书记员收尾'));
 document.getElementById('stock-meeting-close').addEventListener('click', closeStockMeeting);
 document.getElementById('stock-meeting-mask').addEventListener('click', closeStockMeeting);
+
+// ==================== 意见栏 ====================
+
+const feedbackFormEl = document.getElementById('feedback-form');
+const feedbackInputEl = document.getElementById('feedback-input');
+const feedbackMsgEl = document.getElementById('feedback-msg');
+const feedbackListEl = document.getElementById('feedback-list');
+let feedbackAdmin = false;
+
+const FEEDBACK_STATUS = {
+  pending: { label: '待处理', cls: 'is-pending' },
+  approved: { label: '已采纳', cls: 'is-approved' },
+  rejected: { label: '未采纳', cls: 'is-rejected' },
+};
+
+function feedbackTime(ts) {
+  if (!ts) return '';
+  const d = new Date(ts * 1000);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} `
+    + `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+async function loadFeedback() {
+  if (!feedbackListEl) return;
+  feedbackListEl.innerHTML = '<p class="room-empty">加载中…</p>';
+  const { status, data } = await api('/api/feedback');
+  if (status === 401) { showLogin(); return; }
+  if (status !== 200 || !data.ok) {
+    feedbackListEl.innerHTML = '<p class="room-empty">留言加载失败喵</p>';
+    return;
+  }
+  feedbackAdmin = !!data.is_admin;
+  renderFeedback(data.items || []);
+}
+
+function renderFeedback(items) {
+  if (!items.length) {
+    feedbackListEl.innerHTML = '<p class="room-empty">还没有留言，来做第一个提意见的喵～</p>';
+    return;
+  }
+  feedbackListEl.innerHTML = items.map((item) => {
+    const meta = FEEDBACK_STATUS[item.status] || FEEDBACK_STATUS.pending;
+    const adminBox = feedbackAdmin ? `
+      <div class="feedback-admin-row">
+        <button class="btn btn-ghost feedback-btn${item.status === 'approved' ? ' is-on' : ''}"
+                data-fb-status="approved" data-fb-id="${item.id}" type="button">✓ 采纳</button>
+        <button class="btn btn-ghost feedback-btn${item.status === 'rejected' ? ' is-on' : ''}"
+                data-fb-status="rejected" data-fb-id="${item.id}" type="button">✗ 拒绝</button>
+        <input class="feedback-reply-input" data-fb-reply-input="${item.id}" maxlength="300"
+               placeholder="回复内容（可留空）" value="${esc(item.reply)}">
+        <button class="btn btn-ghost" data-fb-reply="${item.id}" type="button">回复</button>
+      </div>` : '';
+    return `
+      <div class="feedback-item${item.is_mine ? ' is-mine' : ''}">
+        <div class="feedback-head">
+          <span class="feedback-nick">${esc(item.nick)}${item.is_mine ? ' · 你' : ''}</span>
+          <span class="feedback-time">${feedbackTime(item.ts)}</span>
+          <span class="feedback-status ${meta.cls}">${meta.label}</span>
+        </div>
+        <div class="feedback-body">${esc(item.text)}</div>
+        ${item.reply
+          ? `<div class="feedback-reply"><b>管理员回复：</b>${esc(item.reply)}</div>` : ''}
+        ${adminBox}
+      </div>`;
+  }).join('');
+}
+
+async function reviewFeedback(id, nextStatus, reply) {
+  const payload = { id };
+  if (nextStatus) payload.status = nextStatus;
+  if (reply !== null) payload.reply = reply;
+  const { status, data } = await api('/api/feedback/review', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (status === 200 && data.ok) {
+    loadFeedback();
+  } else {
+    feedbackMsgEl.classList.remove('ok');
+    feedbackMsgEl.textContent = data.msg || '处理失败喵';
+  }
+}
+
+feedbackFormEl.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const text = feedbackInputEl.value.trim();
+  if (!text) {
+    feedbackMsgEl.classList.remove('ok');
+    feedbackMsgEl.textContent = '留言不能是空的喵';
+    return;
+  }
+  feedbackMsgEl.textContent = '提交中…';
+  const { status, data } = await api('/api/feedback', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text }),
+  });
+  if (status === 200 && data.ok) {
+    feedbackInputEl.value = '';
+    feedbackMsgEl.classList.add('ok');
+    feedbackMsgEl.textContent = '留言已提交喵';
+    loadFeedback();
+  } else {
+    feedbackMsgEl.classList.remove('ok');
+    feedbackMsgEl.textContent = data.msg || '提交失败喵';
+  }
+});
+
+feedbackListEl.addEventListener('click', (event) => {
+  const statusBtn = event.target.closest('[data-fb-status]');
+  if (statusBtn) {
+    reviewFeedback(Number(statusBtn.dataset.fbId), statusBtn.dataset.fbStatus, null);
+    return;
+  }
+  const replyBtn = event.target.closest('[data-fb-reply]');
+  if (replyBtn) {
+    const id = Number(replyBtn.dataset.fbReply);
+    const input = feedbackListEl.querySelector(`[data-fb-reply-input="${id}"]`);
+    reviewFeedback(id, null, input ? input.value.trim() : '');
+  }
+});

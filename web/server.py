@@ -11,6 +11,8 @@ import json
 import mimetypes
 import os
 import sys
+import threading
+import time
 
 mimetypes.add_type("image/webp", ".webp")  # Windows 注册表可能缺 webp 映射
 
@@ -1337,3 +1339,126 @@ def stock_meeting_finish(payload: dict, cat_token: str = Cookie(default="")) -> 
     if qq is None:
         return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
     return _meeting_response(stock_web.meeting_finish(qq, payload.get("code")), qq)
+
+
+# ==================== 意见栏 ====================
+
+_FEEDBACK_PATH = os.path.join(_NEWBOT_DIR, "assets", "feedback.json")
+_FEEDBACK_MAX = 300          # 最多保留多少条留言
+_FEEDBACK_TEXT_MAX = 500
+_FEEDBACK_REPLY_MAX = 300
+_FEEDBACK_COOLDOWN = 15      # 同一账号两次留言的最小间隔（秒）
+_FEEDBACK_LOCK = threading.Lock()
+
+
+def _load_feedback() -> list:
+    if not os.path.exists(_FEEDBACK_PATH):
+        return []
+    try:
+        with open(_FEEDBACK_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return []
+    return data if isinstance(data, list) else []
+
+
+def _save_feedback(items: list) -> None:
+    os.makedirs(os.path.dirname(_FEEDBACK_PATH), exist_ok=True)
+    tmp = _FEEDBACK_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(items[-_FEEDBACK_MAX:], f, ensure_ascii=False, indent=2)
+    os.replace(tmp, _FEEDBACK_PATH)
+
+
+def _feedback_view(item: dict, qq: int, is_admin: bool) -> dict:
+    """留言对外结构：普通玩家看不到别人的 QQ"""
+    view = {
+        "id": int(item.get("id", 0) or 0),
+        "nick": item.get("nick") or "无名喵",
+        "text": item.get("text", ""),
+        "ts": float(item.get("ts", 0) or 0),
+        "status": item.get("status") or "pending",
+        "reply": item.get("reply", ""),
+        "reply_ts": float(item.get("reply_ts", 0) or 0),
+        "is_mine": int(item.get("qq", 0) or 0) == qq,
+    }
+    if is_admin:
+        view["qq"] = int(item.get("qq", 0) or 0)
+    return view
+
+
+@app.get("/api/feedback")
+def feedback_list(cat_token: str = Cookie(default="")) -> JSONResponse:
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    is_admin = Config.is_admin(qq)
+    items = _load_feedback()
+    views = [_feedback_view(item, qq, is_admin) for item in items]
+    views.reverse()
+    return JSONResponse({"ok": True, "items": views, "qq": qq, "is_admin": is_admin})
+
+
+@app.post("/api/feedback")
+def feedback_add(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    text = str(payload.get("text", "")).strip()
+    if not text:
+        return JSONResponse({"ok": False, "msg": "留言不能是空的喵"}, status_code=400)
+    if len(text) > _FEEDBACK_TEXT_MAX:
+        return JSONResponse(
+            {"ok": False, "msg": f"留言最多 {_FEEDBACK_TEXT_MAX} 字喵"}, status_code=400)
+    with _FEEDBACK_LOCK:
+        items = _load_feedback()
+        now = time.time()
+        for item in items:
+            if int(item.get("qq", 0) or 0) == qq \
+                    and now - float(item.get("ts", 0) or 0) < _FEEDBACK_COOLDOWN:
+                return JSONResponse(
+                    {"ok": False, "msg": "留言太快了，稍等几秒再发喵"}, status_code=429)
+        entry = {
+            "id": max([int(i.get("id", 0) or 0) for i in items] + [0]) + 1,
+            "qq": qq, "nick": _nick_of(qq), "text": text, "ts": now,
+            "status": "pending", "reply": "", "reply_ts": 0,
+        }
+        items.append(entry)
+        _save_feedback(items)
+    return JSONResponse({"ok": True, "item": _feedback_view(entry, qq, Config.is_admin(qq))})
+
+
+@app.post("/api/feedback/review")
+def feedback_review(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    if not Config.is_admin(qq):
+        return JSONResponse({"ok": False, "msg": "只有管理员能处理留言喵"}, status_code=403)
+    try:
+        fid = int(payload.get("id"))
+    except (TypeError, ValueError):
+        return JSONResponse({"ok": False, "msg": "留言编号不对喵"}, status_code=400)
+    status = str(payload.get("status") or "").strip()
+    if status and status not in ("pending", "approved", "rejected"):
+        return JSONResponse({"ok": False, "msg": "状态只能是 pending/approved/rejected"}, status_code=400)
+    reply = str(payload.get("reply") or "").strip()
+    if len(reply) > _FEEDBACK_REPLY_MAX:
+        return JSONResponse(
+            {"ok": False, "msg": f"回复最多 {_FEEDBACK_REPLY_MAX} 字喵"}, status_code=400)
+    with _FEEDBACK_LOCK:
+        items = _load_feedback()
+        target = None
+        for item in items:
+            if int(item.get("id", 0) or 0) == fid:
+                target = item
+                break
+        if target is None:
+            return JSONResponse({"ok": False, "msg": "找不到这条留言喵"}, status_code=404)
+        if status:
+            target["status"] = status
+        if reply or "reply" in payload:
+            target["reply"] = reply
+            target["reply_ts"] = time.time() if reply else 0
+        _save_feedback(items)
+    return JSONResponse({"ok": True, "item": _feedback_view(target, qq, True)})

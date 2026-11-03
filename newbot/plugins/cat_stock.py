@@ -77,8 +77,12 @@ CAT_STOCK_BOND_MIN_SHARES = 100      # 单笔最少买卖多少张国债
 CAT_STOCK_BOND_INFLUENCE_SHARES = 10000  # 持有多少张国债可以影响国家发展方针
 CAT_STOCK_BOND_NOISE = 0.003         # 国债每整点基础波动（远小于股票）
 CAT_STOCK_BOND_POLICY_MAX_LEN = 100  # 国家发展方针文本最大长度
-CAT_STOCK_HOURLY_CAP = 0.02          # 每小时最多相对上一整点浮动 2%
-CAT_STOCK_DAILY_CAP = 0.10           # 当日累计涨跌幅上限（多空可互相抵消）
+CAT_STOCK_DAILY_UP = 0.01            # 当日软限价上沿：比昨收最多高 1%
+CAT_STOCK_DAILY_DOWN = 0.03          # 当日软限价下沿：比昨收最多低 3%
+CAT_STOCK_WEEKLY_UP = 0.05           # 当周软限价上沿：比周开盘最多高 5%
+CAT_STOCK_WEEKLY_DOWN = 0.15         # 当周软限价下沿：比周开盘最多低 15%
+CAT_STOCK_SOFT_LIMIT_PULL = 0.99     # 冲出软限价带后每整点回拉的比例（近乎硬限）
+CAT_STOCK_DAILY_GAIN_BUDGET = 0.01   # 全市场当日涨幅加总上限：额度用完后想涨的股票得由别人下跌抵消
 CAT_STOCK_SMALL_HOLDING_MAX = 100    # 非重点持股公司的持股上限
 CAT_STOCK_MAJOR_COMPANIES_MAX = 2    # 最多深度持股几家公司
 CAT_STOCK_MEETING_MIN_SHARES = 100   # 可参与股东大会的最低持股
@@ -1600,6 +1604,7 @@ class CatStockPlugin:
             comp["price"] = round(max(1.0, min(
                 float(comp.get("price") or old_base) * boost, comp["base"] * 50)), 2)
             comp["prev_close"] = comp["price"]
+            comp["week_open"] = comp["price"]
             comp["bad_ticks"] = 0
             comp["momentum"] = 0.0
             comp["limit_exempt"] = True
@@ -4401,6 +4406,9 @@ class CatStockPlugin:
                 (st.get("holdings") or {}).get(code) or [])
         if total_shares > 0:
             comp["price"] = round(float(comp["price"]) + amount / total_shares, 2)
+            # 战利属于一次性重估，日线 / 周线基准同步抬高，下一整点不会又被限价收回去
+            comp["prev_close"] = comp["price"]
+            comp["week_open"] = comp["price"]
 
     def _war_settle(self, market: dict, players: dict, war: dict,
                     annex_side: str = "") -> List[dict]:
@@ -4973,8 +4981,11 @@ class CatStockPlugin:
                 "lock_note": "当天买入的股份要到第二天才能卖出",
                 "max_shares": CAT_STOCK_MAX_SHARES,
                 "delist_rate": CAT_STOCK_DELIST_RATE,
-                "hourly_cap": CAT_STOCK_HOURLY_CAP,
-                "daily_cap": CAT_STOCK_DAILY_CAP,
+                "daily_up": CAT_STOCK_DAILY_UP,
+                "daily_down": CAT_STOCK_DAILY_DOWN,
+                "weekly_up": CAT_STOCK_WEEKLY_UP,
+                "weekly_down": CAT_STOCK_WEEKLY_DOWN,
+                "daily_gain_budget": CAT_STOCK_DAILY_GAIN_BUDGET,
                 "small_holding_max": CAT_STOCK_SMALL_HOLDING_MAX,
                 "major_companies_max": CAT_STOCK_MAJOR_COMPANIES_MAX,
                 "meeting_min_shares": CAT_STOCK_MEETING_MIN_SHARES,
@@ -5156,8 +5167,10 @@ class CatStockPlugin:
             f"交易：买入与卖出各收 {CAT_STOCK_BUY_FEE:.0%} 手续费（每笔最低 1 猫薄荷）；"
             f"当天买入的股份要到第二天才能卖出；"
             f"单笔最多 {CAT_STOCK_MAX_SHARES} 股，不设最少购入限制。\n"
-            "行情：交易所给每只股票挂了限价牌，单小时只允许小幅挪动，"
-            "一整天涨跌互相抵消后也走不出太远，隔日重新起算；"
+            "行情：交易所挂的是软限价，不是硬性涨跌停——"
+            "单日最多涨 1%、最多跌 3%，单周最多涨 5%、最多跌 15%，越界基本当场被拉回带内；"
+            "而且全市场当日涨幅加总只有 1% 的额度，额度用完后还想让某只股票涨，就只能让别的股票跌，"
+            "隔日、隔周重新起算；"
             "但经营崩坏或遭遇意外的企业，可以直接被摘牌清盘，"
             "持仓按最新价的七成折算，摘牌企业也可能改日重新挂牌。\n"
             "持股：一位股东最多深度介入两家公司的经营，其他公司只允许保留一小把零散股份。\n"
@@ -5320,6 +5333,14 @@ class CatStockPlugin:
                 comp.setdefault("prev_close", comp["price"])
             for bond in (market.get("bonds") or {}).values():
                 bond.setdefault("prev_close", bond["price"])
+            # 每周一开盘重设周线基准，一周最多走出 ±15%
+            week_key = now.strftime("%G-%V")
+            if market.get("week") != week_key:
+                for comp in companies.values():
+                    comp["week_open"] = comp["price"]
+                market["week"] = week_key
+            for comp in companies.values():
+                comp.setdefault("week_open", comp["price"])
             price_before = {code: comp["price"] for code, comp in companies.items()}
 
             # 1) 基础波动：全市场共同情绪 + 国家共同情绪 + 个股随机扰动
@@ -5399,7 +5420,7 @@ class CatStockPlugin:
             # 3.4) 全体参与者财富冷热：过热时收紧流动性，过冷时托底
             economy = self._economy_check(market, players, price_before)
 
-            # 3.5) 交易所限价：单小时最多上下 2%，当日累计最多 ±10%
+            # 3.5) 软限价：当日 -3% ~ +1%、当周 -15% ~ +5%，越界只做冷热回调
             #      当日涨跌互相抵消，隔日重新计算；经营崩坏仍可由交易所直接摘牌
             self._apply_price_limits(companies, price_before)
 
@@ -5570,24 +5591,76 @@ class CatStockPlugin:
             if pull:
                 comp["price"] = max(1.0, float(comp["price"]) * (1 + pull))
 
+    def _soft_pull(self, price: float, low: float, high: float) -> float:
+        """软限价：冲出涨跌带的价格每整点被拉回带边，越界幅度基本当场收回"""
+        if price > high:
+            return price - (price - high) * CAT_STOCK_SOFT_LIMIT_PULL
+        if price < low:
+            return price + (low - price) * CAT_STOCK_SOFT_LIMIT_PULL
+        return price
+
+    def _apply_daily_gain_budget(self, companies: dict, price_before: dict) -> None:
+        """全市场当日涨幅加总最多 1%：额度用完后，还想涨的股票只能由别人下跌来抵消"""
+        total = 0.0
+        for comp in companies.values():
+            base = float(comp.get("prev_close") or 0)
+            if base > 0:
+                total += float(comp["price"]) / base - 1
+        excess = total - CAT_STOCK_DAILY_GAIN_BUDGET
+        if excess <= 1e-9:
+            return
+        # 优先让本小时没涨的股票下跌来吸收额度，最多跌到当日下沿
+        quiet = [comp for comp in companies.values()
+                 if float(comp["price"]) <= float(
+                     price_before.get(comp["code"], comp["price"]))]
+        for _ in range(6):
+            if excess <= 1e-9 or not quiet:
+                break
+            share = excess / len(quiet)
+            progressed = False
+            for comp in quiet:
+                base = float(comp.get("prev_close") or 0)
+                if base <= 0:
+                    continue
+                pct = float(comp["price"]) / base - 1
+                drop = min(share, max(0.0, pct + CAT_STOCK_DAILY_DOWN))
+                if drop <= 1e-9:
+                    continue
+                comp["price"] = max(1.0, float(comp["price"]) * (1 - drop))
+                excess -= drop
+                progressed = True
+            if not progressed:
+                break
+        if excess <= 1e-9:
+            return
+        # 全员都在涨、没人能分摊：剩余额度从涨幅最大的股票里扣
+        gainers = sorted(
+            (comp for comp in companies.values()
+             if float(comp["price"]) > float(price_before.get(comp["code"], 0))),
+            key=lambda c: float(c["price"]), reverse=True)
+        if gainers:
+            share = excess / len(gainers)
+            for comp in gainers:
+                comp["price"] = max(1.0, float(comp["price"]) * (1 - share))
+
     def _apply_price_limits(self, companies: dict, price_before: dict) -> None:
-        """交易所限价：单小时 ±2%，当日累计 ±10%，两个约束同时生效"""
+        """软限价：当日 -3% ~ +1%、当周 -15% ~ +5%，越界只做冷热回调，不硬性截断"""
         for comp in companies.values():
             if comp.pop("limit_exempt", False):
-                # 时代翻页时整体重估的企业，当日基准已同步重置，不参与本次限价
+                # 时代翻页时整体重估的企业，当日 / 当周基准已同步重置，不参与本次回调
                 continue
             before = float(price_before.get(comp["code"]) or comp["price"] or 1)
             day_base = float(comp.get("prev_close") or before) or before
-            low = max(before * (1 - CAT_STOCK_HOURLY_CAP),
-                      day_base * (1 - CAT_STOCK_DAILY_CAP))
-            high = min(before * (1 + CAT_STOCK_HOURLY_CAP),
-                       day_base * (1 + CAT_STOCK_DAILY_CAP))
-            if low > high:
-                # 旧数据/干预导致昨收偏离太多：优先守住当日 ±10%
-                day_low = day_base * (1 - CAT_STOCK_DAILY_CAP)
-                day_high = day_base * (1 + CAT_STOCK_DAILY_CAP)
-                low = high = day_high if before >= day_base else day_low
-            comp["price"] = max(1.0, min(max(float(comp["price"]), low), high))
+            week_base = float(comp.get("week_open") or day_base) or day_base
+            price = float(comp.get("price"))
+            price = self._soft_pull(price,
+                                    day_base * (1 - CAT_STOCK_DAILY_DOWN),
+                                    day_base * (1 + CAT_STOCK_DAILY_UP))
+            price = self._soft_pull(price,
+                                    week_base * (1 - CAT_STOCK_WEEKLY_DOWN),
+                                    week_base * (1 + CAT_STOCK_WEEKLY_UP))
+            comp["price"] = max(1.0, price)
+        self._apply_daily_gain_budget(companies, price_before)
 
     def _big_holding_pressure(self, companies: dict, players: dict) -> List[dict]:
         """大额持仓可能被空头狙击：概率低、幅度有限，只影响一只股票"""
@@ -6372,6 +6445,16 @@ class CatStockPlugin:
         if not self._ai:
             return [], [], None, None
         companies = market["companies"]
+        hot_cool = ""
+        econ = market.get("economy") or {}
+        if float(econ.get("hour_change", 0) or 0) >= CAT_STOCK_ECON_HOUR_HOT:
+            hot_cool = (
+                "\n当前大盘偏热，账户财富一小时就涨了 "
+                f"{float(econ.get('hour_change', 0) or 0):.1%}。"
+                "本小时请以利空、降温类事件为主，至少三分之二的 effects 为负："
+                "可以写获利回吐、商队亏损、订单取消、监管收紧、灾害减产、"
+                "黑市崩价之类有因果的坏消息，帮市场降温；"
+                "但不要凭空制造全盘崩盘，也不要让所有股票都同幅度下跌。\n")
         lines = []
         has_policy = False
         for comp in companies.values():
@@ -6537,10 +6620,12 @@ class CatStockPlugin:
             "也不要每小时都凭空另起炉灶。"
             "如果上面有玩家资金动向，请至少有一条新闻写出资金面带来的具体后果"
             "（抢筹、跟风、空头狙击、逼空或大户撤退），但不要机械地按持仓数字编涨跌。"
-            "涨跌可以有戏剧性，但必须有因果依据，"
-            "实际盘面会受交易所限价约束，每小时与当日的波动都在规则之内，不要所有股票同涨同跌。"
+            "涨跌可以有戏剧性，但必须有因果依据；"
+            "交易所只挂当日与当周的软限价，越界后会被冷热回调慢慢拉回，"
+            "所以可以写出大起大落，但不要所有股票同涨同跌。"
             "同行业的企业会互相争抢客源，请时不时写一写同行竞争"
             "（抢单、降价、挖人、仿制、渠道争夺），让同行业的股票走出强弱分化。"
+            + hot_cool
             + ("\n有企业带着「方针」，那是最大股东制定的经营方向；"
                "请至少让一条新闻体现方针带来的实际经营变化"
                "（新订单、扩产、招聘、政策扶持或收缩裁员），"
@@ -6566,8 +6651,10 @@ class CatStockPlugin:
             '"world":{"story":"世界发展脉络（150字以内，在原有基础上延续推进，不要重写世界观）",'
             '"arc":"当前世界局势主线（一句话）",'
             '"relations":[{"a":"国家代码","b":"国家代码","state":"同盟/敌对/贸易往来/边境摩擦"}]}}\n'
-            "pct 是小数涨跌幅，范围 -0.25 ~ 0.35（局势设定直接引发的重大事件可到 ±0.35），"
+            "pct 是小数涨跌幅，范围 -0.35 ~ 0.25（局势设定直接引发的重大事件可到 ±0.35），"
             "正数为涨；code 和 country 二选一；每条新闻给 1~2 条 effects。"
+            "没有明确的全局利好或全局利空时，本小时 effects 的正负数量与总幅度要大致平衡，"
+            "利空和利好各占一半左右，不要默认把新闻写成上涨。"
             "world 是可选的：如果本小时故事有推进，就给出更新后的世界发展脉络"
             "（150字以内，要接着上一版写、不要推翻已有历史，只做本时代内部的小幅推进，"
             "不要把几百年乃至几个时代的跨度压进一天）、当前主线（一句话）"

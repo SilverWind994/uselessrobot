@@ -95,6 +95,17 @@ CAT_STOCK_COMPANY_BIAS = 0.03        # 掌管者扶持/打压单个企业时每�
 CAT_STOCK_SETTLE_COEF = 0.10         # 持仓浮盈超过起点后，每整点回收的力度
 CAT_STOCK_SETTLE_MAX = 0.012         # 每整点回收浮盈的上限
 CAT_STOCK_SETTLE_GAP = 0.03          # 浮盈达到该比例后才开始回收
+CAT_STOCK_ECON_WINDOW_DAYS = 7       # 冷热判断回看多少个自然日
+CAT_STOCK_ECON_DAILY_HOT = 0.01      # 一天窗口内人均财富高出低点 1% 视为过热
+CAT_STOCK_ECON_DAILY_COLD = 0.95     # 一天窗口内人均财富跌到高点的 95% 视为过冷
+CAT_STOCK_ECON_WEEK_HOT = 0.05       # 一周窗口内人均财富高出低点 5% 视为过热
+CAT_STOCK_ECON_WEEK_COLD = 0.85      # 一周窗口内人均财富跌到高点的 85% 视为过冷
+CAT_STOCK_ECON_DRAG_MAX = 0.02       # 过热时每整点对多头仓位施加的最大收紧力度
+CAT_STOCK_ECON_DRAG_COEF = 0.40      # 超出过热线的涨幅换算成收紧力度
+CAT_STOCK_ECON_SUPPORT_MAX = 0.02    # 过冷时每整点对持仓施加的最大托底力度
+CAT_STOCK_ECON_SUPPORT_COEF = 0.15   # 低于过冷线的比例换算成托底力度
+CAT_STOCK_ECON_FEE_MAX = 0.05        # 过热时卖出手续费最多上浮多少
+CAT_STOCK_ECON_FEE_COEF = 0.50       # 超出过热线的涨幅换算成手续费上浮
 CAT_STOCK_ERA_DAYS = 30              # 每个时代固定延续的自然日，到期按可能性随机翻页
 CAT_STOCK_ERA_COLLAPSE_RATE = 0.5    # 亡国时该国企业持仓的清算比例
 CAT_STOCK_ERA_COUNTRY_MIN = 3        # 至少保留多少个尚存国家
@@ -2596,7 +2607,7 @@ class CatStockPlugin:
                 self._sender.send_text(
                     target,
                     f"{comp['code']} 当前没有可卖出的股份\n"
-                    f"买入后满 4 个交易小时才能卖出（只计算开市时间）"
+                    f"当天买入的股份需等到第二个交易日才能卖出"
                 )
                 return
             if shares > sellable:
@@ -2604,7 +2615,7 @@ class CatStockPlugin:
                 self._sender.send_text(
                     target,
                     f"可卖数量不足喵：{comp['code']} 现在只能卖 {sellable} 股"
-                    f"（其余为未满 4 个交易小时的持仓）"
+                    f"（其余为当天买入、尚未到第二天的持仓）"
                 )
                 return
 
@@ -2634,7 +2645,8 @@ class CatStockPlugin:
                 st["holdings"].pop(comp["code"], None)
 
             proceeds = int(round(price * shares))
-            fee = max(1, int(round(proceeds * CAT_STOCK_SELL_FEE)))
+            surcharge = float((market.get("economy") or {}).get("sell_surcharge", 0) or 0)
+            fee = max(1, int(round(proceeds * (CAT_STOCK_SELL_FEE + surcharge))))
             net = proceeds - fee
             st["catnip"] = int(st.get("catnip", 0)) + net
             self._save_stock_players(players)
@@ -2654,12 +2666,12 @@ class CatStockPlugin:
         if not self._is_open(now):
             self._sender.send_text(target, "现在是休市时间喵～ 股市每日 08:00~20:00 开市")
             return
-        if len(rest) < 2:
+        if len(rest) < 3:
             self._sender.send_text(
                 target,
-                f"用法：喵股市 做空 <股票代码/名称> <股数> [周期 {CAT_STOCK_SHORT_MIN_HOURS}~"
-                f"{CAT_STOCK_SHORT_MAX_HOURS} 个开市小时]\n"
-                "到期自动结算，也可以随时用「喵股市 平空」提前收手。")
+                f"用法：喵股市 做空 <股票代码/名称> <股数> <周期 {CAT_STOCK_SHORT_MIN_HOURS}~"
+                f"{CAT_STOCK_SHORT_MAX_HOURS} 个开市小时>\n"
+                "周期必须写明，到期自动结算，不能提前平空。")
             return
 
         market = self._load_market()
@@ -2682,15 +2694,13 @@ class CatStockPlugin:
         if shares > CAT_STOCK_MAX_SHARES:
             self._sender.send_text(target, f"单笔最多 {CAT_STOCK_MAX_SHARES} 股喵～")
             return
-        hours = random.randint(CAT_STOCK_SHORT_MIN_HOURS, CAT_STOCK_SHORT_MAX_HOURS)
-        if len(rest) >= 3:
-            try:
-                hours = int(rest[2])
-            except ValueError:
-                self._sender.send_text(
-                    target, f"周期要用整数小时（{CAT_STOCK_SHORT_MIN_HOURS}~"
-                    f"{CAT_STOCK_SHORT_MAX_HOURS}）喵")
-                return
+        try:
+            hours = int(rest[2])
+        except ValueError:
+            self._sender.send_text(
+                target, f"周期要用整数小时（{CAT_STOCK_SHORT_MIN_HOURS}~"
+                f"{CAT_STOCK_SHORT_MAX_HOURS}）喵")
+            return
         hours = max(CAT_STOCK_SHORT_MIN_HOURS, min(CAT_STOCK_SHORT_MAX_HOURS, hours))
 
         price = float(comp["price"])
@@ -2736,97 +2746,13 @@ class CatStockPlugin:
             target,
             f"做空成交：{comp['code']} {comp['name']} {shares} 股\n"
             f"入场价 {self._fmt_price(price)}｜保证金 {margin}｜手续费 {fee}\n"
-            f"约定周期 {hours} 个开市小时，到期自动结算；期间可用「喵股市 平空 {comp['code']}」提前了结\n"
+            f"约定周期 {hours} 个开市小时，到期自动结算，不能提前平空\n"
             f"剩余猫薄荷 {new_balance}"
         )
 
     def _cover(self, target: Target, qq: int, rest: List[str]) -> None:
-        now = datetime.now()
-        if not self._is_open(now):
-            self._sender.send_text(target, "现在是休市时间喵～ 股市每日 08:00~20:00 开市")
-            return
-        with self._lock:
-            players = self._load_stock_players()
-            st = self._stock_player(qq, players)
-            shorts = list(st.get("shorts") or [])
-            if not shorts:
-                self._save_stock_players(players)
-                self._sender.send_text(target, "你手上没有空头仓位喵")
-                return
-            code = ""
-            want = 0
-            if rest:
-                market = self._load_market()
-                comp = self._resolve_company(market, rest[0])
-                if not comp:
-                    self._save_stock_players(players)
-                    self._sender.send_text(
-                        target, f"找不到企业「{rest[0]}」，发送「喵股市 大盘」查看代码")
-                    return
-                code = comp["code"]
-                if len(rest) >= 2:
-                    try:
-                        want = int(rest[1])
-                    except ValueError:
-                        want = 0
-            else:
-                market = self._load_market()
-            market = market if isinstance(market, dict) else self._load_market()
-            companies = market.get("companies") or {}
-            closed = []
-            kept = []
-            for short in shorts:
-                if code and short.get("code") != code:
-                    kept.append(short)
-                    continue
-                take = int(short.get("shares", 0) or 0)
-                if want > 0:
-                    take = min(take, want)
-                    want -= take
-                comp = companies.get(short.get("code"))
-                price = float(comp["price"]) if comp else float(short.get("entry", 0) or 0)
-                entry = float(short.get("entry", 0) or 0)
-                notional = price * take
-                fee = max(1, int(round(notional * CAT_STOCK_SHORT_FEE)))
-                proceeds = (float(short.get("margin", 0) or 0) * take
-                            / max(1, int(short.get("shares", 0) or 1))
-                            + (entry - price) * take - fee)
-                st["catnip"] = int(st.get("catnip", 0)) + int(round(proceeds))
-                pnl = (entry - price) * take - fee
-                closed.append((short.get("code"), comp or {"name": short.get("code")},
-                               take, entry, price, int(round(pnl))))
-                if take < int(short.get("shares", 0) or 0):
-                    rest_short = dict(short)
-                    rest_short["shares"] = int(short.get("shares", 0) or 0) - take
-                    rest_short["margin"] = float(short.get("margin", 0) or 0) - \
-                        float(short.get("margin", 0) or 0) * take / max(1, int(short.get("shares", 0) or 1))
-                    kept.append(rest_short)
-                if want <= 0 and code:
-                    want = -1
-            if want > 0:
-                self._save_stock_players(players)
-                self._sender.send_text(target, f"空头仓位不足：{code} 没有这么多股可回补喵")
-                return
-            st["shorts"] = kept
-            log = st.setdefault("short_log", [])
-            for code_i, comp_i, take, entry, price, pnl in closed:
-                log.append({"code": code_i, "name": comp_i.get("name") or code_i,
-                            "shares": take, "entry": round(entry, 2),
-                            "close": round(price, 2), "pnl": pnl,
-                            "at": now.strftime("%Y-%m-%d %H:%M")})
-            st["short_log"] = log[-20:]
-            self._save_stock_players(players)
-            new_balance = st["catnip"]
-
-        if not closed:
-            self._sender.send_text(target, "没有找到可以回补的空头仓位喵")
-            return
-        lines = ["平空成交："]
-        for code_i, comp_i, take, entry, price, pnl in closed:
-            lines.append(f"{code_i} {comp_i.get('name', code_i)} {take} 股｜"
-                         f"{self._fmt_price(entry)} → {self._fmt_price(price)}｜盈亏 {pnl:+d}")
-        lines.append(f"剩余猫薄荷 {new_balance}")
-        self._sender.send_text(target, "\n".join(lines))
+        """空头只能等到约定周期结束自动结算"""
+        self._sender.send_text(target, "空头必须持有到约定周期结束，不能提前平空喵。")
 
     def _settle_shorts(self, players: dict, companies: dict, now: datetime) -> None:
         """每个整点递减空头约定周期，到期自动按现价结算"""
@@ -3046,7 +2972,8 @@ class CatStockPlugin:
                 st["bonds"].pop(country, None)
 
             proceeds = int(round(price * shares))
-            fee = max(1, int(round(proceeds * CAT_STOCK_SELL_FEE)))
+            surcharge = float((market.get("economy") or {}).get("sell_surcharge", 0) or 0)
+            fee = max(1, int(round(proceeds * (CAT_STOCK_SELL_FEE + surcharge))))
             net = proceeds - fee
             st["catnip"] = int(st.get("catnip", 0)) + net
             self._save_stock_players(players)
@@ -4318,11 +4245,11 @@ class CatStockPlugin:
             "持仓按最新价的七成折算，摘牌企业也可能改日重新挂牌。\n"
             "持股：一位股东最多深度介入两家公司的经营，其他公司只允许保留一小把零散股份。\n"
             "做空：押注某家企业会跌，需先付五成保证金与 1% 手续费；"
-            f"约定周期 {CAT_STOCK_SHORT_MIN_HOURS}~{CAT_STOCK_SHORT_MAX_HOURS} 个开市小时，"
-            "到期按现价自动了结，也可以随时「平空」提前收手。\n"
+            f"必须在网页企业详情里选定 {CAT_STOCK_SHORT_MIN_HOURS}~{CAT_STOCK_SHORT_MAX_HOURS} 个开市小时的固定周期，"
+            "到期按现价自动了结，不能提前平空。\n"
             "经营方向：企业可以同时做几门营生，最大股东在开市时段可「拓展」新方向或「改营」整体换向。\n"
             "买卖：喵股市 买 <代码> <股数>｜喵股市 卖 <代码> <股数>\n"
-            "　　　喵股市 做空 <代码> <股数> [周期]｜喵股市 平空 [代码] [股数]\n"
+            "　　　喵股市 做空 <代码> <股数> <周期>\n"
             "查看：喵股市 大盘 / 新闻 / 持仓 / 排行 / 国家 / 代码或名称\n"
             "国家：喵股市 国家 查看列国，喵股市 国家 <代码或国名> 查看制度、君主与起源。\n"
             "董事会：持股最多且股份够多时，可在网页召集股东大会，"
@@ -4470,6 +4397,9 @@ class CatStockPlugin:
             pressure_news = self._big_holding_pressure(companies, players)
             self._settle_positions(companies, players)
             self._settle_shorts(players, companies, now)
+
+            # 3.4) 全体参与者财富冷热：过热时收紧流动性，过冷时托底
+            self._economy_check(market, players)
 
             # 3.5) 交易所限价：单小时最多上下 2%，当日累计最多 ±10%
             #      当日涨跌互相抵消，隔日重新计算；经营崩坏仍可由交易所直接摘牌
@@ -4684,6 +4614,132 @@ class CatStockPlugin:
             if not pressure:
                 continue
             comp["price"] = max(1.0, price * (1 - pressure))
+
+    def _economy_check(self, market: dict, players: dict) -> dict:
+        """按人均财富判断冷热，并只调节多空失衡的个股。
+
+        财富 = 现金 + 持股 + 国债 + 空头权益（保证金 + 浮盈），
+        空头权益为负时同样计入，做空赚钱不会被人均统计忽略。
+        过热看一天 1%、一周 5% 的涨幅；过冷看一天 5%、一周 15% 的回撤。
+        收紧只压多头占优的股票，空头占优的股票反而托一把，避免一刀切下跌。"""
+        companies = market.get("companies") or {}
+        bonds = market.get("bonds") or {}
+        cash_total = 0.0
+        stock_total = 0.0
+        bond_total = 0.0
+        short_total = 0.0
+        active = 0
+        long_pos: Dict[str, float] = {}
+        short_pos: Dict[str, float] = {}
+        for st in players.values():
+            cash = float(st.get("catnip", 0) or 0)
+            holdings = st.get("holdings") or {}
+            bond_lots = st.get("bonds") or {}
+            shorts = st.get("shorts") or []
+            stock_value = 0.0
+            for code, lots in holdings.items():
+                shares = self._shares_of(lots)
+                long_pos[code] = long_pos.get(code, 0.0) + shares
+                comp = companies.get(code)
+                if comp:
+                    stock_value += shares * float(comp["price"])
+            bond_value = 0.0
+            for country, lots in bond_lots.items():
+                bond = bonds.get(country)
+                if bond:
+                    bond_value += self._shares_of(lots) * float(bond["price"])
+            short_equity = 0.0
+            for short in shorts:
+                code = short.get("code")
+                entry = float(short.get("entry", 0) or 0)
+                shares = int(short.get("shares", 0) or 0)
+                margin = float(short.get("margin", 0) or 0)
+                short_pos[code] = short_pos.get(code, 0.0) + shares
+                comp = companies.get(code)
+                price = float(comp["price"]) if comp else entry
+                # 保证金已从现金里扣走，这里按当前价把空头权益加回来
+                short_equity += margin + (entry - price) * shares
+            if not (holdings or bond_lots or shorts) \
+                    and cash == CAT_STOCK_INITIAL_CATNIP:
+                continue
+            active += 1
+            cash_total += cash
+            stock_total += stock_value
+            bond_total += bond_value
+            short_total += short_equity
+
+        wealth = cash_total + stock_total + bond_total + short_total
+        per_capita = wealth / active if active else float(CAT_STOCK_INITIAL_CATNIP)
+        now_ts = time.time()
+        window = CAT_STOCK_ECON_WINDOW_DAYS * 86400
+        history = []
+        for item in (market.get("economy") or {}).get("history") or []:
+            try:
+                ts, value = float(item[0]), float(item[1])
+            except (TypeError, ValueError, IndexError):
+                continue
+            if now_ts - ts <= window:
+                history.append([ts, value])
+        daily_values = [h[1] for h in history if now_ts - h[0] <= 86400] + [per_capita]
+        week_values = [h[1] for h in history] + [per_capita]
+        daily_low, daily_high = min(daily_values), max(daily_values)
+        week_low, week_high = min(week_values), max(week_values)
+        daily_low = max(1.0, daily_low)
+        week_low = max(1.0, week_low)
+        daily_growth = per_capita / daily_low - 1
+        week_growth = per_capita / week_low - 1
+        hot_excess = max(daily_growth - CAT_STOCK_ECON_DAILY_HOT,
+                         week_growth - CAT_STOCK_ECON_WEEK_HOT, 0.0)
+        cold_excess = max(CAT_STOCK_ECON_DAILY_COLD - per_capita / max(1.0, daily_high),
+                          CAT_STOCK_ECON_WEEK_COLD - per_capita / max(1.0, week_high), 0.0)
+        drag = 0.0
+        support = 0.0
+        surcharge = 0.0
+        if hot_excess > 0:
+            drag = min(CAT_STOCK_ECON_DRAG_MAX,
+                       hot_excess * CAT_STOCK_ECON_DRAG_COEF)
+            surcharge = min(CAT_STOCK_ECON_FEE_MAX,
+                            hot_excess * CAT_STOCK_ECON_FEE_COEF)
+        elif cold_excess > 0:
+            support = min(CAT_STOCK_ECON_SUPPORT_MAX,
+                          cold_excess * CAT_STOCK_ECON_SUPPORT_COEF)
+
+        adjusted = 0
+        for code, comp in companies.items():
+            longs = long_pos.get(code, 0.0)
+            shorts = short_pos.get(code, 0.0)
+            total = longs + shorts
+            if total <= 0:
+                continue
+            net = (longs - shorts) / total
+            step = 0.0
+            if drag:
+                if net > 0.05:
+                    step = -drag * net
+                elif net < -0.05:
+                    # 空头占优的股票不跟着全盘下跌，反而小幅抬价挤压空头
+                    step = drag * abs(net) * 0.5
+            elif support:
+                # 过冷时只托有真实持仓的股票，托底力度按多空参与度计算
+                step = support * abs(net)
+            if not step:
+                continue
+            comp["price"] = float(comp["price"]) * (1 + step)
+            adjusted += 1
+
+        history.append([now_ts, round(per_capita, 2)])
+        economy = {
+            "heat": round(per_capita / max(1.0, week_low), 3),
+            "daily_growth": round(daily_growth, 4), "week_growth": round(week_growth, 4),
+            "hot_excess": round(hot_excess, 4), "cold_excess": round(cold_excess, 4),
+            "per_capita": round(per_capita, 2), "active": active,
+            "wealth": int(round(wealth)), "window_days": CAT_STOCK_ECON_WINDOW_DAYS,
+            "drag": round(drag, 4), "support": round(support, 4),
+            "sell_surcharge": round(surcharge, 4), "adjusted": adjusted,
+            "history": history, "at": now_ts,
+        }
+        market["economy"] = economy
+        return economy
 
     def _maybe_delist(self, market: dict, players: dict) -> List[dict]:
         companies = market["companies"]

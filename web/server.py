@@ -1209,6 +1209,8 @@ def stock_short(payload: dict, cat_token: str = Cookie(default="")) -> JSONRespo
     qq = _auth_qq(cat_token)
     if qq is None:
         return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    if payload.get("hours") in (None, ""):
+        return JSONResponse({"ok": False, "msg": "请先选择固定的做空周期"}, status_code=400)
     return _stock_action(stock_web.short(qq, payload.get("code"), payload.get("shares"),
                                          payload.get("hours")), qq)
 

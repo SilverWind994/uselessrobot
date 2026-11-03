@@ -58,6 +58,8 @@ newbot/assets/cat_stock/*
 newbot/assets/red_packet/*
 # B 站开播提醒：上次直播状态（运行时数据）
 newbot/assets/bilibili_live.json
+# B 站开播提醒：本地日志
+newbot/assets/bilibili_live.log*
 
 # ===== 老代码归档（archive/mybot）中的运行时数据 =====
 archive/mybot/jsonFile/*

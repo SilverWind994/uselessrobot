@@ -2,6 +2,7 @@
 
 轮询 config_local.py 里配置的直播间，状态从「未开播」变成「直播中」时私聊通知，反向变化时同样提醒。
 上次状态落在 assets/bilibili_live.json（运行时数据，不入库），重启不会重复播报，也不会漏掉停机期间的变化。
+拉取失败、风控返回码、每次提醒都会写到 assets/bilibili_live.log（同样不入库，超过 1MB 轮转）。
 
 配置项（写进 newbot/config_local.py，该文件已在 .gitignore 中忽略）：
     BILIBILI_LIVE_NOTIFY_QQ = 2544910201      # 提醒发往的 QQ（私聊）
@@ -23,6 +24,8 @@ from core.message_sender import MessageSender, Target
 
 _BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # newbot/
 _STATE_PATH = os.path.join(_BASE_DIR, "assets", "bilibili_live.json")
+_LOG_PATH = os.path.join(_BASE_DIR, "assets", "bilibili_live.log")
+_LOG_MAX_BYTES = 1000 * 1000   # 超过 1MB 轮转成 bilibili_live.log.1
 
 FETCH_TIMEOUT = 10           # 单次请求超时（秒）
 _ROOM_INFO_URL = "https://api.live.bilibili.com/room/v1/Room/get_info"
@@ -53,6 +56,20 @@ def _save_state(state: dict) -> None:
     os.makedirs(os.path.dirname(_STATE_PATH), exist_ok=True)
     with open(_STATE_PATH, "w", encoding="utf-8") as f:
         json.dump(state, f, ensure_ascii=False, indent=2)
+
+
+def _log(text: str) -> None:
+    """同时写到控制台和 assets/bilibili_live.log，超过 1MB 轮转一次"""
+    line = f"{time.strftime('%Y-%m-%d %H:%M:%S')} [bilibili_live] {text}"
+    print(line, flush=True)
+    try:
+        os.makedirs(os.path.dirname(_LOG_PATH), exist_ok=True)
+        if os.path.exists(_LOG_PATH) and os.path.getsize(_LOG_PATH) > _LOG_MAX_BYTES:
+            os.replace(_LOG_PATH, _LOG_PATH + ".1")
+        with open(_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except OSError:
+        pass
 
 
 class BilibiliLivePlugin:
@@ -86,7 +103,7 @@ class BilibiliLivePlugin:
             try:
                 self._check_once()
             except Exception as e:
-                print(f"[bilibili_live] poll error: {e}")
+                _log(f"poll error: {e}")
             seconds = int(getattr(Config, "BILIBILI_LIVE_POLL_SECONDS", 60) or 60)
             time.sleep(max(20, seconds))
 
@@ -97,10 +114,10 @@ class BilibiliLivePlugin:
                                 headers=_HEADERS, timeout=FETCH_TIMEOUT)
             data = resp.json()
         except (requests.RequestException, ValueError) as e:
-            print(f"[bilibili_live] fetch {room_id} failed: {e}")
+            _log(f"fetch {room_id} failed: {e}")
             return None
         if data.get("code") != 0:
-            print(f"[bilibili_live] fetch {room_id} code={data.get('code')}")
+            _log(f"fetch {room_id} code={data.get('code')}")
             return None
         info = data.get("data") or {}
         status = int(info.get("live_status", 0) or 0)
@@ -165,6 +182,7 @@ class BilibiliLivePlugin:
     def _notify(self, text: str) -> None:
         qq = int(getattr(Config, "BILIBILI_LIVE_NOTIFY_QQ", 2544910201) or 2544910201)
         self._sender.send_text(Target(user_id=qq), text)
+        _log(f"notify {qq}: {text.splitlines()[0]}")
 
     # ==================== QQ 指令 ====================
 

@@ -102,11 +102,10 @@ CAT_STOCK_COMPANY_BIAS = 0.03        # 掌管者扶持/打压单个企业时每�
 CAT_STOCK_SETTLE_COEF = 0.10         # 持仓浮盈超过起点后，每整点回收的力度
 CAT_STOCK_SETTLE_MAX = 0.012         # 每整点回收浮盈的上限
 CAT_STOCK_SETTLE_GAP = 0.03          # 浮盈达到该比例后才开始回收
-CAT_STOCK_ECON_WINDOW_DAYS = 7       # 冷热判断回看多少个自然日
-CAT_STOCK_ECON_DAILY_HOT = 0.01      # 一天窗口内人均财富高出低点 1% 视为过热
-CAT_STOCK_ECON_DAILY_COLD = 0.95     # 一天窗口内人均财富跌到高点的 95% 视为过冷
-CAT_STOCK_ECON_WEEK_HOT = 0.05       # 一周窗口内人均财富高出低点 5% 视为过热
-CAT_STOCK_ECON_WEEK_COLD = 0.85      # 一周窗口内人均财富跌到高点的 85% 视为过冷
+CAT_STOCK_ECON_HOUR_HOT = 0.01       # 单小时持仓账户财富上涨 1% 视为过热
+CAT_STOCK_ECON_HOUR_COLD = 0.01      # 单小时持仓账户财富下跌 1% 视为过冷
+CAT_STOCK_ECON_LOG_PATH = os.path.join(STOCK_DIR, "econ_reports.jsonl")
+CAT_STOCK_ECON_LOG_DAYS = 3           # 冷热观测消息记录只保留最近三天
 CAT_STOCK_ECON_DRAG_MAX = 0.02       # 过热时每整点对多头仓位施加的最大收紧力度
 CAT_STOCK_ECON_DRAG_COEF = 0.40      # 超出过热线的涨幅换算成收紧力度
 CAT_STOCK_ECON_SUPPORT_MAX = 0.02    # 过冷时每整点对持仓施加的最大托底力度
@@ -2661,7 +2660,9 @@ class CatStockPlugin:
                 return
             st["catnip"] = catnip - total
             lots = st["holdings"].setdefault(comp["code"], [])
-            lots.append({"shares": shares, "price": price, "ts": time.time()})
+            # 成本价含买入手续费，浮动盈亏才是真正到手的盈亏
+            lots.append({"shares": shares, "price": round((cost + fee) / shares, 4),
+                         "ts": time.time()})
             self._save_stock_players(players)
             new_balance = st["catnip"]
 
@@ -2988,7 +2989,9 @@ class CatStockPlugin:
                 return
             st["catnip"] = catnip - total
             lots = st["bonds"].setdefault(bond["country"], [])
-            lots.append({"shares": shares, "price": price, "ts": time.time()})
+            # 成本价含买入手续费
+            lots.append({"shares": shares, "price": round((cost + fee) / shares, 4),
+                         "ts": time.time()})
             held = self._shares_of(lots)
             self._save_stock_players(players)
             new_balance = st["catnip"]
@@ -4725,84 +4728,99 @@ class CatStockPlugin:
             comp["price"] = max(1.0, price * (1 - pressure))
 
     def _economy_check(self, market: dict, players: dict) -> dict:
-        """按人均财富判断冷热，并只调节多空失衡的个股。
+        """按这一小时持仓账户的财富变化判断冷热，并立刻定向调节个股。
 
         财富 = 现金 + 持股 + 国债 + 空头权益（保证金 + 浮盈），
         空头权益为负时同样计入，做空赚钱不会被人均统计忽略。
-        过热看一天 1%、一周 5% 的涨幅；过冷看一天 5%、一周 15% 的回撤。
+        只比较两个小时都在场的账户，有人进场或清仓离场不会造成假信号。
+        单小时上涨 1% 算过热，下跌 1% 算过冷，当轮立即调整。
         收紧只压多头占优的股票，空头占优的股票反而托一把，避免一刀切下跌。"""
         companies = market.get("companies") or {}
         bonds = market.get("bonds") or {}
-        cash_total = 0.0
-        stock_total = 0.0
-        bond_total = 0.0
-        short_total = 0.0
-        active = 0
-        long_pos: Dict[str, float] = {}
-        short_pos: Dict[str, float] = {}
-        for st in players.values():
-            cash = float(st.get("catnip", 0) or 0)
-            holdings = st.get("holdings") or {}
-            bond_lots = st.get("bonds") or {}
-            shorts = st.get("shorts") or []
-            stock_value = 0.0
-            for code, lots in holdings.items():
-                shares = self._shares_of(lots)
-                long_pos[code] = long_pos.get(code, 0.0) + shares
-                comp = companies.get(code)
-                if comp:
-                    stock_value += shares * float(comp["price"])
-            bond_value = 0.0
-            for country, lots in bond_lots.items():
-                bond = bonds.get(country)
-                if bond:
-                    bond_value += self._shares_of(lots) * float(bond["price"])
-            short_equity = 0.0
-            for short in shorts:
-                code = short.get("code")
-                entry = float(short.get("entry", 0) or 0)
-                shares = int(short.get("shares", 0) or 0)
-                margin = float(short.get("margin", 0) or 0)
-                short_pos[code] = short_pos.get(code, 0.0) + shares
-                comp = companies.get(code)
-                price = float(comp["price"]) if comp else entry
-                # 保证金已从现金里扣走，这里按当前价把空头权益加回来
-                short_equity += margin + (entry - price) * shares
-            if not (holdings or bond_lots or shorts) \
-                    and cash == CAT_STOCK_INITIAL_CATNIP:
-                continue
-            active += 1
-            cash_total += cash
-            stock_total += stock_value
-            bond_total += bond_value
-            short_total += short_equity
+
+        def account_wealth():
+            """统计持仓账户的财富，返回账户表、多空持仓与四项合计"""
+            long_wealth: Dict[str, float] = {}
+            short_wealth: Dict[str, float] = {}
+            accounts_map: Dict[str, float] = {}
+            totals = [0.0, 0.0, 0.0, 0.0]  # 现金 / 持股 / 国债 / 空头权益
+            holding_active = 0
+            for key, st in players.items():
+                cash = float(st.get("catnip", 0) or 0)
+                holdings = st.get("holdings") or {}
+                bond_lots = st.get("bonds") or {}
+                shorts = st.get("shorts") or []
+                stock_value = 0.0
+                holding_shares = 0.0
+                for code, lots in holdings.items():
+                    shares = self._shares_of(lots)
+                    if shares <= 0:
+                        continue
+                    holding_shares += shares
+                    long_wealth[code] = long_wealth.get(code, 0.0) + shares
+                    comp = companies.get(code)
+                    if comp:
+                        stock_value += shares * float(comp["price"])
+                bond_value = 0.0
+                bond_shares = 0.0
+                for country, lots in bond_lots.items():
+                    shares = self._shares_of(lots)
+                    if shares <= 0:
+                        continue
+                    bond_shares += shares
+                    bond = bonds.get(country)
+                    if bond:
+                        bond_value += shares * float(bond["price"])
+                short_equity = 0.0
+                short_shares = 0
+                for short in shorts:
+                    code = short.get("code")
+                    entry = float(short.get("entry", 0) or 0)
+                    shares = int(short.get("shares", 0) or 0)
+                    margin = float(short.get("margin", 0) or 0)
+                    if shares <= 0:
+                        continue
+                    short_shares += shares
+                    short_wealth[code] = short_wealth.get(code, 0.0) + shares
+                    comp = companies.get(code)
+                    price = float(comp["price"]) if comp else entry
+                    # 保证金已从现金里扣走，这里按当前价把空头权益加回来
+                    short_equity += margin + (entry - price) * shares
+                # 已经清仓离场、只剩现金的账户不参与冷热统计，避免拿旧现金稀释人均财富
+                if not (holding_shares or bond_shares or short_shares):
+                    continue
+                holding_active += 1
+                totals[0] += cash
+                totals[1] += stock_value
+                totals[2] += bond_value
+                totals[3] += short_equity
+                accounts_map[str(key)] = cash + stock_value + bond_value + short_equity
+            return accounts_map, long_wealth, short_wealth, totals, holding_active
+
+        accounts, long_pos, short_pos, totals, active = account_wealth()
+        cash_total, stock_total, bond_total, short_total = totals
 
         wealth = cash_total + stock_total + bond_total + short_total
         per_capita = wealth / active if active else float(CAT_STOCK_INITIAL_CATNIP)
         now_ts = time.time()
-        window = CAT_STOCK_ECON_WINDOW_DAYS * 86400
-        history = []
-        for item in (market.get("economy") or {}).get("history") or []:
+        # 只比较这一小时前后都在场的持仓账户，避免有人进场或清仓离场时总额跳变
+        prev_accounts: Dict[str, float] = {}
+        for key, value in ((market.get("economy") or {}).get("accounts") or {}).items():
             try:
-                ts, value = float(item[0]), float(item[1])
-            except (TypeError, ValueError, IndexError):
+                prev_accounts[str(key)] = float(value)
+            except (TypeError, ValueError):
                 continue
-            if now_ts - ts <= window:
-                history.append([ts, value])
-        daily_values = [h[1] for h in history if now_ts - h[0] <= 86400] + [per_capita]
-        week_values = [h[1] for h in history] + [per_capita]
-        daily_low, daily_high = min(daily_values), max(daily_values)
-        week_low, week_high = min(week_values), max(week_values)
-        daily_low = max(1.0, daily_low)
-        week_low = max(1.0, week_low)
-        daily_drop = 1 - per_capita / max(1.0, daily_high)
-        week_drop = 1 - per_capita / max(1.0, week_high)
-        daily_growth = per_capita / daily_low - 1
-        week_growth = per_capita / week_low - 1
-        hot_excess = max(daily_growth - CAT_STOCK_ECON_DAILY_HOT,
-                         week_growth - CAT_STOCK_ECON_WEEK_HOT, 0.0)
-        cold_excess = max(daily_drop - (1 - CAT_STOCK_ECON_DAILY_COLD),
-                          week_drop - (1 - CAT_STOCK_ECON_WEEK_COLD), 0.0)
+        shared = [k for k in accounts if k in prev_accounts]
+        base_wealth = sum(prev_accounts[k] for k in shared)
+        now_wealth = sum(accounts[k] for k in shared)
+        hourly_change = now_wealth / base_wealth - 1 if base_wealth > 1.0 else 0.0
+        hot_excess = max(hourly_change - CAT_STOCK_ECON_HOUR_HOT, 0.0)
+        cold_excess = max(-hourly_change - CAT_STOCK_ECON_HOUR_COLD, 0.0)
+        # 盘面广度只用于观测记录，不再参与判定
+        listed_count = len(companies)
+        up_count = sum(1 for comp in companies.values()
+                       if float(comp["price"]) > float(comp.get("prev_close") or comp["price"]))
+        breadth = up_count / listed_count if listed_count else 0.0
         drag = 0.0
         support = 0.0
         surcharge = 0.0
@@ -4847,19 +4865,25 @@ class CatStockPlugin:
             })
         details.sort(key=lambda d: abs(d["net"]), reverse=True)
 
-        history.append([now_ts, round(per_capita, 2)])
+        # 以调整后的价格重算账户财富，下一次比对不会把本轮调价当成新的涨跌
+        accounts, _, _, totals, active = account_wealth()
+        cash_total, stock_total, bond_total, short_total = totals
+        wealth = cash_total + stock_total + bond_total + short_total
+        per_capita = wealth / active if active else float(CAT_STOCK_INITIAL_CATNIP)
+
         economy = {
-            "heat": round(per_capita / max(1.0, week_low), 3),
-            "daily_growth": round(daily_growth, 4), "week_growth": round(week_growth, 4),
-            "daily_drop": round(daily_drop, 4), "week_drop": round(week_drop, 4),
+            "hour_change": round(hourly_change, 5),
+            "shared_active": len(shared),
             "hot_excess": round(hot_excess, 4), "cold_excess": round(cold_excess, 4),
             "per_capita": round(per_capita, 2), "active": active,
-            "wealth": int(round(wealth)), "window_days": CAT_STOCK_ECON_WINDOW_DAYS,
+            "breadth": round(breadth, 4), "up_count": up_count,
+            "listed_count": listed_count,
+            "wealth": int(round(wealth)),
             "cash_total": int(round(cash_total)), "stock_total": int(round(stock_total)),
             "bond_total": int(round(bond_total)), "short_total": int(round(short_total)),
             "drag": round(drag, 4), "support": round(support, 4),
             "sell_surcharge": round(surcharge, 4), "adjusted": adjusted,
-            "details": details, "history": history, "at": now_ts,
+            "details": details, "accounts": accounts, "at": now_ts,
         }
         market["economy"] = economy
         return economy
@@ -4869,8 +4893,10 @@ class CatStockPlugin:
         if not (economy.get("drag") or economy.get("support")):
             return
         lines = [f"【喵股市 · 冷热观测 {now.strftime('%m-%d %H:%M')}】",
-                 f"参与账户 {int(economy.get('active', 0))}｜"
-                 f"人均财富 {float(economy.get('per_capita', 0) or 0):,.1f}"]
+                 f"持仓账户 {int(economy.get('active', 0))}｜"
+                 f"人均财富 {float(economy.get('per_capita', 0) or 0):,.1f}｜"
+                 f"今日上涨 {int(economy.get('up_count', 0))}"
+                 f"/{int(economy.get('listed_count', 0))}"]
         wealth = float(economy.get("wealth", 0) or 0)
         chunks = []
         for label, key in (("现金", "cash_total"), ("持股", "stock_total"),
@@ -4880,15 +4906,10 @@ class CatStockPlugin:
                           if wealth else f"{label} {value:,.0f}")
         lines.append("构成：" + "｜".join(chunks))
         lines.append(
-            f"日窗口 {float(economy.get('daily_growth', 0) or 0):+.2%}"
-            f"（过热线 +{CAT_STOCK_ECON_DAILY_HOT:.0%}）｜"
-            f"周窗口 {float(economy.get('week_growth', 0) or 0):+.2%}"
-            f"（过热线 +{CAT_STOCK_ECON_WEEK_HOT:.0%}）")
-        lines.append(
-            f"日回撤 -{float(economy.get('daily_drop', 0) or 0):.2%}"
-            f"（过冷线 -{1 - CAT_STOCK_ECON_DAILY_COLD:.0%}）｜"
-            f"周回撤 -{float(economy.get('week_drop', 0) or 0):.2%}"
-            f"（过冷线 -{1 - CAT_STOCK_ECON_WEEK_COLD:.0%}）")
+            f"单小时变动 {float(economy.get('hour_change', 0) or 0):+.2%}"
+            f"（参与比对 {int(economy.get('shared_active', 0))} 个账户）｜"
+            f"过热线 +{CAT_STOCK_ECON_HOUR_HOT:.0%}／"
+            f"过冷线 -{CAT_STOCK_ECON_HOUR_COLD:.0%}")
         if economy.get("drag"):
             lines.append(
                 f"判定：过热，超出 {float(economy.get('hot_excess', 0) or 0):.2%} → "
@@ -4901,7 +4922,7 @@ class CatStockPlugin:
         details = economy.get("details") or []
         if details:
             lines.append(f"定向调整 {int(economy.get('adjusted', 0))} 家：")
-            for item in details[:8]:
+            for item in details:
                 comp = (market.get("companies") or {}).get(item.get("code")) or {}
                 now_price = float(comp.get("price") or item.get("before", 0) or 0)
                 before = float(item.get("before", 0) or 0)
@@ -4913,9 +4934,33 @@ class CatStockPlugin:
                     f"（{side} {abs(float(item.get('net', 0) or 0)):.0%}）"
                     f" {self._fmt_price(before)}→{self._fmt_price(now_price)}"
                     f" {self._fmt_pct(move * 100)}")
-            if len(details) > 8:
-                lines.append(f"……另有 {len(details) - 8} 家未列出")
-        self._sender.send_text(Target(user_id=CAT_STOCK_WORLD_ADMIN), "\n".join(lines))
+        text = "\n".join(lines)
+        self._sender.send_text(Target(user_id=CAT_STOCK_WORLD_ADMIN), text)
+        self._log_economy_message(now, text)
+
+    def _log_economy_message(self, now: datetime, text: str) -> None:
+        """冷热观测私聊落到文件，只保留最近三天"""
+        try:
+            keep = CAT_STOCK_ECON_LOG_DAYS * 86400
+            rows = []
+            if os.path.exists(CAT_STOCK_ECON_LOG_PATH):
+                with open(CAT_STOCK_ECON_LOG_PATH, "r", encoding="utf-8") as fh:
+                    for line in fh:
+                        try:
+                            item = json.loads(line)
+                        except Exception:
+                            continue
+                        if now.timestamp() - float(item.get("ts", 0) or 0) <= keep:
+                            rows.append(item)
+            rows.append({"ts": now.timestamp(), "text": text})
+            os.makedirs(STOCK_DIR, exist_ok=True)
+            tmp = CAT_STOCK_ECON_LOG_PATH + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                for item in rows:
+                    fh.write(json.dumps(item, ensure_ascii=False) + "\n")
+            os.replace(tmp, CAT_STOCK_ECON_LOG_PATH)
+        except Exception as e:
+            print(f"[cat_stock] economy log failed: {e}")
 
     def _maybe_delist(self, market: dict, players: dict) -> List[dict]:
         companies = market["companies"]
@@ -5382,8 +5427,12 @@ class CatStockPlugin:
                         listings=(actions.get("listings") or [])[:1],
                         delistings=(actions.get("delistings") or [])[:1],
                         rebrands=(actions.get("rebrands") or [])[:1])
-            if news or actions:
+            if news:
                 return news, effects, world_update, actions
+            if actions:
+                # 只有结构化操作、没有新闻时，补一条盘面快讯，避免整点空窗
+                fallback, _, _, _ = self._fallback_news(market, world)
+                return fallback, effects, world_update, actions
         except Exception as e:
             print(f"[cat_stock] AI news failed, use fallback: {e}")
         return self._fallback_news(market, world)
@@ -5730,8 +5779,37 @@ class CatStockPlugin:
     def _fallback_news(self, market: dict,
                        world: Optional[List[str]] = None
                        ) -> Tuple[List[dict], List[dict], None, None]:
-        # 不使用任何预设事件模板：AI 不可用时宁可不发新闻，只保留基础行情波动
-        return [], [], None, None
+        """AI 不可用时只播报盘面事实，不编造预设事件"""
+        comps = list((market.get("companies") or {}).values())
+        if not comps:
+            return [], [], None, None
+
+        def day_pct(comp: dict) -> float:
+            prev = float(comp.get("prev_close") or comp["price"] or 1)
+            return (float(comp["price"]) - prev) / prev * 100 if prev else 0.0
+
+        ranked = sorted(comps, key=day_pct)
+        news: List[dict] = []
+        worst, best = ranked[0], ranked[-1]
+        if len(ranked) > 1:
+            if day_pct(best) > 0.5:
+                news.append({
+                    "title": f"{best['name']}（{best['code']}）领涨大盘",
+                    "detail": f"现价 {self._fmt_price(best['price'])}，"
+                              f"较昨收 {self._fmt_pct(day_pct(best))}。",
+                })
+            if day_pct(worst) < -0.5:
+                news.append({
+                    "title": f"{worst['name']}（{worst['code']}）承压下行",
+                    "detail": f"现价 {self._fmt_price(worst['price'])}，"
+                              f"较昨收 {self._fmt_pct(day_pct(worst))}。",
+                })
+        up = sum(1 for comp in comps if day_pct(comp) > 0)
+        news.append({
+            "title": "盘面速览",
+            "detail": f"今日 {up} 家上涨、{len(comps) - up} 家下跌。",
+        })
+        return news[:3], [], None, None
 
     # ==================== 整点播报 ====================
 

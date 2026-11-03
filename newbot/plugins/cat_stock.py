@@ -117,8 +117,8 @@ CAT_STOCK_COMPANY_BIAS = 0.03        # 掌管者扶持/打压单个企业时每�
 CAT_STOCK_SETTLE_COEF = 0.10         # 持仓浮盈超过起点后，每整点回收的力度
 CAT_STOCK_SETTLE_MAX = 0.012         # 每整点回收浮盈的上限
 CAT_STOCK_SETTLE_GAP = 0.03          # 浮盈达到该比例后才开始回收
-CAT_STOCK_ECON_HOUR_HOT = 0.01       # 单小时持仓账户财富上涨 1% 视为过热
-CAT_STOCK_ECON_HOUR_COLD = 0.01      # 单小时持仓账户财富下跌 1% 视为过冷
+CAT_STOCK_ECON_DAY_HOT = 0.01        # 持仓账户当日财富上涨 1% 视为过热
+CAT_STOCK_ECON_DAY_COLD = 0.03       # 当日财富下跌 3% 视为过冷
 CAT_STOCK_ECON_LOG_PATH = os.path.join(STOCK_DIR, "econ_reports.jsonl")
 CAT_STOCK_ECON_LOG_DAYS = 3           # 冷热观测消息记录只保留最近三天
 CAT_STOCK_ECON_DRAG_MAX = 0.008      # 过热时每整点对多头仓位施加的最大收紧力度
@@ -5585,7 +5585,7 @@ class CatStockPlugin:
             pending_results = self._settle_pending_orders(market, players)
 
             # 3.4) 全体参与者财富冷热：过热时收紧流动性，过冷时托底
-            economy = self._economy_check(market, players, price_before)
+            economy = self._economy_check(market, players, price_before, now)
 
             # 3.5) 指数级软限价：全市场加权总涨跌当日 -3% ~ +1%、当周 -15% ~ +5%
             #      当日涨跌互相抵消，隔日重新计算；经营崩坏仍可由交易所直接摘牌
@@ -5877,13 +5877,13 @@ class CatStockPlugin:
             comp["price"] = max(1.0, price * (1 - pressure))
 
     def _economy_check(self, market: dict, players: dict,
-                       price_before: dict) -> dict:
-        """按这一小时持仓账户的财富变化判断冷热，并立刻定向调节个股。
+                       price_before: dict, now: datetime) -> dict:
+        """按持仓账户当日的财富变化判断冷热，并立刻定向调节个股。
 
         财富 = 现金 + 持股 + 国债 + 空头权益（保证金 + 浮盈），
         空头权益为负时同样计入，做空赚钱不会被人均统计忽略。
         只比较两个小时都在场的账户，有人进场或清仓离场不会造成假信号。
-        单小时上涨 1% 算过热，下跌 1% 算过冷，当轮立即调整。
+        当日上涨 1% 算过热，当日下跌 3% 算过冷，当轮立即调整。
         收紧只压多头占优的股票，空头占优的股票反而托一把，避免一刀切下跌。"""
         companies = market.get("companies") or {}
         bonds = market.get("bonds") or {}
@@ -5965,8 +5965,32 @@ class CatStockPlugin:
         now_wealth = sum(accounts[k] for k in shared)
         hour_gain = now_wealth - base_wealth
         hourly_change = now_wealth / base_wealth - 1 if base_wealth > 1.0 else 0.0
-        hot_excess = max(hourly_change - CAT_STOCK_ECON_HOUR_HOT, 0.0)
-        cold_excess = max(-hourly_change - CAT_STOCK_ECON_HOUR_COLD, 0.0)
+
+        # 冷热判定看当日累计：只比较今天有开盘基准的账户
+        today = now.strftime("%Y-%m-%d")
+        day_base = 0.0
+        day_now = 0.0
+        shared_day = 0
+        for key, value in accounts.items():
+            st = players.get(key)
+            if st is None:
+                try:
+                    st = players.get(int(key))
+                except (TypeError, ValueError):
+                    st = None
+            day = (st or {}).get("day_asset") or {}
+            if not isinstance(day, dict) or day.get("day") != today:
+                continue
+            base = float(day.get("value") or 0)
+            if base <= 0:
+                continue
+            day_base += base
+            day_now += value
+            shared_day += 1
+        # 还没有当日开盘基准时（新存档、首次运行），退回按一小时的变化观察
+        daily_change = day_now / day_base - 1 if day_base > 1.0 else hourly_change
+        hot_excess = max(daily_change - CAT_STOCK_ECON_DAY_HOT, 0.0)
+        cold_excess = max(-daily_change - CAT_STOCK_ECON_DAY_COLD, 0.0)
         # 盘面广度只用于观测记录，不再参与判定
         listed_count = len(companies)
         up_count = sum(1 for comp in companies.values()
@@ -6020,9 +6044,9 @@ class CatStockPlugin:
         per_capita = wealth / active if active else float(CAT_STOCK_INITIAL_CATNIP)
 
         economy = {
-            "hour_change": round(hourly_change, 5),
+            "day_change": round(daily_change, 5),
             "hour_gain": int(round(hour_gain)),
-            "shared_active": len(shared),
+            "shared_day": shared_day,
             "hot_excess": round(hot_excess, 4), "cold_excess": round(cold_excess, 4),
             "per_capita": round(per_capita, 2), "active": active,
             "breadth": round(breadth, 4), "up_count": up_count,
@@ -6056,17 +6080,17 @@ class CatStockPlugin:
         lines.append("玩家财富构成：" + "｜".join(chunks))
         lines.append(
             f"本小时总收益 {int(economy.get('hour_gain', 0) or 0):+,} 猫薄荷｜"
-            f"单小时变动 {float(economy.get('hour_change', 0) or 0):+.2%}"
-            f"（参与比对 {int(economy.get('shared_active', 0))} 个账户）｜"
-            f"过热线 +{CAT_STOCK_ECON_HOUR_HOT:.0%}／"
-            f"过冷线 -{CAT_STOCK_ECON_HOUR_COLD:.0%}")
+            f"今日变动 {float(economy.get('day_change', 0) or 0):+.2%}"
+            f"（参与比对 {int(economy.get('shared_day', 0))} 个账户）｜"
+            f"过热线 +{CAT_STOCK_ECON_DAY_HOT:.0%}／"
+            f"过冷线 -{CAT_STOCK_ECON_DAY_COLD:.0%}")
         if economy.get("drag"):
             lines.append(
-                f"判定：过热，超出 {float(economy.get('hot_excess', 0) or 0):.2%} → "
+                f"判定：今日过热，超出 {float(economy.get('hot_excess', 0) or 0):.2%} → "
                 f"多头占优个股收紧 {float(economy['drag']):.2%}/小时")
         else:
             lines.append(
-                f"判定：过冷，超出 {float(economy.get('cold_excess', 0) or 0):.2%} → "
+                f"判定：今日过冷，超出 {float(economy.get('cold_excess', 0) or 0):.2%} → "
                 f"有持仓个股托底 {float(economy['support']):.2%}/小时")
         details = economy.get("details") or []
         if details:
@@ -6594,10 +6618,10 @@ class CatStockPlugin:
         companies = market["companies"]
         hot_cool = ""
         econ = market.get("economy") or {}
-        if float(econ.get("hour_change", 0) or 0) >= CAT_STOCK_ECON_HOUR_HOT:
+        if float(econ.get("day_change", 0) or 0) >= CAT_STOCK_ECON_DAY_HOT:
             hot_cool = (
-                "\n当前大盘偏热，账户财富一小时就涨了 "
-                f"{float(econ.get('hour_change', 0) or 0):.1%}。"
+                "\n当前大盘偏热，账户财富今天已经涨了 "
+                f"{float(econ.get('day_change', 0) or 0):.1%}。"
                 "本小时请以利空、降温类事件为主，至少三分之二的 effects 为负："
                 "可以写获利回吐、商队亏损、订单取消、监管收紧、灾害减产、"
                 "黑市崩价之类有因果的坏消息，帮市场降温；"

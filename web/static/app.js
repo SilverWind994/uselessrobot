@@ -3694,6 +3694,7 @@ const stockMarketSubEl = document.getElementById('stock-market-sub');
 const stockBondBodyEl = document.getElementById('stock-bond-body');
 const stockBondSubEl = document.getElementById('stock-bond-sub');
 const stockHoldingsEl = document.getElementById('stock-holdings');
+const stockHoldSubEl = document.getElementById('stock-hold-sub');
 const stockNewsEl = document.getElementById('stock-news');
 let stockLastData = null;
 const stockModalEl = document.getElementById('stock-modal');

@@ -762,6 +762,7 @@ class CatStockPlugin:
         self._cat = cat_game
         self._ai = ai_plugin
         self._lock = threading.Lock()
+        self._war_timers: Dict[str, threading.Timer] = {}
         os.makedirs(STOCK_DIR, exist_ok=True)
         self._ensure_market()
         self._migrate_economy()
@@ -770,6 +771,8 @@ class CatStockPlugin:
         # 网页端复用同一个插件时不需要再起一条调度线程，避免整点重复跑 tick
         if start_scheduler:
             self._start_scheduler()
+            # 机器人重启后把还没到期的商战重新挂上定时结算
+            self._resume_war_timers()
 
     # ==================== 注册命令 ====================
 
@@ -4486,6 +4489,8 @@ class CatStockPlugin:
             }
             market["news"] = self._recent_news([entry] + (market.get("news") or []))[:CAT_STOCK_NEWS_MAX]
             self._save_market(market)
+            # 到点由定时器结算，不等下一个整点
+            self._schedule_war_settle(war["id"], war["end_ts"])
             view = self._war_view(market, war, players, qq)
         return {"ok": True, "msg": f"商战已开打：{mine['name']} 对 {target['name']}", "war": view}
 
@@ -4656,6 +4661,9 @@ class CatStockPlugin:
     def _war_settle(self, market: dict, players: dict, war: dict,
                     annex_side: str = "") -> List[dict]:
         """结算商战：吞并对手，或按总支持度判出胜负"""
+        timer = self._war_timers.pop(str(war.get("id") or ""), None)
+        if timer:
+            timer.cancel()
         companies = market["companies"]
         a_code, b_code = war.get("a"), war.get("b")
         a_comp, b_comp = companies.get(a_code), companies.get(b_code)
@@ -4752,6 +4760,61 @@ class CatStockPlugin:
                 f"{size_text}")
         return [{"title": f"商战结算：{win_comp['name']}胜出",
                  "detail": war["result"]}]
+
+    def _schedule_war_settle(self, war_id: str, end_ts: float) -> None:
+        """在商战到期的那一刻挂一个定时器，避免等到下一个整点才结算"""
+        old = self._war_timers.pop(war_id, None)
+        if old:
+            old.cancel()
+        delay = max(1.0, float(end_ts or 0) - time.time())
+        timer = threading.Timer(delay, self._auto_settle_war, args=(war_id,))
+        timer.daemon = True
+        self._war_timers[war_id] = timer
+        timer.start()
+
+    def _resume_war_timers(self) -> None:
+        """启动时补齐未到期的商战定时结算"""
+        with self._lock:
+            market = self._load_market()
+            wars = [w for w in self._war_list(market).values()
+                    if w.get("status") == "active" and w.get("id")]
+        for war in wars:
+            self._schedule_war_settle(war["id"], float(war.get("end_ts", 0) or 0))
+
+    def _auto_settle_war(self, war_id: str) -> None:
+        """到点即结算：不再等整点，结算后立刻推一条战报"""
+        self._war_timers.pop(war_id, None)
+        items: List[dict] = []
+        try:
+            with self._lock:
+                market = self._load_market()
+                players = self._load_stock_players()
+                war = self._war_list(market).get(war_id)
+                if not war or war.get("status") != "active":
+                    return
+                companies = market.get("companies") or {}
+                if war.get("a") in companies and war.get("b") in companies:
+                    items = self._war_settle(
+                        market, players, war, self._war_annex_side(war))
+                else:
+                    items = self._war_settle(market, players, war)
+                market["news"] = self._recent_news(
+                    items + (market.get("news") or []))[:CAT_STOCK_NEWS_MAX]
+                self._save_market(market)
+                self._save_stock_players(players)
+        except Exception as exc:
+            print(f"[cat_stock] 商战定时结算失败：{exc}")
+            return
+        group_id = getattr(Config, "STOCK_NEWS_GROUP", 1011679851)
+        now = datetime.now()
+        lines = [f"【喵股市 · 商战结算 {now.strftime('%m-%d %H:%M')}】"]
+        for item in items:
+            lines.append(f"⚔️ {item.get('title', '')}")
+            if item.get("detail"):
+                lines.append(f"  {item['detail']}")
+        lines.append("发送「喵股市 商战」查看双方支持度与结果")
+        self._sender.send_text(
+            Target(user_id=0, group_id=group_id, is_group=True), "\n".join(lines))
 
     def _war_step(self, market: dict, players: dict, now: datetime) -> List[dict]:
         """每个整点推进商战：舆论事件，到期时一次性结算（不提前吞并）"""

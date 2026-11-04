@@ -193,6 +193,88 @@ _BOARD_CASTS[0] = [
      "persona": "拿骨片摆加减，年纪最小，却总能把账算得清清楚楚。"},
 ]
 
+# 第二世代的商号各自有自己的一批老股东，不再沿用初蒙时代的面孔
+_BOARD_CASTS[1] = [
+    {"name": "守田老农·禾", "tag": "守旧",
+     "persona": "认定祖辈怎么烧荒就怎么烧荒，听见新犁法先摇头。"},
+    {"name": "陶轮匠·埴", "tag": "务实",
+     "persona": "只认转得匀的陶轮，谈远景不如多烧一窑。"},
+    {"name": "牧首·蹄", "tag": "冒险",
+     "persona": "敢把整群牲口赶进没走过的草坡，赔了也认。"},
+    {"name": "石渠监工·渠", "tag": "谨慎",
+     "persona": "量水口能蹲一整天，宁可少浇一垄也不肯决堤。"},
+    {"name": "谷仓掌钥人·穗", "tag": "精算",
+     "persona": "把每斗谷子都记在陶片上，谁借了都得还。"},
+    {"name": "烧荒巫·燎", "tag": "信仰",
+     "persona": "先看烟往哪边飘再定播种的日子，说火会替人指路。"},
+    {"name": "编席老妪·苇", "tag": "寡言",
+     "persona": "手上不停编，一天说不出几句，开口就是席子不够用。"},
+    {"name": "驮兽把式·远", "tag": "憨直",
+     "persona": "认路只认牲口走过的，别人说捷径他就摆手。"},
+    {"name": "田界丈量人·绳", "tag": "精算",
+     "persona": "拿草绳量地，差半步都要重来。"},
+    {"name": "逃荒归来者·尘", "tag": "悲观",
+     "persona": "总说下一场旱灾就在眼前，囤粮囤得比谁都狠。"},
+    {"name": "牧歌少女·铃", "tag": "浪漫",
+     "persona": "赶着羊群唱歌，谈生意先谈草坡上的风。"},
+    {"name": "烧荒鼓手·焰", "tag": "搞怪",
+     "persona": "点火前必敲三通鼓，把烧荒办成一场祭典。"},
+]
+
+_BOARD_CASTS[2] = [
+    {"name": "大祭司·骨鸦", "tag": "信仰",
+     "persona": "开口便是骨裂纹里的神意，议事时连君王都要让他三分。"},
+    {"name": "卜骨老巫·纹", "tag": "守旧",
+     "persona": "只认祖传的卜法，新刻的骨片一概不看。"},
+    {"name": "石殿匠首·础", "tag": "务实",
+     "persona": "只关心石柱立得稳不稳，神谕怎么解与他无关。"},
+    {"name": "城垣守将·垛", "tag": "谨慎",
+     "persona": "每日巡墙三遍，宁可被人笑胆小也不肯开城门。"},
+    {"name": "分坛祭司·歧", "tag": "投机",
+     "persona": "哪座城的香火旺就往哪边站，嘴上说共尊一神。"},
+    {"name": "圣战执旗·烈", "tag": "狂热",
+     "persona": "认定远征就是最快的传教，恨不得明天就出发。"},
+    {"name": "抄经女史·简", "tag": "精算",
+     "persona": "把每句神谕抄成三份存档，错一字要罚自己一夜不睡。"},
+    {"name": "朝圣香客·愿", "tag": "人情",
+     "persona": "走遍列城烧香，谁家有事都愿意搭把手。"},
+    {"name": "骨器商人·刻", "tag": "投机",
+     "persona": "专收占卜用过的骨片转卖，说沾过神意更值钱。"},
+    {"name": "巫舞面具匠·傩", "tag": "搞怪",
+     "persona": "每逢议事必戴新面具，把庄严的法会办得像傩戏。"},
+    {"name": "税吏·秤", "tag": "精算",
+     "persona": "连祭品都要过秤抽成，账目清楚得让人牙痒。"},
+    {"name": "守夜祭徒·烛", "tag": "寡言",
+     "persona": "整夜守着圣火不添一句话，只在火要灭时才开口。"},
+]
+
+_BOARD_CASTS[3] = [
+    {"name": "渡口老艄公·篙", "tag": "谨慎",
+     "persona": "看水色就知道能不能开船，风浪大时谁说也不走。"},
+    {"name": "堤工头·夯", "tag": "务实",
+     "persona": "只信夯过的土，图纸画得再漂亮也要先看堤脚。"},
+    {"name": "渔汛头人·网", "tag": "冒险",
+     "persona": "敢把船开进最急的水道，说鱼群就在浪底下。"},
+    {"name": "浮屋木匠·榫", "tag": "寡言",
+     "persona": "不问东家要住多久，只把每一道榫卯咬死。"},
+    {"name": "芦席编织婆·芦", "tag": "人情",
+     "persona": "谁家浮屋漏了都先送两张席子，账可以以后再算。"},
+    {"name": "沉陆观测者·望", "tag": "悲观",
+     "persona": "每天量一次水位，逢人就说陆地迟早要沉完。"},
+    {"name": "水寨哨长·哨", "tag": "守旧",
+     "persona": "只按旧哨规巡夜，新设的灯标一概不信。"},
+    {"name": "粮船押运·舱", "tag": "精算",
+     "persona": "每袋粮上船都要点数，少一粒也要追到码头。"},
+    {"name": "泽市牙人·秤", "tag": "投机",
+     "persona": "水涨水落都能从中抽一笔，嘴上的价永远比心里低。"},
+    {"name": "退水农人·淤", "tag": "憨直",
+     "persona": "水退到哪就种到哪，别人劝他搬走，他只摇头。"},
+    {"name": "渔歌女·歌", "tag": "浪漫",
+     "persona": "把渔汛编成歌，唱着唱着就把生意谈成了。"},
+    {"name": "打捞人·钩", "tag": "搞怪",
+     "persona": "专捞沉船里的怪东西，常把废铜说成宝物。"},
+]
+
 # 未单独配置董事人选的时代默认沿用这一批
 _BOARD_CAST_DEFAULT = [
     {"name": "老账房·算盘", "tag": "谨慎",
@@ -294,53 +376,53 @@ _ERAS = [
         "sectors": ["火耕", "陶器", "畜牧", "石砌", "储粮", "治水"],
         "companies": [
             {"name": "火耕农社", "country": "vo", "sectors": ["火耕", "储粮"], "base": 26},
-            {"name": "灰田陶窑", "country": "du", "sectors": ["陶器", "火耕"], "base": 19},
-            {"name": "蓄水石渠", "country": "mo", "sectors": ["石砌", "治水"], "base": 23},
-            {"name": "畜栏牧坊", "country": "za", "sectors": ["畜牧", "皮货"], "base": 31},
+            {"name": "灰田陶窑", "country": "du", "sectors": ["陶器", "火耕"], "tags": ["陶器"], "base": 19},
+            {"name": "蓄水石渠", "country": "mo", "sectors": ["石砌", "治水"], "tags": ["治水"], "base": 23},
+            {"name": "畜栏牧坊", "country": "za", "sectors": ["畜牧", "皮货"], "tags": ["畜牧"], "base": 31},
             {"name": "篝火粮仓", "country": "sy", "sectors": ["储粮", "火耕"], "base": 16},
             {"name": "定居木栅营", "country": "ta", "sectors": ["定居", "石砌"], "base": 28},
             {"name": "火烧坡田队", "country": "vo", "sectors": ["火耕", "采集"], "base": 21},
-            {"name": "泥坯陶瓮坊", "country": "du", "sectors": ["陶器", "储粮"], "base": 24},
-            {"name": "草坡放牧圈", "country": "za", "sectors": ["畜牧", "储粮"], "base": 27},
-            {"name": "石垒田埂社", "country": "ta", "sectors": ["石砌", "治水"], "base": 25},
+            {"name": "泥坯陶瓮坊", "country": "du", "sectors": ["陶器", "储粮"], "tags": ["陶器"], "base": 24},
+            {"name": "草坡放牧圈", "country": "za", "sectors": ["畜牧", "储粮"], "tags": ["畜牧"], "base": 27},
+            {"name": "石垒田埂社", "country": "ta", "sectors": ["石砌", "治水"], "tags": ["治水"], "base": 25},
             {"name": "稻穗晾晒场", "country": "sy", "sectors": ["储粮", "火耕"], "base": 18},
-            {"name": "溪渠引水队", "country": "mo", "sectors": ["治水", "石砌"], "base": 22},
-            {"name": "陶轮车作坊", "country": "du", "sectors": ["陶器", "运输"], "base": 26},
+            {"name": "溪渠引水队", "country": "mo", "sectors": ["治水", "石砌"], "tags": ["治水"], "base": 22},
+            {"name": "陶轮车作坊", "country": "du", "sectors": ["陶器", "运输"], "tags": ["陶器"], "base": 26},
             {"name": "灰烬肥田社", "country": "vo", "sectors": ["火耕", "沃土"], "base": 20},
-            {"name": "木栅畜栏行", "country": "ta", "sectors": ["畜牧", "木作"], "base": 23},
+            {"name": "木栅畜栏行", "country": "ta", "sectors": ["畜牧", "木作"], "tags": ["畜牧"], "base": 23},
             {"name": "谷仓守夜人", "country": "za", "sectors": ["储粮", "守夜"], "base": 17},
-            {"name": "陶片记账所", "country": "sy", "sectors": ["陶器", "记账"], "base": 15},
-            {"name": "石磨谷粉坊", "country": "mo", "sectors": ["石砌", "储粮"], "base": 21},
+            {"name": "陶片记账所", "country": "sy", "sectors": ["陶器", "记账"], "tags": ["陶器"], "base": 15},
+            {"name": "石磨谷粉坊", "country": "mo", "sectors": ["石砌", "储粮"], "tags": ["治水"], "base": 21},
             {"name": "火种借给站", "country": "vo", "sectors": ["火种", "火耕"], "base": 19},
             {"name": "芦苇编席社", "country": "sy", "sectors": ["编具", "居所"], "base": 14},
-            {"name": "驮兽运输队", "country": "za", "sectors": ["畜牧", "运输"], "base": 24},
-            {"name": "灰陶灯盏窑", "country": "du", "sectors": ["陶器", "照明"], "base": 20},
-            {"name": "土埂护田队", "country": "ta", "sectors": ["治水", "石砌"], "base": 22},
-            {"name": "牧犬训养棚", "country": "mo", "sectors": ["畜牧", "守夜"], "base": 18},
+            {"name": "驮兽运输队", "country": "za", "sectors": ["畜牧", "运输"], "tags": ["畜牧"], "base": 24},
+            {"name": "灰陶灯盏窑", "country": "du", "sectors": ["陶器", "照明"], "tags": ["陶器"], "base": 20},
+            {"name": "土埂护田队", "country": "ta", "sectors": ["治水", "石砌"], "tags": ["治水"], "base": 22},
+            {"name": "牧犬训养棚", "country": "mo", "sectors": ["畜牧", "守夜"], "tags": ["畜牧"], "base": 18},
             {"name": "烟熏储肉坊", "country": "vo", "sectors": ["储粮", "烟熏"], "base": 21},
-            {"name": "陶埙乐坊", "country": "sy", "sectors": ["陶器", "祭仪"], "base": 16},
-            {"name": "渠闸看守所", "country": "du", "sectors": ["治水", "守夜"], "base": 23},
+            {"name": "陶埙乐坊", "country": "sy", "sectors": ["陶器", "祭仪"], "tags": ["陶器"], "base": 16},
+            {"name": "渠闸看守所", "country": "du", "sectors": ["治水", "守夜"], "tags": ["治水"], "base": 23},
             {"name": "草绳编织社", "country": "za", "sectors": ["编具", "储粮"], "base": 13},
             {"name": "石臼舂米铺", "country": "ta", "sectors": ["石砌", "储粮"], "base": 17},
             {"name": "火耕换工盟", "country": "vo", "sectors": ["火耕", "互助"], "base": 15},
-            {"name": "灰土陶印坊", "country": "du", "sectors": ["陶器", "印记"], "base": 18},
-            {"name": "牧草晒干队", "country": "za", "sectors": ["畜牧", "储粮"], "base": 19},
+            {"name": "灰土陶印坊", "country": "du", "sectors": ["陶器", "印记"], "tags": ["陶器"], "base": 18},
+            {"name": "牧草晒干队", "country": "za", "sectors": ["畜牧", "储粮"], "tags": ["畜牧"], "base": 19},
             {"name": "供火巡夜组", "country": "mo", "sectors": ["火种", "守夜"], "base": 16},
-            {"name": "陶罐换盐摊", "country": "sy", "sectors": ["陶器", "贸易"], "base": 22},
-            {"name": "石渠修补队", "country": "ta", "sectors": ["治水", "石砌"], "base": 20},
+            {"name": "陶罐换盐摊", "country": "sy", "sectors": ["陶器", "贸易"], "tags": ["陶器"], "base": 22},
+            {"name": "石渠修补队", "country": "ta", "sectors": ["治水", "石砌"], "tags": ["治水"], "base": 20},
         ],
         "catalog": [
-            {"name": "水车提水社", "country": "mo", "sectors": ["治水", "水利"], "base": 24},
-            {"name": "陶范铸铃坊", "country": "du", "sectors": ["陶器", "铸铃"], "base": 21},
-            {"name": "苜蓿种籽行", "country": "za", "sectors": ["畜牧", "种籽"], "base": 19},
+            {"name": "水车提水社", "country": "mo", "sectors": ["治水", "水利"], "tags": ["治水"], "base": 24},
+            {"name": "陶范铸铃坊", "country": "du", "sectors": ["陶器", "铸铃"], "tags": ["陶器"], "base": 21},
+            {"name": "苜蓿种籽行", "country": "za", "sectors": ["畜牧", "种籽"], "tags": ["畜牧"], "base": 19},
             {"name": "火耕换工所", "country": "vo", "sectors": ["火耕", "互助"], "base": 22},
             {"name": "谷仓防鼠队", "country": "sy", "sectors": ["储粮", "守夜"], "base": 18},
             {"name": "石埂圈地队", "country": "ta", "sectors": ["石砌", "田界"], "base": 23},
-            {"name": "陶轮课徒棚", "country": "du", "sectors": ["陶器", "授艺"], "base": 20},
-            {"name": "牧栏围建社", "country": "za", "sectors": ["畜牧", "木作"], "base": 25},
-            {"name": "溪渠清淤队", "country": "mo", "sectors": ["治水", "清淤"], "base": 22},
+            {"name": "陶轮课徒棚", "country": "du", "sectors": ["陶器", "授艺"], "tags": ["陶器"], "base": 20},
+            {"name": "牧栏围建社", "country": "za", "sectors": ["畜牧", "木作"], "tags": ["畜牧"], "base": 25},
+            {"name": "溪渠清淤队", "country": "mo", "sectors": ["治水", "清淤"], "tags": ["治水"], "base": 22},
             {"name": "黍米蒸尝社", "country": "sy", "sectors": ["储粮", "食肆"], "base": 17},
-            {"name": "火塘陶灯铺", "country": "vo", "sectors": ["陶器", "照明"], "base": 19},
+            {"name": "火塘陶灯铺", "country": "vo", "sectors": ["陶器", "照明"], "tags": ["陶器"], "base": 19},
             {"name": "山坡梯田队", "country": "ta", "sectors": ["火耕", "石砌"], "base": 26},
         ],
         "paths": [
@@ -357,21 +439,21 @@ _ERAS = [
         "theme": "兽骨裂纹里读出神意，祭司坐在石殿正中发号施令",
         "sectors": ["祭仪", "城垣", "神谕", "石殿", "图腾", "巫祝"],
         "companies": [
-            {"name": "骨卜神谕所", "country": "vo", "sectors": ["神谕", "巫祝"], "base": 30},
+            {"name": "骨卜神谕所", "country": "vo", "sectors": ["神谕", "巫祝"], "tags": ["神谕"], "base": 30},
             {"name": "石柱城垣", "country": "ta", "sectors": ["城垣", "石殿"], "base": 35},
             {"name": "图腾祭火盟", "country": "sy", "sectors": ["图腾", "祭仪"], "base": 22},
-            {"name": "巫祝骨坊", "country": "mo", "sectors": ["巫祝", "骨器"], "base": 25},
+            {"name": "巫祝骨坊", "country": "mo", "sectors": ["巫祝", "骨器"], "tags": ["分权"], "base": 25},
             {"name": "祭火石殿", "country": "za", "sectors": ["石殿", "祭仪"], "base": 28},
-            {"name": "城邦守卫所", "country": "du", "sectors": ["城垣", "守卫"], "base": 20},
-            {"name": "骨裂纹解读堂", "country": "vo", "sectors": ["神谕", "卜骨"], "base": 27},
-            {"name": "祭司袍服坊", "country": "sy", "sectors": ["祭仪", "织造"], "base": 21},
-            {"name": "石殿钟楼所", "country": "ta", "sectors": ["石殿", "钟鸣"], "base": 26},
-            {"name": "城垣雉堞队", "country": "du", "sectors": ["城垣", "石作"], "base": 24},
+            {"name": "城邦守卫所", "country": "du", "sectors": ["城垣", "守卫"], "tags": ["圣战"], "base": 20},
+            {"name": "骨裂纹解读堂", "country": "vo", "sectors": ["神谕", "卜骨"], "tags": ["神谕"], "base": 27},
+            {"name": "祭司袍服坊", "country": "sy", "sectors": ["祭仪", "织造"], "tags": ["分权"], "base": 21},
+            {"name": "石殿钟楼所", "country": "ta", "sectors": ["石殿", "钟鸣"], "tags": ["圣战"], "base": 26},
+            {"name": "城垣雉堞队", "country": "du", "sectors": ["城垣", "石作"], "tags": ["圣战"], "base": 24},
             {"name": "巫舞面具铺", "country": "mo", "sectors": ["巫祝", "面具"], "base": 19},
             {"name": "圣火长明坛", "country": "za", "sectors": ["祭仪", "圣火"], "base": 23},
-            {"name": "神谕抄写院", "country": "vo", "sectors": ["神谕", "抄录"], "base": 25},
+            {"name": "神谕抄写院", "country": "vo", "sectors": ["神谕", "抄录"], "tags": ["神谕", "分权"], "base": 25},
             {"name": "分坛祭司盟", "country": "ta", "sectors": ["祭仪", "盟约"], "tags": ["分权"], "base": 22},
-            {"name": "骨片占卜摊", "country": "sy", "sectors": ["神谕", "卜骨"], "base": 17},
+            {"name": "骨片占卜摊", "country": "sy", "sectors": ["神谕", "卜骨"], "tags": ["神谕"], "base": 17},
             {"name": "石阶朝圣道", "country": "mo", "sectors": ["石殿", "朝圣"], "base": 18},
             {"name": "图腾柱雕刻坊", "country": "za", "sectors": ["图腾", "雕作"], "base": 21},
             {"name": "城邦税吏所", "country": "du", "sectors": ["城垣", "税赋"], "base": 23},
@@ -379,14 +461,14 @@ _ERAS = [
             {"name": "巫祝草药房", "country": "sy", "sectors": ["巫祝", "草药"], "base": 19},
             {"name": "祭仪铜铃坊", "country": "vo", "sectors": ["祭仪", "铸铃"], "base": 24},
             {"name": "石殿地宫看守", "country": "mo", "sectors": ["石殿", "守夜"], "base": 22},
-            {"name": "神谕信鸽棚", "country": "za", "sectors": ["神谕", "传信"], "base": 16},
+            {"name": "神谕信鸽棚", "country": "za", "sectors": ["神谕", "传信"], "tags": ["神谕"], "base": 16},
             {"name": "城垣夯土队", "country": "du", "sectors": ["城垣", "土作"], "base": 21},
             {"name": "图腾纹身铺", "country": "ta", "sectors": ["图腾", "刺青"], "base": 17},
             {"name": "祭司仲裁所", "country": "vo", "sectors": ["祭仪", "裁断"], "base": 23},
             {"name": "圣城旅舍", "country": "sy", "sectors": ["朝圣", "食宿"], "base": 20},
             {"name": "巫祝骨针坊", "country": "mo", "sectors": ["巫祝", "骨器"], "base": 16},
             {"name": "石殿壁画队", "country": "za", "sectors": ["石殿", "壁画"], "base": 19},
-            {"name": "神谕梦解所", "country": "du", "sectors": ["神谕", "解梦"], "base": 21},
+            {"name": "神谕梦解所", "country": "du", "sectors": ["神谕", "解梦"], "tags": ["神谕"], "base": 21},
             {"name": "圣战担架队", "country": "ta", "sectors": ["医护", "担架"], "tags": ["圣战"], "base": 15},
             {"name": "分权城邦盟", "country": "sy", "sectors": ["盟约", "城垣"], "tags": ["分权"], "base": 22},
             {"name": "祭火灰烬收存坊", "country": "vo", "sectors": ["祭仪", "火种"], "base": 18},
@@ -394,13 +476,13 @@ _ERAS = [
             {"name": "石柱铭文社", "country": "za", "sectors": ["石殿", "铭文"], "base": 19},
         ],
         "catalog": [
-            {"name": "骨签律法所", "country": "vo", "sectors": ["神谕", "律法"], "base": 26},
+            {"name": "骨签律法所", "country": "vo", "sectors": ["神谕", "律法"], "tags": ["神谕"], "base": 26},
             {"name": "石殿献祭队", "country": "ta", "sectors": ["石殿", "祭仪"], "base": 28},
             {"name": "巫祝药囊铺", "country": "sy", "sectors": ["巫祝", "草药"], "base": 22},
-            {"name": "城垣烽燧台", "country": "du", "sectors": ["城垣", "烽火"], "base": 27},
+            {"name": "城垣烽燧台", "country": "du", "sectors": ["城垣", "烽火"], "tags": ["圣战"], "base": 27},
             {"name": "图腾碑林社", "country": "za", "sectors": ["图腾", "碑刻"], "base": 24},
             {"name": "祭司斋戒所", "country": "mo", "sectors": ["祭仪", "斋戒"], "base": 20},
-            {"name": "神谕信物铺", "country": "vo", "sectors": ["神谕", "信物"], "base": 23},
+            {"name": "神谕信物铺", "country": "vo", "sectors": ["神谕", "信物"], "tags": ["神谕"], "base": 23},
             {"name": "圣城香火行", "country": "sy", "sectors": ["祭仪", "香火"], "base": 25},
             {"name": "分坛唱诗班", "country": "ta", "sectors": ["祭仪", "唱诵"], "tags": ["分权"], "base": 21},
             {"name": "城邦铸币坊", "country": "du", "sectors": ["城垣", "铸币"], "base": 29},
@@ -421,36 +503,36 @@ _ERAS = [
         "theme": "水退不下去，村落搬上木筏，渡口比路口更热闹",
         "sectors": ["舟渡", "渔获", "泽耕", "浮屋", "治水", "芦苇"],
         "companies": [
-            {"name": "浮舟渡社", "country": "vo", "sectors": ["舟渡", "渔获"], "base": 22},
-            {"name": "芦苇浮屋营", "country": "sy", "sectors": ["浮屋", "芦苇"], "base": 19},
+            {"name": "浮舟渡社", "country": "vo", "sectors": ["舟渡", "渔获"], "tags": ["舟渡"], "base": 22},
+            {"name": "芦苇浮屋营", "country": "sy", "sectors": ["浮屋", "芦苇"], "tags": ["沉陆"], "base": 19},
             {"name": "泽畔治水队", "country": "za", "sectors": ["治水", "泽耕"], "base": 28},
-            {"name": "渔火水寨", "country": "ta", "sectors": ["渔获", "水寨"], "base": 32},
-            {"name": "泥堤工坊", "country": "du", "sectors": ["治水", "舟渡"], "base": 24},
+            {"name": "渔火水寨", "country": "ta", "sectors": ["渔获", "水寨"], "tags": ["沉陆"], "base": 32},
+            {"name": "泥堤工坊", "country": "du", "sectors": ["治水", "舟渡"], "tags": ["舟渡"], "base": 24},
             {"name": "泽市交换所", "country": "mo", "sectors": ["泽耕", "渡口"], "base": 17},
-            {"name": "撑篙摆渡队", "country": "vo", "sectors": ["舟渡", "运输"], "base": 20},
+            {"name": "撑篙摆渡队", "country": "vo", "sectors": ["舟渡", "运输"], "tags": ["舟渡"], "base": 20},
             {"name": "芦席晒鱼场", "country": "sy", "sectors": ["渔获", "芦苇"], "base": 18},
             {"name": "浮木搭桥社", "country": "za", "sectors": ["浮屋", "治水"], "base": 21},
-            {"name": "水寨哨船队", "country": "ta", "sectors": ["舟渡", "巡逻"], "base": 27},
+            {"name": "水寨哨船队", "country": "ta", "sectors": ["舟渡", "巡逻"], "tags": ["舟渡"], "base": 27},
             {"name": "淤泥肥田社", "country": "du", "sectors": ["泽耕", "沃土"], "tags": ["淤肥"], "base": 23},
-            {"name": "泽畔陶罐窑", "country": "mo", "sectors": ["泽耕", "陶器"], "base": 16},
-            {"name": "木筏修造坊", "country": "vo", "sectors": ["舟渡", "木作"], "base": 22},
+            {"name": "泽畔陶罐窑", "country": "mo", "sectors": ["泽耕", "陶器"], "tags": ["淤肥"], "base": 16},
+            {"name": "木筏修造坊", "country": "vo", "sectors": ["舟渡", "木作"], "tags": ["舟渡"], "base": 22},
             {"name": "芦苇纸浆铺", "country": "sy", "sectors": ["芦苇", "造纸"], "base": 15},
             {"name": "堤坝夯土队", "country": "za", "sectors": ["治水", "土作"], "base": 24},
             {"name": "水寨渔网坊", "country": "ta", "sectors": ["渔获", "编具"], "base": 20},
-            {"name": "泽国粮船队", "country": "du", "sectors": ["泽耕", "运输"], "base": 21},
+            {"name": "泽国粮船队", "country": "du", "sectors": ["泽耕", "运输"], "tags": ["淤肥"], "base": 21},
             {"name": "沉陆观测棚", "country": "mo", "sectors": ["观测", "水文"], "tags": ["沉陆"], "base": 18},
             {"name": "渡口茶棚", "country": "vo", "sectors": ["渡口", "食宿"], "base": 14},
-            {"name": "浮屋骨架行", "country": "sy", "sectors": ["浮屋", "木作"], "base": 19},
+            {"name": "浮屋骨架行", "country": "sy", "sectors": ["浮屋", "木作"], "tags": ["沉陆"], "base": 19},
             {"name": "渔汛瞭望台", "country": "ta", "sectors": ["渔获", "瞭望"], "base": 17},
-            {"name": "泥沼采藕队", "country": "za", "sectors": ["泽耕", "采集"], "base": 16},
-            {"name": "小舟赁出行", "country": "du", "sectors": ["舟渡", "赁借"], "base": 15},
+            {"name": "泥沼采藕队", "country": "za", "sectors": ["泽耕", "采集"], "tags": ["淤肥"], "base": 16},
+            {"name": "小舟赁出行", "country": "du", "sectors": ["舟渡", "赁借"], "tags": ["舟渡"], "base": 15},
             {"name": "水退播种社", "country": "mo", "sectors": ["泽耕", "播种"], "tags": ["淤肥"], "base": 20},
             {"name": "芦苇帘编坊", "country": "sy", "sectors": ["芦苇", "编具"], "base": 13},
             {"name": "堤上巡夜队", "country": "za", "sectors": ["治水", "守夜"], "base": 18},
             {"name": "水寨灶房", "country": "ta", "sectors": ["渔获", "食宿"], "base": 19},
             {"name": "浮屋灯油铺", "country": "vo", "sectors": ["浮屋", "照明"], "base": 16},
             {"name": "泽畔药草棚", "country": "du", "sectors": ["泽耕", "草药"], "base": 17},
-            {"name": "沉船打捞队", "country": "mo", "sectors": ["舟渡", "打捞"], "tags": ["沉陆"], "base": 21},
+            {"name": "沉船打捞队", "country": "mo", "sectors": ["舟渡", "打捞"], "tags": ["舟渡", "沉陆"], "base": 21},
             {"name": "芦根磨粉社", "country": "sy", "sectors": ["芦苇", "储粮"], "base": 14},
             {"name": "浅滩插秧队", "country": "za", "sectors": ["泽耕", "播种"], "base": 15},
             {"name": "渡口水文所", "country": "ta", "sectors": ["治水", "观测"], "base": 22},
@@ -458,13 +540,13 @@ _ERAS = [
             {"name": "陆沉迁居团", "country": "mo", "sectors": ["迁居", "浮屋"], "tags": ["沉陆"], "base": 19},
         ],
         "catalog": [
-            {"name": "浮桥架设队", "country": "vo", "sectors": ["舟渡", "桥梁"], "base": 21},
+            {"name": "浮桥架设队", "country": "vo", "sectors": ["舟渡", "桥梁"], "tags": ["舟渡"], "base": 21},
             {"name": "泽畔渔网社", "country": "sy", "sectors": ["渔获", "编具"], "base": 19},
             {"name": "水寨鼓角台", "country": "ta", "sectors": ["渔获", "传信"], "base": 22},
             {"name": "泥堤加高队", "country": "za", "sectors": ["治水", "土作"], "base": 24},
             {"name": "浮屋漆作坊", "country": "du", "sectors": ["浮屋", "漆作"], "base": 20},
             {"name": "芦苇火绒铺", "country": "mo", "sectors": ["芦苇", "火种"], "base": 15},
-            {"name": "渡口验船所", "country": "vo", "sectors": ["舟渡", "检验"], "base": 23},
+            {"name": "渡口验船所", "country": "vo", "sectors": ["舟渡", "检验"], "tags": ["舟渡"], "base": 23},
             {"name": "泽生菱角队", "country": "sy", "sectors": ["泽耕", "采集"], "base": 16},
             {"name": "水退田界队", "country": "za", "sectors": ["泽耕", "田界"], "tags": ["淤肥"], "base": 19},
             {"name": "渔汛占候所", "country": "ta", "sectors": ["渔获", "占候"], "base": 20},
@@ -6069,9 +6151,7 @@ class CatStockPlugin:
         return economy
 
     def _economy_report(self, now: datetime, market: dict, economy: dict) -> None:
-        """把本轮的冷热判断与定向调整整理成一条私聊，发给掌管者核对"""
-        if not (economy.get("drag") or economy.get("support")):
-            return
+        """把本轮的冷热判断、全市场加权涨跌与定向调整整理成一条私聊，发给掌管者核对"""
         lines = [f"【喵股市 · 冷热观测 {now.strftime('%m-%d %H:%M')}】",
                  f"持仓账户 {int(economy.get('active', 0))}｜"
                  f"人均财富 {float(economy.get('per_capita', 0) or 0):,.1f}｜"
@@ -6085,6 +6165,9 @@ class CatStockPlugin:
             chunks.append(f"{label} {value:,.0f}（{value / wealth:.0%}）"
                           if wealth else f"{label} {value:,.0f}")
         lines.append("玩家财富构成：" + "｜".join(chunks))
+        index_day = self._index_change(market.get("companies") or {}, "prev_close")
+        if index_day is not None:
+            lines.append(f"全市场加权总涨跌 {index_day:+.2%}（昨收基准）")
         lines.append(
             f"本小时总收益 {int(economy.get('hour_gain', 0) or 0):+,} 猫薄荷｜"
             f"今日变动 {float(economy.get('day_change', 0) or 0):+.2%}"
@@ -6095,10 +6178,12 @@ class CatStockPlugin:
             lines.append(
                 f"判定：今日过热，超出 {float(economy.get('hot_excess', 0) or 0):.2%} → "
                 f"多头占优个股收紧 {float(economy['drag']):.2%}/小时")
-        else:
+        elif economy.get("support"):
             lines.append(
                 f"判定：今日过冷，超出 {float(economy.get('cold_excess', 0) or 0):.2%} → "
                 f"有持仓个股托底 {float(economy['support']):.2%}/小时")
+        else:
+            lines.append("判定：未越过冷热线 → 本小时不作定向调整")
         details = economy.get("details") or []
         if details:
             lines.append(f"定向调整 {int(economy.get('adjusted', 0))} 家：")
@@ -6870,17 +6955,29 @@ class CatStockPlugin:
             "reform 只能是本时代内部的调整，不能写成文明阶段或科技体系的整体跃迁。"
             "亡国只在极少数情况下发生，不要每小时都灭国。\n"
         )
-        text = self._ai._call_ai(
-            Config.AI_MODEL["chat"],
-            [{"role": "system", "content": "你是奇幻世界《猫猫远征队》if 线的财经新闻主编。"},
-             {"role": "user", "content": prompt}],
-            temperature=0.9,
-            max_retries=1,
-            max_tokens=3000,
-        )
-        data = _extract_json(text)
+        data = None
+        attempts = 0
+        while attempts < 2:
+            attempts += 1
+            text = self._ai._call_ai(
+                Config.AI_MODEL["chat"],
+                [{"role": "system", "content": "你是奇幻世界《猫猫远征队》if 线的财经新闻主编。"},
+                 {"role": "user", "content": prompt}],
+                temperature=0.9,
+                max_retries=1,
+                max_tokens=4000,
+            )
+            data = _extract_json(text)
+            if data and (data.get("news") or data.get("effects")):
+                break
+            print(f"[cat_stock] AI 新闻 JSON 解析失败（第 {attempts} 次），"
+                  f"原始输出尾部：{str(text or '')[-160:]}")
+            # 第二次把输出压短：长 JSON 一旦被截断就会解析失败
+            prompt += (
+                "\n重要：上一次输出没有形成合法 JSON。这次只输出一个 JSON 对象，"
+                "前后不要任何解释和代码块标记；news 只写 4~6 条，world 整个省略，"
+                "字符串内不要出现未转义的换行或双引号，确保 JSON 能被直接解析。\n")
         if not data:
-            print("[cat_stock] AI 新闻 JSON 解析失败，本小时不生成新闻")
             return [], [], None, None
 
         codes = {c["code"] for c in companies.values()}
@@ -7102,7 +7199,7 @@ class CatStockPlugin:
         if era:
             lines.append(f"纪元 · 第 {int(era.get('index', 0)) + 1} 时代"
                          f"「{era.get('name', '')}」")
-        for item in news[:6]:
+        for item in news[:8]:
             lines.append(f"📰 {item.get('title', '')}")
             if item.get("detail"):
                 lines.append(f"  {item['detail']}")

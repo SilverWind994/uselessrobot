@@ -94,7 +94,7 @@ CAT_STOCK_MEETING_HOST_PASS = 2 / 3  # 大股东方针得票超过三分之二�
 CAT_STOCK_MEETING_MAX_LEN = 80       # 单条发言最大长度
 CAT_STOCK_WAR_HOURS = 24             # 一场商战持续多少小时
 CAT_STOCK_WAR_COST = 100             # 每次地区活动消耗的猫薄荷
-CAT_STOCK_WAR_ANNEX = 0.65           # 全部地区支持度超过该比例即可吞并
+CAT_STOCK_WAR_ANNEX = 0.65           # 到期结算时全部地区支持度超过该比例即可吞并
 CAT_STOCK_WAR_REFUND = 0.5           # 吞并时败方拿回、胜方获得的比例
 CAT_STOCK_WAR_SIZE_MAX = 0.03        # 打平时体量大者下跌、体量小者上涨的最大幅度
 CAT_STOCK_WAR_COOLDOWN_DAYS = 7      # 同一家公司多久才能再次发动商战
@@ -3653,13 +3653,19 @@ class CatStockPlugin:
         return self.meeting_state(qq, code)
 
     def meeting_vote(self, qq: int, code: str, choice) -> dict:
-        """股东在三套方针里选一套确认：ai / host / old"""
+        """股东在三套方针里选一套或多套确认：ai / host / old"""
         code = str(code or "").strip().upper()
         if isinstance(choice, bool):
-            choice = "ai" if choice else "old"
-        choice = str(choice or "").strip().lower()
-        if choice not in ("ai", "host", "old"):
-            return {"ok": False, "msg": "只能选 AI 方针、大股东方针或旧方针喵"}
+            choice = ["ai"] if choice else ["old"]
+        if isinstance(choice, str):
+            raw = re.split(r"[\s,，/|、]+", choice.strip().lower())
+        elif isinstance(choice, (list, tuple, set)):
+            raw = [str(c or "").strip().lower() for c in choice]
+        else:
+            raw = []
+        keys = [k for k in ("ai", "host", "old") if k in raw]
+        if not keys and raw:
+            return {"ok": False, "msg": "只能选 AI 方针、大股东方针或旧方针喵（可多选）"}
         with self._lock:
             market = self._load_market()
             meeting = self._today_meeting(market, code)
@@ -3667,13 +3673,18 @@ class CatStockPlugin:
                 return {"ok": False, "msg": "现在没有正在进行的董事会喵"}
             if meeting.get("status") != "confirm":
                 return {"ok": False, "msg": "书记员正在整理方针，请稍候再确认"}
-            players = self._load_stock_players()
-            mine = self._shares_in(players, qq, code)
-            if mine <= CAT_STOCK_MEETING_MIN_SHARES:
-                return {"ok": False,
-                        "msg": f"持有 {CAT_STOCK_MEETING_MIN_SHARES} 股以上才有确认权喵"}
-            meeting.setdefault("votes", {})[str(qq)] = choice
-            self._save_market(market)
+            if not keys:
+                # 全部取消勾选＝撤回投票，按未表态处理
+                (meeting.get("votes") or {}).pop(str(qq), None)
+                self._save_market(market)
+            else:
+                players = self._load_stock_players()
+                mine = self._shares_in(players, qq, code)
+                if mine <= CAT_STOCK_MEETING_MIN_SHARES:
+                    return {"ok": False,
+                            "msg": f"持有 {CAT_STOCK_MEETING_MIN_SHARES} 股以上才有确认权喵"}
+                meeting.setdefault("votes", {})[str(qq)] = keys
+                self._save_market(market)
         return self.meeting_state(qq, code)
 
     def meeting_finish(self, qq: int, code: str) -> dict:
@@ -3737,13 +3748,17 @@ class CatStockPlugin:
                          ai_board: List[dict], comp: dict) -> dict:
         """按持股比例计票：持股股东按当前持股，董事按常驻份额，未表态计旧方针"""
         counts = {"ai": 0.0, "host": 0.0, "old": 0.0}
-        voted = {str(k): str(v) for k, v in (meeting.get("votes") or {}).items()}
+        voted = dict(meeting.get("votes") or {})
         holder_shares: Dict[str, float] = {}
         for h in holders:
             shares = float(h.get("shares", 0) or 0)
             holder_shares[str(h["qq"])] = shares
-            choice = voted.get(str(h["qq"]))
-            counts[choice if choice in counts else "old"] += shares
+            picks = voted.get(str(h["qq"]))
+            if isinstance(picks, str):
+                picks = [picks]
+            picks = [c for c in (picks or []) if c in counts] or ["old"]
+            for c in picks:
+                counts[c] += shares
         board_shares = {str(b.get("name") or ""): float(b.get("shares", 0) or 0)
                         for b in self._company_board(comp)}
         eligible = sum(holder_shares.values())
@@ -3752,8 +3767,12 @@ class CatStockPlugin:
             if shares <= 0:
                 shares = board_shares.get(str(vote.get("name") or ""), 0.0)
             eligible += shares
-            choice = str(vote.get("choice") or "")
-            counts[choice if choice in counts else "old"] += shares
+            picks = vote.get("choices")
+            if not isinstance(picks, list):
+                picks = [vote.get("choice")]
+            picks = [c for c in picks if c in counts] or ["old"]
+            for c in picks:
+                counts[c] += shares
         # 大股东没有另拟方针时，投给他的票等同于沿用旧方针
         if not str(meeting.get("host_policy") or "").strip():
             counts["old"] += counts["host"]
@@ -3797,7 +3816,8 @@ class CatStockPlugin:
             "can_vote": status == "confirm" and mine > CAT_STOCK_MEETING_MIN_SHARES,
             "can_finish": int(qq) == int(meeting.get("host", 0)) and status == "open",
             "can_set_policy": int(qq) == int(meeting.get("host", 0)) and status == "open",
-            "my_vote": votes.get(str(qq)) if str(qq) in votes else None,
+            "my_vote": (votes.get(str(qq)) if isinstance(votes.get(str(qq)), list)
+                        else [votes.get(str(qq), "old")]) if str(qq) in votes else [],
             "host_policy": meeting.get("host_policy") or "",
             "draft": meeting.get("draft") or "",
             "draft_sectors": list(meeting.get("sectors") or []),
@@ -3807,12 +3827,16 @@ class CatStockPlugin:
                 "old": int(round(counts["old"])),
                 "total": int(round(voted_shares + board_total)),
                 "eligible": int(round(eligible)),
-                "human": [{"name": self._player_nick(int(k)), "choice": v,
+                "human": [{"name": self._player_nick(int(k)),
+                           "choice": (v[0] if isinstance(v, list) and v else v),
+                           "choices": (v if isinstance(v, list) else [v]),
                            "shares": int(holder_shares.get(str(k), 0) or 0)}
                           for k, v in votes.items()],
                 "board": [{"name": v.get("name") or "", "tag": v.get("tag") or "",
                            "shares": int(v.get("shares", 0) or 0),
-                           "choice": v.get("choice") or ""} for v in ai_board],
+                           "choice": v.get("choice") or "",
+                           "choices": (v.get("choices") or [v.get("choice")])}
+                          for v in ai_board],
             },
             "holders": holders,
             "board": [{"name": b.get("name", ""), "tag": b.get("tag", "")} for b in board],
@@ -3845,25 +3869,34 @@ class CatStockPlugin:
 
     def _normalize_board_votes(self, board: List[dict], raw,
                                has_host: bool) -> List[dict]:
-        """把书记员给出的老股东表态整理成每人一票，缺人时按人设兜底"""
+        """把书记员给出的老股东表态整理成每人一票（可多选），缺人时按人设兜底"""
         picked: dict = {}
         if isinstance(raw, list):
             for item in raw:
                 if not isinstance(item, dict):
                     continue
                 name = str(item.get("name") or "").strip()
-                choice = str(item.get("choice") or "").strip().lower()
-                if name and choice in ("ai", "host", "old"):
-                    if choice == "host" and not has_host:
-                        choice = "old"
-                    picked[name] = choice
+                votes_raw = item.get("choices")
+                if not isinstance(votes_raw, list):
+                    votes_raw = re.split(r"[\s,，/|、]+", str(item.get("choice") or ""))
+                choices = []
+                for c in votes_raw:
+                    c = str(c or "").strip().lower()
+                    if c in ("ai", "host", "old") and c not in choices:
+                        choices.append(c)
+                if name and choices:
+                    if not has_host:
+                        choices = ["old" if c == "host" else c for c in choices]
+                        choices = list(dict.fromkeys(choices))
+                    picked[name] = [c for c in ("ai", "host", "old") if c in choices]
         votes: List[dict] = []
         for member in board:
             name = str(member.get("name") or "")
-            choice = picked.get(name) or self._fallback_board_vote(member, has_host)
+            choices = picked.get(name) or [self._fallback_board_vote(member, has_host)]
             votes.append({"name": name, "tag": str(member.get("tag") or ""),
                           "shares": int(member.get("shares", 0) or 0),
-                          "choice": choice})
+                          "choices": choices,
+                          "choice": choices[0]})
         return votes
 
     @staticmethod
@@ -3940,9 +3973,9 @@ class CatStockPlugin:
                 "同时请按每位老股东的人设与会议内容，替他们各自表态："
                 "ai 表示支持书记员汇总，host 表示支持大股东方针，old 表示沿用旧方针；"
                 "大股东定了方针也不代表老股东都买账，请按人设独立表态，不要一律投给大股东方针；"
-                "每人只能选一个，不要漏人。\n"
+                "每人可以同时支持一套或多套方针，用一个数组表示，不要漏人。\n"
                 '只输出 JSON：{"policy":"一句话方针","sectors":["行业1","行业2"],'
-                '"board_votes":[{"name":"老股东姓名","choice":"ai|host|old"}]}'
+                '"board_votes":[{"name":"老股东姓名","choices":["ai","host"]}]}'
             )
             try:
                 raw = self._ai._call_ai(
@@ -4005,13 +4038,13 @@ class CatStockPlugin:
                          f"①书记员汇总——{draft}；"
                          f"②大股东方针——{host_text}；"
                          f"③沿用旧方针——{old_policy}。"
-                         f"请股东与董事会在 {CAT_STOCK_MEETING_VOTE_MINUTES} 分钟内确认，"
+                         f"请股东与董事会在 {CAT_STOCK_MEETING_VOTE_MINUTES} 分钟内确认（可同时支持多套），"
                          f"逾期未表态的持股股东按沿用旧方针计。"),
                 "ts": time.time(),
             })
             board_line = "；".join(
                 f"{v.get('name', '')}选"
-                f"{'书记员汇总' if v.get('choice') == 'ai' else '大股东方针' if v.get('choice') == 'host' else '沿用旧方针'}"
+                f"{'、'.join({'ai': '书记员汇总', 'host': '大股东方针', 'old': '沿用旧方针'}.get(c, c) for c in (v.get('choices') or [v.get('choice')]))}"
                 for v in ai_votes)
             if board_line:
                 meeting["messages"].append({
@@ -4044,10 +4077,11 @@ class CatStockPlugin:
             eligible = ballots["eligible"]
             choice = "old"
             if eligible:
-                if counts["ai"] / eligible > CAT_STOCK_MEETING_AI_PASS:
-                    choice = "ai"
-                elif counts["host"] / eligible > CAT_STOCK_MEETING_HOST_PASS:
+                # 两套都过线时优先大股东方针，其次书记员汇总
+                if counts["host"] / eligible > CAT_STOCK_MEETING_HOST_PASS:
                     choice = "host"
+                elif counts["ai"] / eligible > CAT_STOCK_MEETING_AI_PASS:
+                    choice = "ai"
             result_text = {
                 "ai": "股东确认：书记员汇总的方针获得过半数支持，即刻生效。",
                 "host": "股东确认：大股东方针获得三分之二以上支持，即刻生效。",
@@ -4390,8 +4424,8 @@ class CatStockPlugin:
             entry = {
                 "time": stamp, "ts": now_ts,
                 "title": f"{mine['name']}对{target['name']}发动商战",
-                "detail": (f"双方在各自地界争夺客源，{CAT_STOCK_WAR_HOURS} 小时内"
-                           "股东可投入猫薄荷开展活动；任一方在所有地区支持度过 65% 即吞并对手。"),
+                "detail": (f"双方在各自地界争夺客源，{CAT_STOCK_WAR_HOURS} 小时后一次性结算；"
+                           "股东期间可投入猫薄荷开展活动，到期时一方在所有地区支持度过 65% 即吞并对手。"),
             }
             market["news"] = self._recent_news([entry] + (market.get("news") or []))[:CAT_STOCK_NEWS_MAX]
             self._save_market(market)
@@ -4609,7 +4643,7 @@ class CatStockPlugin:
                  "detail": war["result"]}]
 
     def _war_step(self, market: dict, players: dict, now: datetime) -> List[dict]:
-        """每个整点推进商战：舆论事件、吞并检查、到期结算"""
+        """每个整点推进商战：舆论事件，到期时一次性结算（不提前吞并）"""
         news = []
         for war in list(self._war_list(market).values()):
             if war.get("status") != "active":
@@ -4619,7 +4653,9 @@ class CatStockPlugin:
                 news.extend(self._war_settle(market, players, war))
                 continue
             if now.timestamp() > float(war.get("end_ts", 0) or 0):
-                news.extend(self._war_settle(market, players, war))
+                # 只有到期这一刻才结算，吞并与否都在最终支持度上判定
+                news.extend(self._war_settle(
+                    market, players, war, self._war_annex_side(war)))
                 continue
             rows = war.get("countries") or {}
             if rows:
@@ -4639,9 +4675,6 @@ class CatStockPlugin:
                     "detail": (f"街谈巷议让{backing.get('name', '交战的这家')}在当地支持度 +{gain}，"
                                f"对手随之动摇。"),
                 })
-            annex_side = self._war_annex_side(war)
-            if annex_side:
-                news.extend(self._war_settle(market, players, war, annex_side))
         return news
 
     def _war_text(self, view: dict) -> str:
@@ -4659,7 +4692,7 @@ class CatStockPlugin:
                 f"总支持度 {view.get('total', {}).get('a', 0):.1f}"
                 f" : {view.get('total', {}).get('b', 0):.1f}\n"
                 f"{rows}\n"
-                "任意一方在所有地区过 65% 即吞并对手；"
+                "到期时任意一方在所有地区过 65% 即吞并对手；"
                 f"股东可花 {CAT_STOCK_WAR_COST} 猫薄荷在当地挤压或宣传。")
 
     def _show_wars(self, target: Target, qq: int) -> None:
@@ -5302,17 +5335,17 @@ class CatStockPlugin:
             "国家：喵股市 国家 查看列国，喵股市 国家 <代码或国名> 查看制度、君主与起源。\n"
             "董事会：持股最多且股份够多时，可在网页召集股东大会，"
             "先讨论十分钟，再由大股东定稿一份方针、书记员汇总一份，连同旧方针一起交股东确认；"
-            "召集人定稿后仍可自由投给任意一份，"
+            "召集人定稿后仍可自由投给任意一份，一人可同时支持多份方针，"
             "散会后三十分钟内都可回来投票或改票，不确认的按沿用旧方针计，"
-            "AI 方针得票超过一半、或大股东方针超过三分之二才启用。"
+            "两套都过线时优先采用大股东方针，其次书记员汇总。"
             "没有大股东拍板的公司，收市后由董事会自行定下新的经营方向。\n"
             "商战：持有同业公司一千股以上并成为其最大股东时，可在开市时段"
             "「喵股市 开战 <我方代码> <对手代码>」对另一家有非 AI 大股东的同业公司发动商战"
             "（只写一个代码时，会自动从你控股的同业公司里挑一家出战）；"
             "双方股份在商战期间冻结，不能卖出也不能做空，股东可花 100 猫薄荷在当地"
             "「喵股市 商战活动 <代码> <国家> 挤压/宣传」，"
-            "每小时还有舆论事件左右支持度，24 小时后按总支持度判胜负："
-            "一方在所有地区都过 65% 就直接吞并对手，被吞并方股东按五成拿回，胜方股东也只拿五成；"
+            "每小时还有舆论事件左右支持度，中途不结算，24 小时后一次性按总支持度判胜负："
+            "到期时一方在所有地区都过 65% 就吞并对手，被吞并方股东按五成拿回，胜方股东也只拿五成；"
             "没吞并则不再额外转移，体量大的一方股价回落、体量小的一方上涨；"
             "双方活动资金始终全额返还、按五五开分给两边股东；"
             "同一家公司一周只能发动一次商战。\n"

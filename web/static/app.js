@@ -3768,7 +3768,7 @@ function stockWarPanel(w) {
       <div class="stock-war-meta">
         总支持度 ${Number(w.total.a).toFixed(1)} : ${Number(w.total.b).toFixed(1)}
         ｜活动投入 ${stockMoney(w.cost_a)} : ${stockMoney(w.cost_b)}
-        ｜任一方在所有地区过 65% 即吞并对手
+        ｜到期时任意一方在所有地区过 65% 即吞并对手
       </div>
       ${mine}
       <div class="stock-war-regions">${regions}</div>
@@ -4587,6 +4587,13 @@ const MEETING_ROLE_LABEL = { system: '书记员', host: '召集人', holder: '�
 let stockMeetingCode = '';
 let stockMeetingTimer = null;
 let stockMeetingBusy = false;
+let stockMeetingCurrent = null;
+const STOCK_VOTE_LABEL = { ai: '书记员汇总', host: '大股东方针', old: '沿用旧方针' };
+
+function stockVoteLabels(choices) {
+  return (Array.isArray(choices) ? choices : [])
+    .map((c) => STOCK_VOTE_LABEL[c] || c).join('、');
+}
 
 function stopStockMeetingPolling() {
   if (stockMeetingTimer) {
@@ -4659,7 +4666,9 @@ async function refreshStockMeeting() {
 }
 
 function renderStockMeeting(m) {
+  stockMeetingCurrent = m;
   const status = m.status || 'open';
+  const myVote = Array.isArray(m.my_vote) ? m.my_vote : (m.my_vote ? [m.my_vote] : []);
   const logWasBottom = stockMeetingLogEl.scrollTop + stockMeetingLogEl.clientHeight
     >= stockMeetingLogEl.scrollHeight - 40;
 
@@ -4672,10 +4681,10 @@ function renderStockMeeting(m) {
   const remain = Number(m.remaining || 0);
   if (status === 'confirm') {
     stockMeetingTimerEl.textContent = remain > 0 ? `确认剩余 ${remain}s` : '确认时间到，正在定案…';
-    const picked = { ai: '书记员汇总', host: '大股东方针', old: '沿用旧方针' }[m.my_vote];
+    const picked = stockVoteLabels(myVote);
     stockMeetingSubEl.textContent += picked
-      ? `｜你已投：${picked}（可改投）`
-      : (m.can_vote ? '｜你还没投票，三选一随便挑' : '');
+      ? `｜你已投：${picked}（可多选，可改投）`
+      : (m.can_vote ? '｜你还没投票，可同时支持多套方针' : '');
   } else if (status === 'open') {
     stockMeetingTimerEl.textContent = remain > 0 ? `讨论剩余 ${remain}s` : '时间到，书记员落笔中…';
   } else {
@@ -4716,20 +4725,18 @@ function renderStockMeeting(m) {
   const votes = m.votes || {};
   if (status === 'confirm' || status === 'closed') {
     const humanLine = (votes.human || []).map((x) => {
-      const label = x.choice === 'ai' ? '书记员汇总'
-        : x.choice === 'host' ? '大股东方针' : '沿用旧方针';
+      const label = stockVoteLabels(x.choices || [x.choice]);
       return `${esc(x.name)}（${stockMoney(x.shares || 0)} 股）${label}`;
     }).join('｜');
     const boardLine = (votes.board || []).map((x) => {
-      const label = x.choice === 'ai' ? '书记员汇总'
-        : x.choice === 'host' ? '大股东方针' : '沿用旧方针';
+      const label = stockVoteLabels(x.choices || [x.choice]);
       return `${esc(x.name)}（${stockMoney(x.shares || 0)} 股）${label}`;
     }).join('｜');
     stockMeetingVotesEl.classList.remove('hidden');
     stockMeetingVotesEl.innerHTML = `
       <div class="section-title">${status === 'confirm' ? '股东确认中' : '确认结果'}</div>
       <p>书记员汇总 ${stockMoney(votes.ai || 0)} 股 · 大股东方针 ${stockMoney(votes.host || 0)} 股 · 沿用旧方针 ${stockMoney(votes.old || 0)} 股</p>
-      <p class="hint">已确认 ${stockMoney(votes.total || 0)} / ${stockMoney(votes.eligible || 0)} 股（按持股比例计票；确认阶段半小时内随时可以回来投票或改票，未表态者按沿用旧方针计）</p>
+      <p class="hint">已确认 ${stockMoney(votes.total || 0)} / ${stockMoney(votes.eligible || 0)} 股（按持股比例计票，可同时支持多套；确认阶段半小时内随时可以回来投票或改票，未表态者按沿用旧方针计）</p>
       ${humanLine ? `<p class="hint">在场股东：${humanLine}</p>` : ''}
       ${boardLine ? `<p class="hint">董事会老股东：${boardLine}</p>` : ''}`;
   } else {
@@ -4765,8 +4772,8 @@ function renderStockMeeting(m) {
 
   stockMeetingOptionsEl.classList.toggle('hidden', status !== 'confirm' || !options.length);
   stockMeetingOptionsEl.innerHTML = status === 'confirm'
-    ? options.map((o) => `<button class="btn btn-ghost btn-sm${m.my_vote === o.key ? ' is-active' : ''}"
-        type="button" data-choice="${esc(o.key)}"${m.can_vote ? '' : ' disabled'}>${m.my_vote === o.key ? '✓ ' : ''}${esc(o.label || o.key)}</button>`).join('')
+    ? options.map((o) => `<button class="btn btn-ghost btn-sm${myVote.includes(o.key) ? ' is-active' : ''}"
+        type="button" data-choice="${esc(o.key)}"${m.can_vote ? '' : ' disabled'}>${myVote.includes(o.key) ? '✓ ' : ''}${esc(o.label || o.key)}</button>`).join('')
     : '';
 
   stockMeetingFinishEl.classList.toggle('hidden', !m.can_finish);
@@ -4826,7 +4833,11 @@ stockMeetingHostInputEl.addEventListener('keydown', (e) => {
 stockMeetingOptionsEl.addEventListener('click', (e) => {
   const btn = e.target.closest('[data-choice]');
   if (!btn || btn.disabled) return;
-  stockMeetingAct('/api/stock/meeting/vote', { choice: btn.dataset.choice }, '提交确认');
+  const key = btn.dataset.choice;
+  const cur = Array.isArray(stockMeetingCurrent?.my_vote) ? stockMeetingCurrent.my_vote
+    : (stockMeetingCurrent?.my_vote ? [stockMeetingCurrent.my_vote] : []);
+  const next = cur.includes(key) ? cur.filter((k) => k !== key) : [...cur, key];
+  stockMeetingAct('/api/stock/meeting/vote', { choice: next }, '提交确认');
 });
 stockMeetingFinishEl.addEventListener('click', () => stockMeetingAct('/api/stock/meeting/finish', {}, '请书记员收尾'));
 document.getElementById('stock-meeting-close').addEventListener('click', closeStockMeeting);

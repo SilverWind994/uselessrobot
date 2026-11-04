@@ -89,7 +89,7 @@ class BilibiliLivePlugin:
         router.register(
             ["喵直播", "直播提醒", "bili"],
             self.cmd_live,
-            description="B 站开播/下播提醒：查看订阅与测试通知"
+            description="[隐藏]B 站开播/下播提醒：查看订阅与测试通知"
         )
         self._start_scheduler()
 

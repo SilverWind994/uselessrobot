@@ -82,6 +82,7 @@ CAT_STOCK_DAILY_DOWN = 0.03          # 全市场加权总涨跌的当日下沿
 CAT_STOCK_WEEKLY_UP = 0.05           # 全市场加权总涨跌的当周上沿
 CAT_STOCK_WEEKLY_DOWN = 0.15         # 全市场加权总涨跌的当周下沿
 CAT_STOCK_STOCK_DAILY_CAP = 0.10     # 单只股票当日相对昨收的涨跌停幅度（±10%）
+CAT_STOCK_HOURLY_CAP = 0.02          # 单只股票每小时相对上一整点的最大波动（±2%）
 CAT_STOCK_SMALL_HOLDING_MAX = 100    # 非重点持股公司的持股上限
 CAT_STOCK_MAJOR_COMPANIES_MAX = 2    # 最多深度持股几家公司
 CAT_STOCK_MEETING_MIN_SHARES = 100   # 可参与股东大会的最低持股
@@ -5778,7 +5779,7 @@ class CatStockPlugin:
 
     def _apply_price_limits(self, companies: dict, price_before: dict) -> None:
         """指数级软限价：全市场加权总涨跌单日限制在 -3% ~ +1%、单周 -15% ~ +5%；
-           个股另有涨跌停：单只相对昨收最多 +10% / -10%"""
+           个股另有涨跌停：相对上一整点最多 ±2%，相对昨收最多 ±10%"""
         alive = {}
         for code, comp in companies.items():
             if comp.pop("limit_exempt", False):
@@ -5800,14 +5801,20 @@ class CatStockPlugin:
             # 越界部分由全市场按同一比例回调，涨得多的回吐多，别人也要跟着让一让
             for comp in alive.values():
                 comp["price"] = max(1.0, float(comp["price"]) * (1 - adjust))
-        # 个股涨跌停：以昨收为基准，涨停 / 跌停各 10%
+        # 个股涨跌停：先按上一整点 ±2% 限制单小时波动，再按昨收 ±10% 限制当日累计
         for comp in alive.values():
             day_base = float(comp.get("prev_close") or comp.get("price") or 0)
             if day_base <= 0:
                 continue
-            comp["price"] = max(day_base * (1 - CAT_STOCK_STOCK_DAILY_CAP),
-                                min(day_base * (1 + CAT_STOCK_STOCK_DAILY_CAP),
-                                    float(comp["price"])))
+            price = float(comp["price"])
+            before = float(price_before.get(comp["code"]) or 0)
+            if before > 0:
+                price = max(before * (1 - CAT_STOCK_HOURLY_CAP),
+                            min(before * (1 + CAT_STOCK_HOURLY_CAP), price))
+            comp["price"] = max(1.0,
+                                max(day_base * (1 - CAT_STOCK_STOCK_DAILY_CAP),
+                                    min(day_base * (1 + CAT_STOCK_STOCK_DAILY_CAP),
+                                        price)))
 
     def _big_holding_pressure(self, companies: dict, players: dict) -> List[dict]:
         """大额持仓可能被空头狙击：概率低、幅度有限，只影响一只股票"""

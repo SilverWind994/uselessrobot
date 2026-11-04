@@ -807,6 +807,8 @@ code { background: #120f0d; border: 1px solid var(--line); border-radius: 6px; p
 .stock-table td.stock-holders { font-size: 11px; line-height: 1.55; color: var(--text-dim); white-space: normal; min-width: 128px; }
 .stock-holder-shares { color: var(--text); }
 .stock-empty-cell { opacity: 0.45; }
+.stock-table td.stock-hold-actions { white-space: nowrap; }
+.stock-hold-actions .btn { margin-top: 0; padding: 5px 10px; font-size: 12px; white-space: nowrap; }
 
 /* 商战 */
 .stock-war-tag {

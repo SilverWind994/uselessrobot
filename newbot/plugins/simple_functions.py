@@ -339,10 +339,30 @@ class SimpleFunctionsPlugin:
     def cmd_help(self, ctx: CommandContext) -> None:
         args = ctx.get_args().lower()
         msg = self._generate_help(args)
-        self._sender.send_text(
-            Target.from_data(ctx.raw_data),
-            msg
-        )
+        target = Target.from_data(ctx.raw_data)
+        for part in self._split_help(msg):
+            self._sender.send_text(target, part)
+
+    @staticmethod
+    def _split_help(text: str) -> list:
+        """帮助太长时按行均分成两条消息"""
+        if len(text) <= 260:
+            return [text]
+        lines = text.split("\n")
+        half = len(text) / 2
+        acc = 0
+        cut = 1
+        best = None
+        for idx in range(1, len(lines)):
+            acc += len(lines[idx - 1]) + 1
+            diff = abs(acc - half)
+            if best is None or diff < best:
+                best = diff
+                cut = idx
+        return [
+            "\n".join(lines[:cut]).strip("\n"),
+            "\n".join(lines[cut:]).strip("\n"),
+        ]
 
     def _generate_help(self, message: str) -> str:
         if not message:

@@ -3864,6 +3864,7 @@ function renderStock(data) {
           <input class="stock-trade-shares" type="number" min="1" step="1" placeholder="股数" data-code="${esc(c.code)}">
           <button class="btn btn-primary btn-sm stock-buy" type="button" data-code="${esc(c.code)}">买</button>
           <button class="btn btn-ghost btn-sm stock-sell" type="button" data-code="${esc(c.code)}">卖</button>
+          <button class="btn btn-ghost btn-sm stock-short-open" type="button" data-code="${esc(c.code)}">做空</button>
         </div>
         <div class="stock-trade-max">
           <button class="stock-max-buy" type="button" data-code="${esc(c.code)}">最大买入</button>
@@ -3941,8 +3942,14 @@ function renderStock(data) {
         <td>${h.price ? Number(h.price).toFixed(1) : '—'}</td>
         <td>${stockMoney(Math.round(h.value))}</td>
         ${stockPnlCell(h.pnl)}
+        <td class="stock-hold-actions">
+          ${Number(h.sellable) > 0
+            ? `<button class="btn btn-ghost btn-sm stock-hold-sell" type="button" data-code="${esc(h.code)}">卖出</button>`
+            : '<span class="stock-empty-cell">锁定中</span>'}
+          <button class="btn btn-ghost btn-sm stock-hold-short" type="button" data-code="${esc(h.code)}">做空</button>
+        </td>
       </tr>
-      ${lots ? `<tr class="stock-lot-row"><td colspan="9"><div class="stock-lots">${lots}</div></td></tr>` : ''}`;
+      ${lots ? `<tr class="stock-lot-row"><td colspan="10"><div class="stock-lots">${lots}</div></td></tr>` : ''}`;
     }).join('');
     stockHoldingsEl.innerHTML = `
       <div class="stock-table-wrap">
@@ -3950,7 +3957,7 @@ function renderStock(data) {
           <thead>
             <tr>
               <th>代码</th><th>名称</th><th>持有</th><th>可卖</th><th>锁定</th>
-              <th>成本</th><th>现价</th><th>市值</th><th>浮动</th>
+              <th>成本</th><th>现价</th><th>市值</th><th>浮动</th><th>操作</th>
             </tr>
           </thead>
           <tbody>${rows}</tbody>
@@ -4070,9 +4077,24 @@ async function stockAction(path, body, actionName) {
 document.getElementById('btn-stock-refresh').addEventListener('click', () => loadStock());
 
 stockHoldingsEl.addEventListener('click', (e) => {
-  const btn = e.target.closest('.stock-cover-btn');
-  if (!btn) return;
-  stockAction('/api/stock/cover', { code: btn.dataset.code || '' }, '平空');
+  const coverBtn = e.target.closest('.stock-cover-btn');
+  if (coverBtn) {
+    stockAction('/api/stock/cover', { code: coverBtn.dataset.code || '' }, '平空');
+    return;
+  }
+  const shortBtn = e.target.closest('.stock-hold-short');
+  if (shortBtn) {
+    openStockDetail(shortBtn.dataset.code || '');
+    return;
+  }
+  const sellBtn = e.target.closest('.stock-hold-sell');
+  if (!sellBtn) return;
+  const code = sellBtn.dataset.code || '';
+  const holding = (((stockLastData || {}).portfolio || {}).holdings || [])
+    .find((h) => h.code === code);
+  if (!holding || !Number(holding.sellable)) return;
+  if (!window.confirm(`卖出 ${holding.name} 的 ${holding.sellable} 股？`)) return;
+  stockAction('/api/stock/sell', { code, shares: holding.sellable }, '卖出');
 });
 
 if (stockWarsEl) {
@@ -4391,6 +4413,11 @@ stockMarketBodyEl.addEventListener('click', (e) => {
   const detailBtn = e.target.closest('.stock-detail-btn');
   if (detailBtn) {
     openStockDetail(detailBtn.dataset.code || '');
+    return;
+  }
+  const shortOpen = e.target.closest('.stock-short-open');
+  if (shortOpen) {
+    openStockDetail(shortOpen.dataset.code || '');
     return;
   }
   const maxBtn = e.target.closest('.stock-max-buy, .stock-max-sell');

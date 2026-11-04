@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>串子小车 · 网页端</title>
-  <link rel="stylesheet" href="/static/style.css?v=31">
+  <link rel="stylesheet" href="/static/style.css?v=32">
 </head>
 <body>
   <div class="bg-glow"></div>
@@ -395,6 +395,21 @@
             </table>
           </div>
           <p class="hint">每行填入股数后直接点「买」或「卖」；买卖不收手续费，当天买入的股份要到第二天才能卖，休市期间不能交易。</p>
+        </div>
+
+        <div class="card hidden" id="stock-admin-card">
+          <div class="panel-head">
+            <div>
+              <div class="panel-title">隐藏设置</div>
+              <div class="panel-sub" id="stock-admin-sub"></div>
+            </div>
+          </div>
+          <div class="stock-admin-row">
+            <input id="stock-news-range" class="stock-trade-shares" type="number" min="0" max="50" step="0.5" placeholder="±20">
+            <button id="stock-news-range-save" class="btn btn-primary btn-sm" type="button">保存</button>
+            <button id="stock-news-range-reset" class="btn btn-ghost btn-sm" type="button">恢复默认</button>
+          </div>
+          <p class="hint">新闻单条影响上限，填 15 表示 ±15%，留空或点「恢复默认」回到 ±20%。</p>
         </div>
 
         <div class="card hidden">
@@ -1049,6 +1064,6 @@
 
   <footer class="foot">串子小车 · 网页端</footer>
 
-  <script src="/static/app.js?v=47"></script>
+  <script src="/static/app.js?v=48"></script>
 </body>
 </html>

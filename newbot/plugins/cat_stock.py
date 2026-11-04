@@ -787,6 +787,13 @@ class CatStockPlugin:
             permission_check=lambda ctx: ctx.is_private
             and int(ctx.user_id) == CAT_STOCK_WORLD_ADMIN
         )
+        router.register(
+            ["影响范围", "news-range"],
+            self.cmd_news_range,
+            description="[隐藏] 新闻对股价的影响幅度（仅掌管者可用）",
+            permission_check=lambda ctx: ctx.is_private
+            and int(ctx.user_id) == CAT_STOCK_WORLD_ADMIN
+        )
 
     # ==================== 行情存档 ====================
 
@@ -2351,6 +2358,54 @@ class CatStockPlugin:
                 else:
                     message = usage()
             self._save_market(market)
+        self._sender.send_text(target, message)
+
+    # ==================== 隐藏指令：新闻影响范围 ====================
+
+    def _parse_effect_value(self, raw) -> Optional[float]:
+        """把 15 / 15% / 0.15 统一换算成小数，范围夹在 0 ~ 0.5"""
+        text = str(raw or "").strip().replace("％", "%").replace("%", "")
+        if not text:
+            return None
+        try:
+            num = float(text)
+        except ValueError:
+            return None
+        if abs(num) >= 1:
+            num /= 100.0
+        return max(0.0, min(0.5, num))
+
+    def news_effect_max(self) -> float:
+        """读取当前新闻单条影响上限"""
+        with self._lock:
+            market = self._load_market()
+        return self._effect_cap(market)
+
+    def set_news_effect_max(self, raw) -> str:
+        """调整新闻单条影响上限；传 默认/None 可恢复默认值"""
+        with self._lock:
+            market = self._load_market()
+            if raw in (None, "", "默认", "reset", "重置"):
+                market.pop("news_effect_max", None)
+                self._save_market(market)
+                return f"已恢复默认，新闻单条影响上限 ±{CAT_STOCK_EFFECT_MAX:.0%}"
+            value = self._parse_effect_value(raw)
+            if value is None:
+                return "数值看不懂喵，用 0~50 之间的百分数，比如 15 表示 ±15%"
+            market["news_effect_max"] = value
+            self._save_market(market)
+            return f"新闻单条影响上限已改为 ±{value:.0%}（0 表示新闻不再影响股价）"
+
+    def cmd_news_range(self, ctx: CommandContext) -> None:
+        target = Target.from_data(ctx.raw_data)
+        raw = ctx.get_args().strip()
+        if not raw or raw in ("状态", "status"):
+            current = self.news_effect_max()
+            message = (f"【新闻影响范围】单条新闻对单只股票的单小时影响上限：±{current:.0%}\n"
+                       "用法：影响范围 15（改到 ±15%，可写 15 / 15% / 0.15，范围 0~50）\n"
+                       "影响范围 默认 —— 恢复默认 ±20%")
+        else:
+            message = self.set_news_effect_max(raw)
         self._sender.send_text(target, message)
 
     # ==================== 展示 ====================
@@ -4518,18 +4573,71 @@ class CatStockPlugin:
         """公司体量：股价 × 总股本"""
         return float(comp.get("price", 0) or 0) * float(comp.get("base") or 1)
 
-    def _war_size_effect(self, a_comp: dict, b_comp: dict,
-                         size_a: float, size_b: float) -> float:
-        """打平时体量大的一方跌、体量小的一方涨，返回调整幅度"""
+    def _war_size_effect(self, a_comp: dict, b_comp: dict, players: dict,
+                         size_a: float, size_b: float) -> dict:
+        """打平后重新定价：体量大的一方回落、体量小的一方上涨，
+        并且让大公司股东亏掉的金额等于小公司股东赚到的金额。
+
+        改动只在结算瞬间生效一次，不参与日线 / 周线软限价与冷热判断，
+        仅按涨跌停（相对昨收 ±10%）兜底。"""
+        empty = {"big": "", "small": "", "big_pct": 0.0, "small_pct": 0.0, "money": 0}
         if size_a <= 0 or size_b <= 0 or size_a == size_b:
-            return 0.0
+            return empty
         big, small = (a_comp, b_comp) if size_a > size_b else (b_comp, a_comp)
         adj = CAT_STOCK_WAR_SIZE_MAX * (1.0 - min(size_a, size_b) / max(size_a, size_b))
         if adj <= 0:
-            return 0.0
-        big["price"] = round(float(big["price"]) * (1.0 - adj), 2)
-        small["price"] = round(float(small["price"]) * (1.0 + adj), 2)
-        return adj
+            return empty
+        held_big = sum(self._shares_of((st.get("holdings") or {}).get(big["code"]) or [])
+                       for st in players.values())
+        held_small = sum(self._shares_of((st.get("holdings") or {}).get(small["code"]) or [])
+                         for st in players.values())
+        price_big = float(big["price"])
+        price_small = float(small["price"])
+        if held_big <= 0 or held_small <= 0:
+            return empty
+        # 以较小一侧的股东市值定出转移金额，保证两边合计增减完全相等
+        money = int(round(adj * min(held_big * price_big, held_small * price_small)))
+        if money <= 0:
+            return empty
+        new_big = max(1.0, price_big - money / held_big)
+        # 真正落到股东头上的金额（股价有 1.0 下限时可能少一点）
+        money = int(round((price_big - new_big) * held_big))
+        new_small = max(1.0, price_small + money / held_small)
+
+        day_base_big = float(big.get("prev_close") or price_big)
+        day_base_small = float(small.get("prev_close") or price_small)
+        # 只有涨跌停参与约束：相对昨收 ±10%
+        new_big = max(day_base_big * (1 - CAT_STOCK_STOCK_DAILY_CAP),
+                      min(day_base_big * (1 + CAT_STOCK_STOCK_DAILY_CAP), new_big))
+        new_small = max(day_base_small * (1 - CAT_STOCK_STOCK_DAILY_CAP),
+                        min(day_base_small * (1 + CAT_STOCK_STOCK_DAILY_CAP), new_small))
+
+        today = time.strftime("%Y-%m-%d", time.localtime())
+        for comp, old_price, new_price in ((big, price_big, new_big),
+                                           (small, price_small, new_small)):
+            comp["price"] = round(new_price, 2)
+            # 一次性定基：日线 / 周线基准直接抬到结算价，下一整点不会被软限价收回
+            comp["prev_close"] = comp["price"]
+            comp["week_open"] = comp["price"]
+            # 均值回归把这块视作新的基准，不再当作偏离
+            comp["revert_offset"] = round(
+                float(comp.get("revert_offset") or 0) + comp["price"] - old_price, 2)
+            for st in players.values():
+                shares = self._shares_of((st.get("holdings") or {}).get(comp["code"]) or [])
+                if shares <= 0:
+                    continue
+                delta = shares * (comp["price"] - old_price)
+                rec = st.get("econ_offset")
+                if not isinstance(rec, dict) or rec.get("day") != today:
+                    rec = {"day": today, "value": 0.0}
+                rec["value"] = round(float(rec.get("value") or 0) + delta, 2)
+                st["econ_offset"] = rec
+        return {
+            "big": big["name"], "small": small["name"],
+            "big_pct": round((new_big / price_big - 1) if price_big else 0.0, 4),
+            "small_pct": round((new_small / price_small - 1) if price_small else 0.0, 4),
+            "money": money,
+        }
 
     def _war_payout(self, players: dict, code: str, comp: dict, amount: int) -> None:
         """战利按持股比例折进股价，不受交易所限价约束"""
@@ -4610,10 +4718,11 @@ class CatStockPlugin:
             refund_a = refund_b = int(round(CAT_STOCK_WAR_REFUND * cost_total))
             self._war_payout(players, a_code, a_comp, refund_a)
             self._war_payout(players, b_code, b_comp, refund_b)
-        size_adj = 0.0
+        size_info = {"big": "", "small": "", "big_pct": 0.0,
+                     "small_pct": 0.0, "money": 0}
         if not annex:
             # 打平后市场重新定价：体量大的一方回落，体量小的一方上涨
-            size_adj = self._war_size_effect(a_comp, b_comp, size_a, size_b)
+            size_info = self._war_size_effect(a_comp, b_comp, players, size_a, size_b)
         war["status"] = "done"
         war["annex"] = annex
         war["winner"] = side
@@ -4629,12 +4738,12 @@ class CatStockPlugin:
                 f"获胜方股东同样只得五成、即 {payout:,} 猫薄荷，由股价拉升分配；"
                 f"双方活动资金 {cost_total:,} 全额返还，按五五开分给两边股东。")
         else:
-            big_name = a_comp["name"] if size_a > size_b else b_comp["name"]
-            small_name = b_comp["name"] if size_a > size_b else a_comp["name"]
             size_text = "双方体量相当，股价未做重新定价。"
-            if size_adj > 0:
-                size_text = (f"{big_name}体量更大，股价回落 {size_adj:.2%}；"
-                             f"{small_name}体量更小，股价上涨 {size_adj:.2%}。")
+            if size_info["money"] > 0:
+                size_text = (f"{size_info['big']}体量更大，股价回落 {abs(size_info['big_pct']):.2%}，"
+                             f"股东合计少 {size_info['money']:,} 猫薄荷；"
+                             f"{size_info['small']}股价上涨 {size_info['small_pct']:.2%}，"
+                             f"股东合计多 {size_info['money']:,} 猫薄荷。")
             war["result"] = (
                 f"商战到期，{win_comp['name']}以总支持度 "
                 f"{max(total_a, total_b):,.1f}:{min(total_a, total_b):,.1f} 领先，"
@@ -5653,7 +5762,9 @@ class CatStockPlugin:
                 base = float(comp.get("base") or 0)
                 if base <= 0:
                     continue
-                dev = comp["price"] / base - 1
+                # 商战结算的一次性重估不计入回归基准，避免被后续整点慢慢回吐
+                offset = float(comp.get("revert_offset") or 0)
+                dev = max(1.0, comp["price"] - offset) / base - 1
                 if dev <= CAT_STOCK_REVERT_THRESHOLD:
                     continue
                 pull = min(CAT_STOCK_REVERT_MAX,
@@ -5694,7 +5805,7 @@ class CatStockPlugin:
             # 2) 新闻事件影响（同国/同行业会跟着联动）
             #    涨跌完全由 AI 生成的新闻及其 effects 决定，不做任何关键词机械修正
             for eff in effects:
-                self._apply_effect(companies, eff)
+                self._apply_effect(companies, eff, self._effect_cap(market))
 
             # 2.5) 同行业竞争：同一门生意里的企业互相抢客，
             #      跑赢同行的让出一点涨幅，落后的补回一点，同行不会无脑同涨同跌
@@ -5796,14 +5907,26 @@ class CatStockPlugin:
         if economy:
             self._economy_report(now, market, economy)
 
-    def _apply_effect(self, companies: dict, eff: dict) -> None:
+    def _effect_cap(self, market: dict) -> float:
+        """新闻单条影响上限，掌管者可在运行期按市场档调整"""
+        raw = (market or {}).get("news_effect_max")
+        if raw is None:
+            return CAT_STOCK_EFFECT_MAX
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            return CAT_STOCK_EFFECT_MAX
+        return max(0.0, min(0.5, value))
+
+    def _apply_effect(self, companies: dict, eff: dict,
+                      cap: float = CAT_STOCK_EFFECT_MAX) -> None:
         pct = eff.get("pct", 0)
         if not isinstance(pct, (int, float)):
             return
         pct = float(pct)
         if abs(pct) > 1:
             pct = pct / 100.0
-        pct = max(-CAT_STOCK_EFFECT_MAX, min(CAT_STOCK_EFFECT_MAX, pct))
+        pct = max(-cap, min(cap, pct))
         code = str(eff.get("code") or "").strip().upper()
         if code and code not in companies:
             # AI 偶尔会直接写企业名
@@ -6113,8 +6236,13 @@ class CatStockPlugin:
             base = float(day.get("value") or 0)
             if base <= 0:
                 continue
+            # 商战结算的一次性重估属于存量转移，不计入冷热判断
+            offset = (st or {}).get("econ_offset") or {}
+            excluded = 0.0
+            if isinstance(offset, dict) and offset.get("day") == today:
+                excluded = float(offset.get("value") or 0)
             day_base += base
-            day_now += value
+            day_now += value - excluded
             shared_day += 1
         # 还没有当日开盘基准时（新存档、首次运行），退回按一小时的变化观察
         daily_change = day_now / day_base - 1 if day_base > 1.0 else hourly_change
@@ -6750,6 +6878,8 @@ class CatStockPlugin:
         if not self._ai:
             return [], [], None, None, {}
         companies = market["companies"]
+        cap = self._effect_cap(market)
+        calm_cap = min(CAT_STOCK_NEWS_CALM_PCT, cap)
         hot_cool = ""
         econ = market.get("economy") or {}
         if float(econ.get("day_change", 0) or 0) >= CAT_STOCK_ECON_DAY_HOT:
@@ -6832,7 +6962,7 @@ class CatStockPlugin:
                              "更不能把一场全局危机写成半盘上涨。"
                              "严禁把原文照搬进新闻标题或详情（不要写“设定：……”“背景：……”），"
                              "要写出局势自然发展出的具体进展和后果——谁做了什么、哪国哪行业受冲击、结果如何。"
-                             "effects 必须显著，单条可给到 ±0.20，"
+                             f"effects 必须显著，单条可给到 ±{cap:.0%}，"
                              "要让相关国家和行业出现明显涨跌，不能被无关小新闻冲淡。\n")
         state = market.get("world") or {}
         state_block = ""
@@ -6965,8 +7095,8 @@ class CatStockPlugin:
             '"world":{"story":"世界发展脉络（150字以内，在原有基础上延续推进，不要重写世界观）",'
             '"arc":"当前世界局势主线（一句话）",'
             '"relations":[{"a":"国家代码","b":"国家代码","state":"同盟/敌对/贸易往来/边境摩擦"}]}}\n'
-            "pct 是小数涨跌幅，平缓事件 -0.05 ~ 0.05，重要事件 -0.2 ~ 0.2"
-            "（局势设定直接引发的重大事件同样限制在 ±0.2），正数为涨；code 和 country 二选一；"
+            f"pct 是小数涨跌幅，平缓事件 -{calm_cap:.2f} ~ {calm_cap:.2f}，重要事件 -{cap:.2f} ~ {cap:.2f}"
+            f"（局势设定直接引发的重大事件同样限制在 ±{cap:.2f}），正数为涨；code 和 country 二选一；"
             "每条有 effects 的新闻给 1~2 条 effects。"
             "没有明确的全局利好或全局利空时，本小时 effects 的正负数量与总幅度要大致平衡，"
             "利空和利好各占一半左右，不要默认把新闻写成上涨。"
@@ -7084,8 +7214,7 @@ class CatStockPlugin:
                 pct = float(eff.get("pct", 0) or 0)
                 if abs(pct) > 1:
                     pct /= 100.0
-                eff["pct"] = max(-CAT_STOCK_NEWS_CALM_PCT,
-                                 min(CAT_STOCK_NEWS_CALM_PCT, pct))
+                eff["pct"] = max(-calm_cap, min(calm_cap, pct))
 
         records = []
         flavor_count = 0

@@ -3699,6 +3699,11 @@ const stockRankSubEl = document.getElementById('stock-rank-sub');
 const stockRankBestEl = document.getElementById('stock-rank-best');
 const stockRankWorstEl = document.getElementById('stock-rank-worst');
 const stockNewsEl = document.getElementById('stock-news');
+const stockAdminCardEl = document.getElementById('stock-admin-card');
+const stockAdminSubEl = document.getElementById('stock-admin-sub');
+const stockNewsRangeEl = document.getElementById('stock-news-range');
+const stockNewsRangeSaveEl = document.getElementById('stock-news-range-save');
+const stockNewsRangeResetEl = document.getElementById('stock-news-range-reset');
 let stockLastData = null;
 const stockModalEl = document.getElementById('stock-modal');
 const stockModalBodyEl = document.getElementById('stock-modal-body');
@@ -3788,8 +3793,33 @@ function renderStockWars(data) {
     : '<p class="room-empty">当前没有正在进行的商战喵</p>';
 }
 
+function renderStockAdmin(admin) {
+  // 只有掌管者的响应里才带 admin 字段，玩家看不到这张卡片
+  if (!admin) {
+    stockAdminCardEl.classList.add('hidden');
+    return;
+  }
+  stockAdminCardEl.classList.remove('hidden');
+  const pct = Math.round(Number(admin.news_effect_max || 0) * 100);
+  stockAdminSubEl.textContent = `新闻单条影响上限 ±${pct}%`;
+  if (document.activeElement !== stockNewsRangeEl) stockNewsRangeEl.value = pct;
+}
+
+async function stockSetNewsRange(value) {
+  const { status, data } = await api('/api/stock/news_range', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ value }),
+  });
+  if (status === 401) { homePanel.classList.add('hidden'); showLogin(); return; }
+  stockMsgEl.textContent = data.msg || '设置失败喵';
+  stockMsgEl.classList.toggle('ok', !!data.ok);
+  if (data.ok) renderStockAdmin({ news_effect_max: data.news_effect_max });
+}
+
 function renderStock(data) {
   stockLastData = data;
+  renderStockAdmin(data.admin);
   const r = data.rules || {};
   const p = data.portfolio || {};
   const companies = data.companies || [];
@@ -4074,6 +4104,10 @@ async function stockAction(path, body, actionName) {
 }
 
 document.getElementById('btn-stock-refresh').addEventListener('click', () => loadStock());
+stockNewsRangeSaveEl.addEventListener('click', () => {
+  stockSetNewsRange(stockNewsRangeEl.value);
+});
+stockNewsRangeResetEl.addEventListener('click', () => stockSetNewsRange('默认'));
 
 stockHoldingsEl.addEventListener('click', (e) => {
   const coverBtn = e.target.closest('.stock-cover-btn');

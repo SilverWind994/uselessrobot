@@ -105,6 +105,18 @@ def withdraw(qq: int, stone_amount) -> str:
     return _run(_plugin._withdraw, qq, [str(stone_amount).strip()])
 
 
+# ==================== 掌管者设置 ====================
+
+def news_effect_max() -> float:
+    """新闻单条影响上限（仅掌管者可见）"""
+    return _plugin.news_effect_max()
+
+
+def set_news_effect_max(value) -> str:
+    """调整新闻单条影响上限，传空或「默认」恢复默认"""
+    return _plugin.set_news_effect_max(value)
+
+
 # ==================== 股东大会 ====================
 
 def meeting_state(qq: int, code) -> dict:

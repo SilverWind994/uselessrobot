@@ -4358,16 +4358,16 @@ class CatStockPlugin:
             own = float(slot.get(side, 0) or 0)
             opp = float(slot.get(other, 0) or 0)
             if kind == "squeeze":
-                # 对手底盘越稳越难撬动
-                factor = opp / (opp + 40.0)
-                delta = max(1, int(round(random.uniform(1, 6) * factor)))
+                # x 随对手在当地的底盘抬高：对手支持度越高，一次能撬动的点数越多
+                bonus = int(round(8.0 * opp / (opp + 40.0)))
+                delta = max(1, random.randint(1, 6) + bonus)
                 slot[other] = round(max(0.0, opp - delta), 1)
                 text = (f"在{self._country_name(country)}挤压了 {delta} 点对手支持度，"
                         f"对方剩 {slot[other]:.1f}")
             else:
-                # 自家声势越盛越难再往上推
-                factor = 1.0 / (1.0 + own / 50.0)
-                delta = max(1, int(round(random.uniform(2, 7) * factor)))
+                # x 随自家声势收缩：支持度越高，一次能再加的点数越少
+                bonus = int(round(8.0 / (1.0 + own / 50.0)))
+                delta = max(1, random.randint(1, 6) + random.randint(1, 6) + bonus)
                 slot[side] = round(own + delta, 1)
                 text = (f"在{self._country_name(country)}宣传活动，"
                         f"自家支持度 +{delta}，现在 {slot[side]:.1f}")

@@ -4224,7 +4224,7 @@ function openStockDetail(code) {
     </div>
     <div class="stock-short-box">
       <div class="section-title">押它下跌（做空）</div>
-      <p class="hint">先付五成保证金与 1% 手续费，不设固定期限；开仓当天不能平，要到第二天才能平空。</p>
+      <p class="hint">先付五成保证金，不收手续费，不设固定期限；开仓当天不能平，要到第二天才能平空。</p>
       <div class="stock-short-row">
         <input id="stock-short-shares" class="stock-short-shares" type="number" min="1" step="1" placeholder="股数" data-code="${esc(c.code)}">
         <button class="btn btn-primary btn-sm stock-short-btn" type="button" data-code="${esc(c.code)}">开空</button>

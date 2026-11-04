@@ -134,7 +134,7 @@ CAT_STOCK_ERA_COLLAPSE_RATE = 0.5    # 亡国时该国企业持仓的清算比�
 CAT_STOCK_ERA_COUNTRY_MIN = 3        # 至少保留多少个尚存国家
 CAT_STOCK_ERA_WAR_CHANCE = 0.08      # 战事升级为亡国的概率
 CAT_STOCK_SHORT_MARGIN = 0.5         # 开空所需保证金比例
-CAT_STOCK_SHORT_FEE = 0.01           # 开空手续费
+CAT_STOCK_SHORT_FEE = 0.0            # 开空不收手续费
 CAT_STOCK_SHORT_MIN_SHARES = 1       # 做空也不设最小股数限制
 CAT_STOCK_ERA_MAP_PATH = os.path.join(STOCK_DIR, "era_map.png")
 CAT_STOCK_ERA_MAP_META = os.path.join(STOCK_DIR, "era_map.meta.json")
@@ -3082,7 +3082,7 @@ class CatStockPlugin:
             return
         notional = int(round(price * shares))
         margin = int(round(notional * CAT_STOCK_SHORT_MARGIN))
-        fee = max(1, int(round(notional * CAT_STOCK_SHORT_FEE)))
+        fee = int(round(notional * CAT_STOCK_SHORT_FEE))
         total = margin + fee
 
         with self._lock:
@@ -3102,7 +3102,7 @@ class CatStockPlugin:
                 self._sender.send_text(
                     target,
                     f"保证金不足喵：{shares} 股 × {self._fmt_price(price)} 的 {CAT_STOCK_SHORT_MARGIN:.0%} "
-                    f"保证金 {margin} + 手续费 {fee} = {total}，你只有 {catnip}"
+                    f"保证金 {margin}，你只有 {catnip}"
                 )
                 return
             st["catnip"] = catnip - total
@@ -3120,7 +3120,7 @@ class CatStockPlugin:
         self._sender.send_text(
             target,
             f"做空成交：{comp['code']} {comp['name']} {shares} 股\n"
-            f"入场价 {self._fmt_price(price)}｜保证金 {margin}｜手续费 {fee}\n"
+            f"入场价 {self._fmt_price(price)}｜保证金 {margin}\n"
             f"空单没有固定期限，随时可发「喵股市 平空」了结（开仓当天不能平，要到第二天）\n"
             f"剩余猫薄荷 {new_balance}"
         )
@@ -5328,7 +5328,7 @@ class CatStockPlugin:
             "持股：一位股东最多深度介入两家公司的经营，其他公司只允许保留一小把零散股份。\n"
             "同业竞争：同一门生意里的企业会互相抢客，跑赢同行的涨幅会被对手分流一部分，"
             "落后的一方反而容易补涨，同事不同命。\n"
-            "做空：押注某家企业会跌，需先付五成保证金与 1% 手续费，不设固定期限；"
+            "做空：押注某家企业会跌，需先付五成保证金，不收手续费，不设固定期限；"
             "开空后随时可「平空」了结，但开仓当天不能平，要到第二天才能平空。\n"
             "经营方向：企业可以同时做几门营生，最大股东在开市时段可「拓展」新方向或「改营」整体换向。\n"
             "买卖：喵股市 买 <代码> <股数>｜喵股市 卖 <代码> <股数>（休市期间下单会挂到次日开盘）\n"

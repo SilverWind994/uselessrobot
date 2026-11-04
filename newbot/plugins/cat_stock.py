@@ -39,8 +39,8 @@ CAT_STOCK_INITIAL_CATNIP = 1000      # 新玩家开户即领 1000 猫薄荷，�
 CAT_STOCK_STONE_TO_CATNIP = 95       # 1 猫眼石 -> 95 猫薄荷
 CAT_STOCK_CATNIP_TO_STONE = 105      # 105 猫薄荷 -> 1 猫眼石
 CAT_STOCK_MIGRATE_RATE = 95          # 旧资产结算：95 猫薄荷 -> 1 鱼干
-CAT_STOCK_BUY_FEE = 0.01             # 买入手续费 1%
-CAT_STOCK_SELL_FEE = 0.01            # 卖出手续费 1%
+CAT_STOCK_BUY_FEE = 0.0              # 买入不收手续费
+CAT_STOCK_SELL_FEE = 0.0             # 卖出不收手续费
 CAT_STOCK_OPEN_HOUR = 8              # 每日 08:00 开市
 CAT_STOCK_CLOSE_HOUR = 20            # 每日 20:00 收市
 CAT_STOCK_MAX_SHARES = 1_000_000     # 单笔最大股数
@@ -110,7 +110,9 @@ CAT_STOCK_NEWS_TICK_MIN = 4          # 每个整点最少生成几条新闻
 CAT_STOCK_NEWS_TICK_MAX = 8          # 每个整点最多生成几条新闻
 CAT_STOCK_NEWS_IMPORTANT_MAX = 1     # 每个整点最多几条重要事件
 CAT_STOCK_NEWS_CALM_PCT = 0.05       # 平缓事件的股价影响上限
-CAT_STOCK_NEWS_FUN_MAX = 4           # 每个整点最多几条纯娱乐新闻（无 effects）
+CAT_STOCK_NEWS_FUN_MAX = 8           # 每个整点最多几条纯娱乐新闻（无 effects）
+CAT_STOCK_NEWS_EFFECT_MAX = 2        # 每个整点最多几条真正影响股价的新闻
+CAT_STOCK_NEWS_COMPANY_DAILY = 1     # 同一家公司每天最多几条带 effects 的新闻
 CAT_STOCK_HISTORY_KEEP = 96          # 每只股票保留多少个整点的价格记录
 CAT_STOCK_HISTORY_SHOW = 48          # 网页端展示最近多少个整点的走势
 CAT_STOCK_WORLD_BIAS = 0.03          # 局势设定对全盘每整点的收紧/抬升力度
@@ -2408,7 +2410,7 @@ class CatStockPlugin:
             f"国家：{self._country_name(comp['country'])}（{lore.get('system') or '集权'}）"
             f"｜经营：{'、'.join(self._sectors_of(comp))}",
             f"现价：{self._fmt_price(comp['price'])}｜今日 {self._fmt_pct(pct)}",
-            f"基准价：{comp['base']}｜买入手续费 {CAT_STOCK_BUY_FEE:.0%}，卖出手续费 {CAT_STOCK_SELL_FEE:.0%}",
+            f"基准价：{comp['base']}｜买卖不收手续费，按现价成交",
         ]
         intro = comp.get("intro") or ""
         if intro:
@@ -2772,7 +2774,7 @@ class CatStockPlugin:
 
         price = float(comp["price"])
         cost = int(round(price * shares))
-        fee = max(1, int(round(cost * CAT_STOCK_BUY_FEE)))
+        fee = int(round(cost * CAT_STOCK_BUY_FEE))
         total = cost + fee
 
         with self._lock:
@@ -2789,13 +2791,13 @@ class CatStockPlugin:
                 self._save_stock_players(players)
                 self._sender.send_text(
                     target,
-                    f"猫薄荷不足喵：{shares} 股 × {self._fmt_price(price)} + 手续费 {fee} = {total}，"
+                    f"猫薄荷不足喵：{shares} 股 × {self._fmt_price(price)} = {total}，"
                     f"你只有 {catnip}\n可用「喵股市 充值 <猫眼石数>」按 1:95 兑换猫薄荷"
                 )
                 return
             st["catnip"] = catnip - total
             lots = st["holdings"].setdefault(comp["code"], [])
-            # 成本价含买入手续费，浮动盈亏才是真正到手的盈亏
+            # 成本价记录实际成交价，浮动盈亏即真正到手的盈亏
             lots.append({"shares": shares, "price": round((cost + fee) / shares, 4),
                          "ts": time.time()})
             self._save_stock_players(players)
@@ -2804,7 +2806,7 @@ class CatStockPlugin:
         self._sender.send_text(
             target,
             f"买入成交：{comp['code']} {comp['name']} {shares} 股\n"
-            f"成交价 {self._fmt_price(price)}｜成交额 {cost}｜手续费 {fee}\n"
+            f"成交价 {self._fmt_price(price)}｜成交额 {cost}\n"
             f"剩余猫薄荷 {new_balance}\n"
             f"（当天买入的股份要到第二天才能卖出）"
         )
@@ -2890,7 +2892,7 @@ class CatStockPlugin:
                 st["holdings"].pop(comp["code"], None)
 
             proceeds = int(round(price * shares))
-            fee = max(1, int(round(proceeds * CAT_STOCK_SELL_FEE)))
+            fee = int(round(proceeds * CAT_STOCK_SELL_FEE))
             net = proceeds - fee
             st["catnip"] = int(st.get("catnip", 0)) + net
             self._save_stock_players(players)
@@ -2899,7 +2901,7 @@ class CatStockPlugin:
         self._sender.send_text(
             target,
             f"卖出成交：{comp['code']} {comp['name']} {shares} 股\n"
-            f"成交价 {self._fmt_price(price)}｜成交额 {proceeds}｜手续费 {fee}｜到手 {net}\n"
+            f"成交价 {self._fmt_price(price)}｜成交额 {proceeds}｜到手 {net}\n"
             f"剩余猫薄荷 {new_balance}"
         )
 
@@ -2973,7 +2975,7 @@ class CatStockPlugin:
                 price = float(comp["price"])
                 if order.get("kind") == "buy":
                     cost = int(round(price * shares))
-                    fee = max(1, int(round(cost * CAT_STOCK_BUY_FEE)))
+                    fee = int(round(cost * CAT_STOCK_BUY_FEE))
                     total = cost + fee
                     if shares <= 0 or int(st.get("catnip", 0)) < total:
                         failed.append(f"{code} {shares} 股买入（猫薄荷不足，挂单作废）")
@@ -2987,7 +2989,7 @@ class CatStockPlugin:
                         {"shares": shares,
                          "price": round((cost + fee) / shares, 4), "ts": time.time()})
                     done.append(f"买入 {code} {comp.get('name', code)} {shares} 股"
-                                f"｜成交价 {self._fmt_price(price)}｜手续费 {fee}")
+                                f"｜成交价 {self._fmt_price(price)}")
                 else:
                     if self._war_for_code(market, code):
                         failed.append(f"{code} {shares} 股卖出（商战期间股份冻结，挂单作废）")
@@ -3021,7 +3023,7 @@ class CatStockPlugin:
                     else:
                         st["holdings"].pop(code, None)
                     proceeds = int(round(price * shares))
-                    fee = max(1, int(round(proceeds * CAT_STOCK_SELL_FEE)))
+                    fee = int(round(proceeds * CAT_STOCK_SELL_FEE))
                     net = proceeds - fee
                     st["catnip"] = int(st.get("catnip", 0)) + net
                     done.append(f"卖出 {code} {comp.get('name', code)} {shares} 股"
@@ -3309,7 +3311,7 @@ class CatStockPlugin:
 
         price = float(bond["price"])
         cost = int(round(price * shares))
-        fee = max(1, int(round(cost * CAT_STOCK_BUY_FEE)))
+        fee = int(round(cost * CAT_STOCK_BUY_FEE))
         total = cost + fee
         with self._lock:
             players = self._load_stock_players()
@@ -3319,12 +3321,12 @@ class CatStockPlugin:
                 self._save_stock_players(players)
                 self._sender.send_text(
                     target,
-                    f"猫薄荷不足喵：{shares} 张 × {self._fmt_price(price)} + 手续费 {fee} = {total}，"
+                    f"猫薄荷不足喵：{shares} 张 × {self._fmt_price(price)} = {total}，"
                     f"你只有 {catnip}")
                 return
             st["catnip"] = catnip - total
             lots = st["bonds"].setdefault(bond["country"], [])
-            # 成本价含买入手续费
+            # 成本价记录实际成交价
             lots.append({"shares": shares, "price": round((cost + fee) / shares, 4),
                          "ts": time.time()})
             held = self._shares_of(lots)
@@ -3338,7 +3340,7 @@ class CatStockPlugin:
         self._sender.send_text(
             target,
             f"买入成交：{bond['code']} {bond['name']} {shares} 张\n"
-            f"成交价 {self._fmt_price(price)}｜成交额 {cost}｜手续费 {fee}\n"
+            f"成交价 {self._fmt_price(price)}｜成交额 {cost}\n"
             f"剩余猫薄荷 {new_balance}｜当前持有 {held} 张" + extra)
 
     def _bond_sell(self, target: Target, qq: int, rest: List[str]) -> None:
@@ -3411,7 +3413,7 @@ class CatStockPlugin:
                 st["bonds"].pop(country, None)
 
             proceeds = int(round(price * shares))
-            fee = max(1, int(round(proceeds * CAT_STOCK_SELL_FEE)))
+            fee = int(round(proceeds * CAT_STOCK_SELL_FEE))
             net = proceeds - fee
             st["catnip"] = int(st.get("catnip", 0)) + net
             self._save_stock_players(players)
@@ -3421,7 +3423,7 @@ class CatStockPlugin:
         self._sender.send_text(
             target,
             f"卖出国债成交：{bond['code']} {bond['name']} {shares} 张\n"
-            f"成交价 {self._fmt_price(price)}｜成交额 {proceeds}｜手续费 {fee}｜到手 {net}\n"
+            f"成交价 {self._fmt_price(price)}｜成交额 {proceeds}｜到手 {net}\n"
             f"剩余猫薄荷 {new_balance}｜剩余持有 {held} 张")
 
     def _set_country_policy(self, target: Target, qq: int, rest: List[str]) -> None:
@@ -5318,7 +5320,7 @@ class CatStockPlugin:
             f"入市资金：新开户赠送 {CAT_STOCK_INITIAL_CATNIP} 猫薄荷，也可用猫眼石换取；"
             f"「喵股市 充值 <猫眼石数>」按 1 猫眼石 = {CAT_STOCK_STONE_TO_CATNIP} 猫薄荷，"
             f"「喵股市 提现 <猫眼石数>」按 {CAT_STOCK_CATNIP_TO_STONE} 猫薄荷 = 1 猫眼石。\n"
-            f"交易：买入与卖出各收 {CAT_STOCK_BUY_FEE:.0%} 手续费（每笔最低 1 猫薄荷）；"
+            "交易：买入与卖出都不收手续费，按现价成交；"
             f"当天买入的股份要到第二天才能卖出；"
             f"单笔最多 {CAT_STOCK_MAX_SHARES} 股，不设最少购入限制。\n"
             "行情：经营崩坏或遭遇意外的企业，可以直接被摘牌清盘，"
@@ -5584,9 +5586,10 @@ class CatStockPlugin:
         # 开盘第一小时不出新闻，让价格从昨收自然起步；其余整点照常生成
         # AI 生成新闻较慢，先不占用锁，避免玩家交易被阻塞
         if now.hour == CAT_STOCK_OPEN_HOUR:
-            ai_news, effects, world_update, ai_actions = [], [], None, None
+            ai_news, effects, world_update, ai_actions, ai_meta = [], [], None, None, {}
         else:
-            ai_news, effects, world_update, ai_actions = self._make_news(snapshot, now, world)
+            ai_news, effects, world_update, ai_actions, ai_meta = self._make_news(
+                snapshot, now, world)
 
         economy = None
         pending_results: List[Tuple[int, str]] = []
@@ -5597,6 +5600,10 @@ class CatStockPlugin:
             companies = market["companies"]
             players = self._load_stock_players()
             today = now.strftime("%Y-%m-%d")
+            if ai_meta.get("important_events"):
+                market["important_events"] = ai_meta["important_events"]
+            if ai_meta.get("news_effects"):
+                market["news_effects"] = ai_meta["news_effects"]
             if market.get("day") != today:
                 # 新的一天：记下昨收作为当日涨跌幅基准
                 for comp in companies.values():
@@ -6707,9 +6714,11 @@ class CatStockPlugin:
 
     def _make_news(self, market: dict, now: datetime,
                    world: Optional[List[str]] = None
-                   ) -> Tuple[List[dict], List[dict], Optional[dict], Optional[dict]]:
+                   ) -> Tuple[List[dict], List[dict], Optional[dict],
+                              Optional[dict], dict]:
         try:
-            news, effects, world_update, actions = self._ai_news(market, now, world)
+            news, effects, world_update, actions, meta = self._ai_news(
+                market, now, world)
             if actions and not world:
                 # 没有外部设定时，普通事件偶尔也能推动换血，但概率压低避免频繁；
                 # 时代走向与列国君主的举动不受这个概率限制
@@ -6726,20 +6735,20 @@ class CatStockPlugin:
                         delistings=(actions.get("delistings") or [])[:1],
                         rebrands=(actions.get("rebrands") or [])[:1])
             if news:
-                return news, effects, world_update, actions
+                return news, effects, world_update, actions, meta
             if actions:
                 # 只有结构化操作、没有新闻时，补一条盘面快讯，避免整点空窗
                 fallback, _, _, _ = self._fallback_news(market, world)
-                return fallback, effects, world_update, actions
+                return fallback, effects, world_update, actions, meta
         except Exception as e:
             print(f"[cat_stock] AI news failed, use fallback: {e}")
-        return self._fallback_news(market, world)
+        return (*self._fallback_news(market, world), {})
 
     def _ai_news(self, market: dict, now: datetime,
                  world: Optional[List[str]] = None
-                 ) -> Tuple[List[dict], List[dict], Optional[dict], Optional[dict]]:
+                 ) -> Tuple[List[dict], List[dict], Optional[dict], Optional[dict], dict]:
         if not self._ai:
-            return [], [], None, None
+            return [], [], None, None, {}
         companies = market["companies"]
         hot_cool = ""
         econ = market.get("economy") or {}
@@ -6903,13 +6912,17 @@ class CatStockPlugin:
             + recent_block + world_block + state_block + era_block + flow_block
             + self._geography_prompt() +
             f"\n\n请生成 {CAT_STOCK_NEWS_TICK_MIN}~{CAT_STOCK_NEWS_TICK_MAX} 条本小时的世界新闻，"
-            "不要写成十几条，也不要只有一条。每条新闻都要带 level，取值为「娱乐」「平缓」「重要」。"
-            "数量分配：约一半是「娱乐」，只写人物动向、节庆、奇闻、传闻，不给 effects，负责让新闻流热闹；"
-            "约四分之一是「平缓」，有 effects 但幅度很小，pct 控制在 ±0.05 以内；"
+            "不要写成十几条，也不要只有一条。"
+            "娱乐新闻就是与股市无关的小故事：段子、梗、冷笑话、市井轶事、奇人奇事、"
+            "节庆趣闻、街头见闻、坊间传闻都可以，写得轻松好玩即可，"
+            "不必提到上市公司，也不必影射涨跌，一律不给 effects。"
+            "娱乐条数要占一半以上（4~8 条里至少 3~5 条），负责让新闻流热闹起来。"
+            "只有两三条带 effects：以「平缓」为主，pct 控制在 ±0.05 以内；"
             "「重要」最多 1 条，只有真正改变行业格局、战争灾变、政策转向这类事件才算，"
             "大多数整点可以完全没有重要事件。"
-            "同一家公司一天最多当一次重要事件的主角，不要每小时都写转折、暴雷、暴涨暴跌；"
-            "娱乐与平缓新闻不必都扯到具体公司，重要新闻才必须给出能由它解释的明确股价影响。"
+            "同一家公司一天最多出现在一条带 effects 的新闻里，其余提到它只能写成没有影响的趣闻；"
+            "带 effects 的新闻才必须给出能由它解释的明确股价影响，"
+            "不要把娱乐小故事硬扯成利好或利空。"
             "事件类型必须丰富：这一小时可以夹杂意外、灾祸、奇遇、丑闻、发现、节庆、"
             "迁徙、骗局、魔物、宫廷秘闻、技术尝试等不同性质的事件，"
             "不要连续几小时重复同一种灾祸或同一种战争，也不要套用固定模板。"
@@ -7011,7 +7024,7 @@ class CatStockPlugin:
                 "前后不要任何解释和代码块标记；news 只写 4~6 条，world 整个省略，"
                 "字符串内不要出现未转义的换行或双引号，确保 JSON 能被直接解析。\n")
         if not data:
-            return [], [], None, None
+            return [], [], None, None, {}
 
         codes = {c["code"] for c in companies.values()}
         names = {c["name"] for c in companies.values()}
@@ -7124,7 +7137,31 @@ class CatStockPlugin:
             important_used += 1
             for code in rec["codes"]:
                 important_dates[code] = today_key
-        market["important_events"] = important_dates
+
+        # 同一家公司一天最多一条真正影响股价的新闻；超出的只保留趣闻，不给 effects
+        effect_dates = {
+            str(k): str(v) for k, v in (market.get("news_effects") or {}).items()}
+        effect_dates = {k: v for k, v in effect_dates.items() if v == today_key}
+        for rec in sorted(records, key=lambda r: -_peak_pct(r["effects"])):
+            if not rec["effects"]:
+                continue
+            kept = [e for e in rec["effects"]
+                    if not (_eff_code(e) and effect_dates.get(_eff_code(e)) == today_key)]
+            for eff in kept:
+                code = _eff_code(eff)
+                if code:
+                    effect_dates[code] = today_key
+            rec["effects"] = kept
+            if not kept:
+                rec["level"] = "娱乐"
+
+        # 每小时只保留幅度最大的几条涨跌新闻，其余降级为纯趣闻
+        live = [r for r in records if r["effects"]]
+        if len(live) > CAT_STOCK_NEWS_EFFECT_MAX:
+            for rec in sorted(live, key=lambda r: -_peak_pct(r["effects"]))[
+                    CAT_STOCK_NEWS_EFFECT_MAX:]:
+                rec["effects"] = []
+                rec["level"] = "娱乐"
 
         news = [rec["entry"] for rec in records]
         effects = [e for rec in records for e in rec["effects"]]
@@ -7140,7 +7177,8 @@ class CatStockPlugin:
         if world_update and not world_update.get("story"):
             # AI 没写新的发展脉络时，沿用上一版，避免故事线被清空
             world_update["story"] = str((market.get("world") or {}).get("story") or "")
-        return (news, effects, world_update, self._parse_actions(data))
+        meta = {"important_events": important_dates, "news_effects": effect_dates}
+        return (news, effects, world_update, self._parse_actions(data), meta)
 
     def _parse_actions(self, data: dict) -> Optional[dict]:
         """收集 AI 提出的新产业上市 / 产业下市，具体校验在落地时进行"""

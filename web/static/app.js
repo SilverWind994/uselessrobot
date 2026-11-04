@@ -3800,7 +3800,9 @@ function renderStock(data) {
     `${data.status_line}｜在市 ${companies.length} 家｜上涨 ${data.up} · 下跌 ${data.down}`;
   stockRulesEl.textContent =
     `开市 ${data.open_hour}:00~${data.close_hour}:00｜1 猫眼石 = ${r.stone_to_catnip} 猫薄荷｜`
-    + `${r.catnip_to_stone} 猫薄荷 = 1 猫眼石｜手续费 ${Math.round((r.buy_fee || 0) * 100)}%｜`
+    + `${r.catnip_to_stone} 猫薄荷 = 1 猫眼石｜`
+    + (Number(r.buy_fee || 0) > 0
+      ? `手续费 ${Math.round(r.buy_fee * 100)}%｜` : '买卖不收手续费｜')
     + `当天买入的股份要到第二天才能卖｜开盘 8 点不出新闻，20 点发收盘盘点｜休市可挂单到次日开盘`;
   stockExchangeEl.textContent =
     `充值 1 猫眼石 → ${r.stone_to_catnip} 猫薄荷，提现 ${r.catnip_to_stone} 猫薄荷 → 1 猫眼石；`
@@ -4334,7 +4336,7 @@ function fillMaxBondShares(btn) {
     let guard = 0;
     while (byCash > 0 && guard < 1000) {
       const cost = Math.round(byCash * price);
-      const realFee = Math.max(1, Math.round(cost * fee));
+      const realFee = fee > 0 ? Math.max(1, Math.round(cost * fee)) : 0;
       if (cost + realFee <= catnip) break;
       byCash -= 1;
       guard += 1;
@@ -4376,11 +4378,11 @@ function fillMaxShares(btn) {
     const fee = Number(rules.buy_fee || 0);
     const catnip = Number(p.catnip || 0);
     let byCash = price > 0 ? Math.floor(catnip / (price * (1 + fee))) : 0;
-    // 手续费有「最低 1 猫薄荷」保底，逐股回退到真正买得起的股数
+    // 手续费大于 0 时按「最低 1 猫薄荷」保底，逐股回退到真正买得起的股数
     let guard = 0;
     while (byCash > 0 && guard < 1000) {
       const cost = Math.round(byCash * price);
-      const realFee = Math.max(1, Math.round(cost * fee));
+      const realFee = fee > 0 ? Math.max(1, Math.round(cost * fee)) : 0;
       if (cost + realFee <= catnip) break;
       byCash -= 1;
       guard += 1;

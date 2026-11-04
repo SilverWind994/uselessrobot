@@ -870,18 +870,13 @@ code { background: #120f0d; border: 1px solid var(--line); border-radius: 6px; p
 .stock-news-title { font-weight: 700; }
 .stock-news-detail { color: var(--text-dim); font-size: 13px; margin-top: 2px; }
 
-#stock-wallet { margin-bottom: 12px; grid-template-columns: repeat(3, 1fr); }
+#stock-wallet { margin-bottom: 12px; grid-template-columns: repeat(2, 1fr); }
 #stock-holdings { margin-top: 4px; }
 
 .stock-bond-policy-box { margin-top: 16px; padding-top: 14px; border-top: 1px dashed var(--line); }
 .stock-bond-policy-row { display: flex; gap: 10px; align-items: center; }
 .stock-bond-policy-row input { flex: 1; }
 .stock-bond-policy-row .btn { width: auto; }
-
-.stock-rank-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-top: 10px; }
-@media (max-width: 720px) {
-  .stock-rank-cols { grid-template-columns: 1fr; }
-}
 
 /* ---------- 股东大会（董事会） ---------- */
 

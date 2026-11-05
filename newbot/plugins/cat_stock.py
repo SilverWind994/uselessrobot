@@ -33,6 +33,7 @@ _BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # newbo
 STOCK_DIR = os.path.join(_BASE_DIR, "assets", "cat_stock")
 MARKET_PATH = os.path.join(STOCK_DIR, "market.json")
 STOCK_PLAYERS_PATH = os.path.join(STOCK_DIR, "players.json")
+AI_NEWS_LOG_PATH = os.path.join(STOCK_DIR, "ai_news.log")
 
 # ==================== 经济数值 ====================
 CAT_STOCK_INITIAL_CATNIP = 1000      # 新玩家开户即领 1000 猫薄荷，方便先熟悉盘面
@@ -724,6 +725,18 @@ def _extract_json(text: str):
     except ValueError:
         return None
     return data if isinstance(data, dict) else None
+
+
+def _log_ai_news(text: str) -> None:
+    """AI 新闻失败信息同时打到控制台和日志文件，方便事后排查"""
+    stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[cat_stock] {text}")
+    try:
+        os.makedirs(STOCK_DIR, exist_ok=True)
+        with open(AI_NEWS_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(f"{stamp} {text}\n")
+    except OSError:
+        pass
 
 
 def _lot_sellable(lot: dict) -> bool:
@@ -2396,48 +2409,76 @@ class CatStockPlugin:
 
     def _parse_effect_value(self, raw) -> Optional[float]:
         """把 15 / 15% / 0.15 统一换算成小数，范围夹在 0 ~ 0.5"""
-        text = str(raw or "").strip().replace("％", "%").replace("%", "")
+        if raw is None:
+            return None
+        text = str(raw).strip().replace("％", "%").replace("%", "")
         if not text:
             return None
         try:
-            num = float(text)
+            num = abs(float(text))
         except ValueError:
             return None
-        if abs(num) >= 1:
+        if num >= 1:
             num /= 100.0
         return max(0.0, min(0.5, num))
 
-    def news_effect_max(self) -> float:
-        """读取当前新闻单条影响上限"""
-        with self._lock:
-            market = self._load_market()
-        return self._effect_cap(market)
+    def _effect_caps(self, market: dict) -> Tuple[float, float]:
+        """新闻单条影响的上涨上限与下跌上限（都是正数幅度），可分别调整"""
+        market = market or {}
+        legacy = market.get("news_effect_max")
+        values = []
+        for key in ("news_effect_up", "news_effect_down"):
+            raw = market.get(key, legacy)
+            value = self._parse_effect_value(raw)
+            values.append(CAT_STOCK_EFFECT_MAX if value is None else value)
+        return values[0], values[1]
 
-    def set_news_effect_max(self, raw) -> str:
-        """调整新闻单条影响上限；传 默认/None 可恢复默认值"""
+    def news_effect_range(self) -> Tuple[float, float]:
+        """读取当前上涨/下跌上限"""
         with self._lock:
             market = self._load_market()
-            if raw in (None, "", "默认", "reset", "重置"):
+        return self._effect_caps(market)
+
+    def set_news_effect_range(self, raw_up, raw_down=None) -> str:
+        """调整新闻单条影响的上限；只给一个值时正负同值，传「默认」恢复两侧 ±20%"""
+        with self._lock:
+            market = self._load_market()
+            reset = all(str(v or "").strip() in ("", "默认", "reset", "重置")
+                        for v in (raw_up, raw_down))
+            if reset:
+                market.pop("news_effect_up", None)
+                market.pop("news_effect_down", None)
                 market.pop("news_effect_max", None)
                 self._save_market(market)
-                return f"已恢复默认，新闻单条影响上限 ±{CAT_STOCK_EFFECT_MAX:.0%}"
-            value = self._parse_effect_value(raw)
-            if value is None:
-                return "数值看不懂喵，用 0~50 之间的百分数，比如 15 表示 ±15%"
-            market["news_effect_max"] = value
+                return (f"已恢复默认，新闻单条影响 上涨 +{CAT_STOCK_EFFECT_MAX:.0%} / "
+                        f"下跌 -{CAT_STOCK_EFFECT_MAX:.0%}")
+            up = self._parse_effect_value(raw_up)
+            down = self._parse_effect_value(raw_down) if raw_down is not None else up
+            if up is None or down is None:
+                return "数值看不懂喵，用 0~50 之间的百分数，比如 15 表示 15%"
+            market["news_effect_up"] = up
+            market["news_effect_down"] = down
+            market.pop("news_effect_max", None)
             self._save_market(market)
-            return f"新闻单条影响上限已改为 ±{value:.0%}（0 表示新闻不再影响股价）"
+            return (f"新闻单条影响已改为 上涨 +{up:.0%} / 下跌 -{down:.0%}"
+                    "（0 表示该方向新闻不再影响股价）")
 
     def cmd_news_range(self, ctx: CommandContext) -> None:
         target = Target.from_data(ctx.raw_data)
         raw = ctx.get_args().strip()
         if not raw or raw in ("状态", "status"):
-            current = self.news_effect_max()
-            message = (f"【新闻影响范围】单条新闻对单只股票的单小时影响上限：±{current:.0%}\n"
-                       "用法：影响范围 15（改到 ±15%，可写 15 / 15% / 0.15，范围 0~50）\n"
-                       "影响范围 默认 —— 恢复默认 ±20%")
+            up, down = self.news_effect_range()
+            message = (f"【新闻影响范围】单条新闻对单只股票的单小时影响："
+                       f"上涨上限 +{up:.0%}｜下跌上限 -{down:.0%}\n"
+                       "用法：影响范围 15 —— 涨跌两侧都设为 15%\n"
+                       "　　　影响范围 20 10 —— 上涨 +20%，下跌 -10%\n"
+                       "　　　影响范围 默认 —— 恢复 +20% / -20%")
+        elif raw in ("默认", "reset", "重置"):
+            message = self.set_news_effect_range("默认", None)
         else:
-            message = self.set_news_effect_max(raw)
+            parts = raw.replace("/", " ").replace("，", " ").replace(",", " ").split()
+            message = self.set_news_effect_range(
+                parts[0], parts[1] if len(parts) > 1 else None)
         self._sender.send_text(target, message)
 
     # ==================== 展示 ====================
@@ -5985,7 +6026,8 @@ class CatStockPlugin:
             # 2) 新闻事件影响（同国/同行业会跟着联动）
             #    涨跌完全由 AI 生成的新闻及其 effects 决定，不做任何关键词机械修正
             for eff in effects:
-                self._apply_effect(companies, eff, self._effect_cap(market))
+                cap_up, cap_down = self._effect_caps(market)
+                self._apply_effect(companies, eff, cap_up, cap_down)
 
             # 2.5) 同行业竞争：同一门生意里的企业互相抢客，
             #      跑赢同行的让出一点涨幅，落后的补回一点，同行不会无脑同涨同跌
@@ -6087,26 +6129,16 @@ class CatStockPlugin:
         if economy:
             self._economy_report(now, market, economy)
 
-    def _effect_cap(self, market: dict) -> float:
-        """新闻单条影响上限，掌管者可在运行期按市场档调整"""
-        raw = (market or {}).get("news_effect_max")
-        if raw is None:
-            return CAT_STOCK_EFFECT_MAX
-        try:
-            value = float(raw)
-        except (TypeError, ValueError):
-            return CAT_STOCK_EFFECT_MAX
-        return max(0.0, min(0.5, value))
-
     def _apply_effect(self, companies: dict, eff: dict,
-                      cap: float = CAT_STOCK_EFFECT_MAX) -> None:
+                      cap_up: float = CAT_STOCK_EFFECT_MAX,
+                      cap_down: float = CAT_STOCK_EFFECT_MAX) -> None:
         pct = eff.get("pct", 0)
         if not isinstance(pct, (int, float)):
             return
         pct = float(pct)
         if abs(pct) > 1:
             pct = pct / 100.0
-        pct = max(-cap, min(cap, pct))
+        pct = max(-cap_down, min(cap_up, pct))
         code = str(eff.get("code") or "").strip().upper()
         if code and code not in companies:
             # AI 偶尔会直接写企业名
@@ -7049,7 +7081,7 @@ class CatStockPlugin:
                 fallback, _, _, _ = self._fallback_news(market, world)
                 return fallback, effects, world_update, actions, meta
         except Exception as e:
-            print(f"[cat_stock] AI news failed, use fallback: {e}")
+            _log_ai_news(f"AI news failed, use fallback: {e}")
         return (*self._fallback_news(market, world), {})
 
     def _ai_news(self, market: dict, now: datetime,
@@ -7058,8 +7090,9 @@ class CatStockPlugin:
         if not self._ai:
             return [], [], None, None, {}
         companies = market["companies"]
-        cap = self._effect_cap(market)
-        calm_cap = min(CAT_STOCK_NEWS_CALM_PCT, cap)
+        cap_up, cap_down = self._effect_caps(market)
+        calm_up = min(CAT_STOCK_NEWS_CALM_PCT, cap_up)
+        calm_down = min(CAT_STOCK_NEWS_CALM_PCT, cap_down)
         hot_cool = ""
         econ = market.get("economy") or {}
         if float(econ.get("day_change", 0) or 0) >= CAT_STOCK_ECON_DAY_HOT:
@@ -7155,7 +7188,7 @@ class CatStockPlugin:
                              "更不能把一场全局危机写成半盘上涨。"
                              "严禁把原文照搬进新闻标题或详情（不要写“设定：……”“背景：……”），"
                              "要写出局势自然发展出的具体进展和后果——谁做了什么、哪国哪行业受冲击、结果如何。"
-                             f"effects 必须显著，单条可给到 ±{cap:.0%}，"
+                             f"effects 必须显著，单条可给到 +{cap_up:.0%}/-{cap_down:.0%}，"
                              "要让相关国家和行业出现明显涨跌，不能被无关小新闻冲淡。\n")
         state = market.get("world") or {}
         state_block = ""
@@ -7288,8 +7321,10 @@ class CatStockPlugin:
             '"world":{"story":"世界发展脉络（150字以内，在原有基础上延续推进，不要重写世界观）",'
             '"arc":"当前世界局势主线（一句话）",'
             '"relations":[{"a":"国家代码","b":"国家代码","state":"同盟/敌对/贸易往来/边境摩擦"}]}}\n'
-            f"pct 是小数涨跌幅，平缓事件 -{calm_cap:.2f} ~ {calm_cap:.2f}，重要事件 -{cap:.2f} ~ {cap:.2f}"
-            f"（局势设定直接引发的重大事件同样限制在 ±{cap:.2f}），正数为涨；code 和 country 二选一；"
+            f"pct 是小数涨跌幅，平缓事件 -{calm_down:.2f} ~ +{calm_up:.2f}，"
+            f"重要事件 -{cap_down:.2f} ~ +{cap_up:.2f}"
+            f"（局势设定直接引发的重大事件同样限制在 -{cap_down:.2f} ~ +{cap_up:.2f}），"
+            "正数为涨；code 和 country 二选一；"
             "每条有 effects 的新闻给 1~2 条 effects。"
             "没有明确的全局利好或全局利空时，本小时 effects 的正负数量与总幅度要大致平衡，"
             "利空和利好各占一半左右，不要默认把新闻写成上涨。"
@@ -7326,26 +7361,39 @@ class CatStockPlugin:
         )
         data = None
         attempts = 0
-        while attempts < 2:
+        max_attempts = 4
+        short_note = (
+            "\n重要：上一次输出没有形成合法 JSON。这次只输出一个 JSON 对象，"
+            "前后不要任何解释和代码块标记；news 只写 4~6 条，world 整个省略，"
+            "effects 每条只保留 code/country/pct，字符串内不要出现未转义的换行或双引号，"
+            "确保 JSON 能被直接解析。\n")
+        while attempts < max_attempts:
             attempts += 1
-            text = self._ai._call_ai(
-                Config.AI_MODEL["chat"],
-                [{"role": "system", "content": "你是奇幻世界《猫猫远征队》if 线的财经新闻主编。"},
-                 {"role": "user", "content": prompt}],
-                temperature=0.9,
-                max_retries=1,
-                max_tokens=4000,
-            )
+            try:
+                text = self._ai._call_ai(
+                    Config.AI_MODEL["chat"],
+                    [{"role": "system", "content": "你是奇幻世界《猫猫远征队》if 线的财经新闻主编。"},
+                     {"role": "user", "content": prompt}],
+                    temperature=0.9,
+                    max_retries=1,
+                    max_tokens=4000,
+                )
+            except Exception as e:
+                _log_ai_news(f"AI 新闻调用失败（第 {attempts}/{max_attempts} 次）：{e}")
+                time.sleep(1)
+                continue
             data = _extract_json(text)
             if data and (data.get("news") or data.get("effects")):
                 break
-            print(f"[cat_stock] AI 新闻 JSON 解析失败（第 {attempts} 次），"
-                  f"原始输出尾部：{str(text or '')[-160:]}")
-            # 第二次把输出压短：长 JSON 一旦被截断就会解析失败
-            prompt += (
-                "\n重要：上一次输出没有形成合法 JSON。这次只输出一个 JSON 对象，"
-                "前后不要任何解释和代码块标记；news 只写 4~6 条，world 整个省略，"
-                "字符串内不要出现未转义的换行或双引号，确保 JSON 能被直接解析。\n")
+            if data:
+                _log_ai_news(f"AI 新闻 JSON 合法但 news/effects 为空"
+                             f"（第 {attempts}/{max_attempts} 次）")
+            else:
+                _log_ai_news(f"AI 新闻 JSON 解析失败（第 {attempts}/{max_attempts} 次），"
+                             f"原始输出尾部：{str(text or '')[-160:]}")
+            if short_note not in prompt:
+                # 后续尝试把输出压短：长 JSON 一旦被截断就会解析失败
+                prompt += short_note
         if not data:
             return [], [], None, None, {}
 
@@ -7407,7 +7455,7 @@ class CatStockPlugin:
                 pct = float(eff.get("pct", 0) or 0)
                 if abs(pct) > 1:
                     pct /= 100.0
-                eff["pct"] = max(-calm_cap, min(calm_cap, pct))
+                eff["pct"] = max(-calm_down, min(calm_up, pct))
 
         records = []
         flavor_count = 0
@@ -7569,11 +7617,6 @@ class CatStockPlugin:
                     "detail": f"现价 {self._fmt_price(worst['price'])}，"
                               f"较昨收 {self._fmt_pct(day_pct(worst))}。",
                 })
-        up = sum(1 for comp in comps if day_pct(comp) > 0)
-        news.append({
-            "title": "盘面速览",
-            "detail": f"今日 {up} 家上涨、{len(comps) - up} 家下跌。",
-        })
         return news[:3], [], None, None
 
     # ==================== 整点播报 ====================
@@ -7584,8 +7627,11 @@ class CatStockPlugin:
         target = Target(user_id=0, group_id=group_id, is_group=True)
 
         comps = market["companies"]
-        up = sum(1 for c in comps.values() if c["price"] >= c.get("prev_close", c["price"]))
-        down = len(comps) - up
+        up = sum(1 for c in comps.values()
+                 if c["price"] > c.get("prev_close", c["price"]))
+        flat = sum(1 for c in comps.values()
+                   if c["price"] == c.get("prev_close", c["price"]))
+        down = len(comps) - up - flat
 
         lines = [f"【喵股市 · {now.strftime('%H:%M')} {head}】"]
         era = market.get("era") or {}
@@ -7597,7 +7643,10 @@ class CatStockPlugin:
             if item.get("detail"):
                 lines.append(f"  {item['detail']}")
         lines.append("")
-        lines.append(f"盘面：在市 {len(comps)} 家｜上涨 {up}｜下跌 {down}")
+        breadth = f"盘面：在市 {len(comps)} 家｜上涨 {up}｜下跌 {down}"
+        if flat:
+            breadth += f"｜平盘 {flat}"
+        lines.append(breadth)
         world = market.get("world") or {}
         arc = str(world.get("arc") or "").strip()
         if arc:

@@ -1189,7 +1189,7 @@ def stock_overview(cat_token: str = Cookie(default="")) -> JSONResponse:
     data = stock_web.overview(qq)
     # 隐藏设置只回给掌管者，普通玩家的响应里不会出现这个字段
     if _stock_admin(qq):
-        data["admin"] = {"news_effect_max": stock_web.news_effect_max()}
+        data["admin"] = stock_web.news_effect_range()
     return JSONResponse({"ok": True, **data})
 
 
@@ -1201,16 +1201,16 @@ def stock_news_range(payload: dict, cat_token: str = Cookie(default="")) -> JSON
         return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
     if not _stock_admin(qq):
         return JSONResponse({"ok": False, "msg": "没有这个权限喵"}, status_code=403)
-    msg = stock_web.set_news_effect_max(payload.get("value"))
+    msg = stock_web.set_news_effect_range(payload.get("up"), payload.get("down"))
     return JSONResponse({"ok": True, "msg": msg,
-                         "news_effect_max": stock_web.news_effect_max()})
+                         **stock_web.news_effect_range()})
 
 
 def _stock_action(result: str, qq: int) -> JSONResponse:
     """把 QQ 端原本文案 + 操作后的最新状态一起返回给网页"""
     data = stock_web.overview(qq)
     if _stock_admin(qq):
-        data["admin"] = {"news_effect_max": stock_web.news_effect_max()}
+        data["admin"] = stock_web.news_effect_range()
     return JSONResponse({"ok": True, "msg": result, "overview": data})
 
 

@@ -405,11 +405,12 @@
             </div>
           </div>
           <div class="stock-admin-row">
-            <input id="stock-news-range" class="stock-trade-shares" type="number" min="0" max="50" step="0.5" placeholder="±20">
+            <input id="stock-news-range-up" class="stock-trade-shares" type="number" min="0" max="50" step="0.5" placeholder="上涨 20">
+            <input id="stock-news-range-down" class="stock-trade-shares" type="number" min="0" max="50" step="0.5" placeholder="下跌 20">
             <button id="stock-news-range-save" class="btn btn-primary btn-sm" type="button">保存</button>
             <button id="stock-news-range-reset" class="btn btn-ghost btn-sm" type="button">恢复默认</button>
           </div>
-          <p class="hint">新闻单条影响上限，填 15 表示 ±15%，留空或点「恢复默认」回到 ±20%。</p>
+          <p class="hint">新闻单条影响上限，涨跌两侧可分别设置；填 15 表示 15%，填 0 表示该方向不再影响股价，两个都留空或点「恢复默认」回到各 20%。</p>
         </div>
 
         <div class="card hidden">
@@ -1064,6 +1065,6 @@
 
   <footer class="foot">串子小车 · 网页端</footer>
 
-  <script src="/static/app.js?v=49"></script>
+  <script src="/static/app.js?v=50"></script>
 </body>
 </html>

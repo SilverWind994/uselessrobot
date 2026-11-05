@@ -115,14 +115,15 @@ def is_world_admin(qq) -> bool:
         return False
 
 
-def news_effect_max() -> float:
-    """新闻单条影响上限（仅掌管者可见）"""
-    return _plugin.news_effect_max()
+def news_effect_range() -> dict:
+    """新闻单条影响的上涨/下跌上限（仅掌管者可见）"""
+    up, down = _plugin.news_effect_range()
+    return {"up": up, "down": down}
 
 
-def set_news_effect_max(value) -> str:
-    """调整新闻单条影响上限，传空或「默认」恢复默认"""
-    return _plugin.set_news_effect_max(value)
+def set_news_effect_range(up, down) -> str:
+    """分别调整上涨/下跌上限，两个都传空或「默认」恢复默认"""
+    return _plugin.set_news_effect_range(up, down)
 
 
 # ==================== 股东大会 ====================

@@ -3701,7 +3701,8 @@ const stockRankWorstEl = document.getElementById('stock-rank-worst');
 const stockNewsEl = document.getElementById('stock-news');
 const stockAdminCardEl = document.getElementById('stock-admin-card');
 const stockAdminSubEl = document.getElementById('stock-admin-sub');
-const stockNewsRangeEl = document.getElementById('stock-news-range');
+const stockNewsRangeUpEl = document.getElementById('stock-news-range-up');
+const stockNewsRangeDownEl = document.getElementById('stock-news-range-down');
 const stockNewsRangeSaveEl = document.getElementById('stock-news-range-save');
 const stockNewsRangeResetEl = document.getElementById('stock-news-range-reset');
 let stockLastData = null;
@@ -3800,21 +3801,23 @@ function renderStockAdmin(admin) {
     return;
   }
   stockAdminCardEl.classList.remove('hidden');
-  const pct = Math.round(Number(admin.news_effect_max || 0) * 100);
-  stockAdminSubEl.textContent = `新闻单条影响上限 ±${pct}%`;
-  if (document.activeElement !== stockNewsRangeEl) stockNewsRangeEl.value = pct;
+  const up = Math.round(Number(admin.up || 0) * 100);
+  const down = Math.round(Number(admin.down || 0) * 100);
+  stockAdminSubEl.textContent = `新闻单条影响上限 上涨 +${up}% ｜ 下跌 -${down}%`;
+  if (document.activeElement !== stockNewsRangeUpEl) stockNewsRangeUpEl.value = up;
+  if (document.activeElement !== stockNewsRangeDownEl) stockNewsRangeDownEl.value = down;
 }
 
-async function stockSetNewsRange(value) {
+async function stockSetNewsRange(up, down) {
   const { status, data } = await api('/api/stock/news_range', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ value }),
+    body: JSON.stringify({ up, down }),
   });
   if (status === 401) { homePanel.classList.add('hidden'); showLogin(); return; }
   stockMsgEl.textContent = data.msg || '设置失败喵';
   stockMsgEl.classList.toggle('ok', !!data.ok);
-  if (data.ok) renderStockAdmin({ news_effect_max: data.news_effect_max });
+  if (data.ok) renderStockAdmin({ up: data.up, down: data.down });
 }
 
 function renderStock(data) {
@@ -4105,9 +4108,13 @@ async function stockAction(path, body, actionName) {
 
 document.getElementById('btn-stock-refresh').addEventListener('click', () => loadStock());
 stockNewsRangeSaveEl.addEventListener('click', () => {
-  stockSetNewsRange(stockNewsRangeEl.value);
+  const read = (el) => {
+    const v = String(el.value || '').trim();
+    return v === '' ? null : v;
+  };
+  stockSetNewsRange(read(stockNewsRangeUpEl), read(stockNewsRangeDownEl));
 });
-stockNewsRangeResetEl.addEventListener('click', () => stockSetNewsRange('默认'));
+stockNewsRangeResetEl.addEventListener('click', () => stockSetNewsRange('默认', '默认'));
 
 stockHoldingsEl.addEventListener('click', (e) => {
   const detailBtn = e.target.closest('.stock-detail-btn');

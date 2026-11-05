@@ -9,7 +9,7 @@
 """
 
 from config import Config
-from plugins.cat_stock import CatStockPlugin, STOCK_DIR
+from plugins.cat_stock import CatStockPlugin, STOCK_DIR, CAT_STOCK_WORLD_ADMIN
 from plugins.ai_functions import AIFunctionsPlugin
 from core.message_sender import MessageSender, Target
 import cat_web
@@ -106,6 +106,14 @@ def withdraw(qq: int, stone_amount) -> str:
 
 
 # ==================== 掌管者设置 ====================
+
+def is_world_admin(qq) -> bool:
+    """QQ 端掌管者：与隐藏指令的授权是同一个 QQ"""
+    try:
+        return int(qq) == int(CAT_STOCK_WORLD_ADMIN)
+    except (TypeError, ValueError):
+        return False
+
 
 def news_effect_max() -> float:
     """新闻单条影响上限（仅掌管者可见）"""

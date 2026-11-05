@@ -3962,7 +3962,7 @@ function renderStock(data) {
       }).join('');
       return `
       <tr>
-        <td>${esc(h.code)}</td>
+        <td><button class="stock-detail-btn" type="button" data-code="${esc(h.code)}" title="查看K线与买卖记录">${esc(h.code)}</button></td>
         <td>${esc(h.name)}</td>
         <td>${h.shares}</td>
         <td>${h.sellable}</td>
@@ -4110,6 +4110,11 @@ stockNewsRangeSaveEl.addEventListener('click', () => {
 stockNewsRangeResetEl.addEventListener('click', () => stockSetNewsRange('默认'));
 
 stockHoldingsEl.addEventListener('click', (e) => {
+  const detailBtn = e.target.closest('.stock-detail-btn');
+  if (detailBtn) {
+    openStockDetail(detailBtn.dataset.code || '');
+    return;
+  }
   const coverBtn = e.target.closest('.stock-cover-btn');
   if (coverBtn) {
     stockAction('/api/stock/cover', { code: coverBtn.dataset.code || '' }, '平空');
@@ -4243,6 +4248,14 @@ function openStockDetail(code) {
     </div>
     ${stockTrendChart(hist)}
     <p class="hint">最近 ${hist.length} 个整点的收盘价走势，每个整点更新</p>
+    <div class="stock-detail-holders">
+      <div class="section-title">我的买卖记录</div>
+      ${((mine && mine.trades) || []).length
+        ? [...(mine.trades || [])].reverse().map((t) => `<div class="stock-detail-holder">
+            <span>${esc(t.time || '—')} ${t.side === 'buy' ? '买入' : '卖出'} ${stockMoney(t.shares)} 股</span>
+            <span>成交价 ${Number(t.price || 0).toFixed(1)}</span></div>`).join('')
+        : '<p class="room-empty">暂无买卖记录（记录从本次更新后开始）</p>'}
+    </div>
     <div class="stock-detail-holders">
       <div class="section-title">全部股东 · ${holders.length} 人</div>
       ${holders.length

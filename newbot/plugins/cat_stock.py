@@ -305,6 +305,24 @@ _BOARD_CAST_DEFAULT = [
      "persona": "爱把生意说成诗的女伶，常为了一个好听的名号放弃利润。"},
 ]
 
+# 每个标签对应一种说话方式，老股东开口时按此调整，避免全都一个腔调
+_BOARD_VOICES = {
+    "谨慎": "先列风险再表态，爱说「先……再说」，句子里常带数目和「留三成」",
+    "守旧": "开口就提老辈子的规矩，对新东西先挑一处毛病",
+    "悲观": "先预言一个坏结果，再补一句「不过也未必」",
+    "精算": "每句话都带数字或账目，喜欢反问「这笔谁出」",
+    "浮夸": "把小事说成开天辟地，语气夸张",
+    "投机": "只谈差价和时机，语气轻飘",
+    "冒险": "先拍板再想后果，爱说「押上」",
+    "寡言": "极短，一两句，通常只给结论",
+    "憨直": "直白，听不懂反话，会当场追问",
+    "人情": "先念叨某个具体的人，再谈生意",
+    "搞怪": "爱出怪主意，把买卖和节庆、玩笑绑在一起",
+    "信仰": "把判断推给神意或兆头，语气笃定",
+    "务实": "只谈手上摸得到的东西，嫌远景太虚",
+    "浪漫": "把生意说成诗，重视名号与体面",
+}
+
 
 # ==================== 时代更迭 ====================
 # 世界按十二个时代徐徐推进，每个时代固定延续 30 天，到期按可能性随机选一条走向。
@@ -2145,6 +2163,17 @@ class CatStockPlugin:
     def _shares_of(self, lots: List[dict]) -> int:
         return sum(int(lot.get("shares", 0)) for lot in lots)
 
+    def _log_trade(self, st: dict, code: str, side: str,
+                   shares: int, price: float) -> None:
+        """记录一笔成交，供个股详情里展示买卖时间与数量"""
+        log = st.get("trade_log")
+        if not isinstance(log, list):
+            log = []
+            st["trade_log"] = log
+        log.append({"code": code, "side": side, "shares": int(shares),
+                    "price": round(float(price), 2), "ts": time.time()})
+        st["trade_log"] = log[-200:]
+
     # ==================== 命令入口 ====================
 
     def cmd_stock(self, ctx: CommandContext) -> None:
@@ -2858,6 +2887,7 @@ class CatStockPlugin:
             # 成本价记录实际成交价，浮动盈亏即真正到手的盈亏
             lots.append({"shares": shares, "price": round((cost + fee) / shares, 4),
                          "ts": time.time()})
+            self._log_trade(st, comp["code"], "buy", shares, price)
             self._save_stock_players(players)
             new_balance = st["catnip"]
 
@@ -2953,6 +2983,7 @@ class CatStockPlugin:
             fee = int(round(proceeds * CAT_STOCK_SELL_FEE))
             net = proceeds - fee
             st["catnip"] = int(st.get("catnip", 0)) + net
+            self._log_trade(st, comp["code"], "sell", shares, price)
             self._save_stock_players(players)
             new_balance = st["catnip"]
 
@@ -3046,6 +3077,7 @@ class CatStockPlugin:
                     st["holdings"].setdefault(code, []).append(
                         {"shares": shares,
                          "price": round((cost + fee) / shares, 4), "ts": time.time()})
+                    self._log_trade(st, code, "buy", shares, price)
                     done.append(f"买入 {code} {comp.get('name', code)} {shares} 股"
                                 f"｜成交价 {self._fmt_price(price)}")
                 else:
@@ -3084,6 +3116,7 @@ class CatStockPlugin:
                     fee = int(round(proceeds * CAT_STOCK_SELL_FEE))
                     net = proceeds - fee
                     st["catnip"] = int(st.get("catnip", 0)) + net
+                    self._log_trade(st, code, "sell", shares, price)
                     done.append(f"卖出 {code} {comp.get('name', code)} {shares} 股"
                                 f"｜成交价 {self._fmt_price(price)}｜到手 {net}")
             st["pending_orders"] = []
@@ -3974,40 +4007,90 @@ class CatStockPlugin:
     def _ai_shareholder_reply(self, comp: dict, recent: List[dict], latest: str) -> Optional[dict]:
         """让其中一位老股东接话；没有 AI 时用性格模板兜底"""
         board = comp.get("board") or self._board_for(str(comp.get("code") or "SHR"), 0)
-        ai = random.choice(board)
+        last_ai = ""
+        for msg in reversed(recent):
+            if msg.get("role") == "ai" and msg.get("name"):
+                last_ai = str(msg["name"])
+                break
+        others = [b for b in board if b.get("name") != last_ai] or board
+        ai = random.choice(others)
         transcript = "\n".join(f"{m.get('name', '')}：{m.get('text', '')}"
                                for m in recent if m.get("text"))
         if self._ai:
             prompt = (
-                f"你是奇幻世界《猫猫远征队》if 线里的老股东「{ai['name']}」。\n"
+                f"你是奇幻世界《猫猫远征队》if 线里的老股东「{ai['name']}」，"
+                f"标签是「{ai.get('tag', '')}」。\n"
                 f"你的性格：{ai['persona']}\n"
+                f"你的说话方式：{_BOARD_VOICES.get(ai.get('tag', ''), '按自己的性子直说')}\n"
                 f"正在开董事会的公司：{comp.get('name', '')}，经营 "
-                f"{'、'.join(comp.get('sectors') or ['综合'])}。\n"
+                f"{'、'.join(comp.get('sectors') or ['综合'])}，"
+                f"现行方针：{comp.get('policy') or '尚无明文方针'}。\n"
                 f"最近的发言：\n{transcript}\n"
                 f"刚才有人提到：{latest}\n"
-                "请以你的身份接一句话，可以直接回应对方，也可以自顾自地发表高见；"
-                "保持人格特色，不要复述规则，不要超过 60 字，只输出这句话。"
+                "请以你的身份接 1~3 句话，总长不超过 150 字。要求：\n"
+                "1. 必须直接回应前面某位发言者的具体内容，可以点名赞成、反对、追问或改条件；\n"
+                "2. 必须带上具体的行业、商号、数目、时节、地点或风险中的至少两样，"
+                "不要只说空泛的态度；\n"
+                "3. 完全按你的标签与性格说话，可以有口头禅和情绪，但不要复述规则；\n"
+                "4. 严禁使用「唔……」「这笔账我先记下」「听起来像极了我昨晚的梦」这类套话。\n"
+                "只输出你要说的台词，不要写名字前缀。"
             )
-            try:
-                text = self._ai._call_ai(
-                    Config.AI_MODEL["chat"],
-                    [{"role": "system", "content": "你是奇幻世界里的公司老股东，只输出一句话。"},
-                     {"role": "user", "content": prompt}],
-                    temperature=0.9, max_retries=1, max_tokens=120,
-                )
-                text = re.sub(r"\s+", " ", str(text or "")).strip()
-                if text:
-                    return {"role": "ai", "name": ai["name"], "text": text[:120],
-                            "ts": time.time()}
-            except Exception as e:
-                print(f"[cat_stock] meeting reply failed: {e}")
-        if ai["tag"] in ("谨慎", "守旧", "悲观", "精算"):
-            text = "这笔账我先记下，回本的日子不明朗之前，别急着动家底。"
-        elif ai["tag"] in ("浮夸", "投机", "冒险", "信仰"):
-            text = "好！这话我记进回忆录里，等公司名震列国时再翻出来念给各位听。"
+            for _ in range(2):
+                try:
+                    text = self._ai._call_ai(
+                        Config.AI_MODEL["chat"],
+                        [{"role": "system",
+                          "content": "你是奇幻世界里的公司老股东，只输出你要说的一句或几句话。"},
+                         {"role": "user", "content": prompt}],
+                        temperature=0.9, max_retries=1, max_tokens=220,
+                    )
+                    text = re.sub(r"\s+", " ", str(text or "")).strip()
+                    if text:
+                        return {"role": "ai", "name": ai["name"], "text": text[:150],
+                                "ts": time.time()}
+                except Exception as e:
+                    print(f"[cat_stock] meeting reply failed: {e}")
+        return {"role": "ai", "name": ai["name"],
+                "text": self._board_fallback_line(ai, comp), "ts": time.time()}
+
+    def _board_fallback_line(self, member: dict, comp: dict) -> str:
+        """AI 不可用时的兜底台词：按标签给不同说法，尽量带上具体行业"""
+        sectors = comp.get("sectors") or ["本业"]
+        sec = random.choice(sectors)
+        name = comp.get("name") or "咱们"
+        tag = member.get("tag", "")
+        pool = []
+        if tag in ("谨慎", "守旧", "悲观", "精算"):
+            pool = [
+                f"{sec}这一块先把旧账翻出来对一遍，回本的日子没算清之前，我不签这个字。",
+                f"{name}去年在{sec}上吃的亏还没补平，这回要么先试一小笔，要么就再等一季。",
+                f"我是信老规矩的：{sec}的买卖得看天时，账上至少要留三成本钱。",
+            ]
+        elif tag in ("浮夸", "投机", "冒险", "信仰", "浪漫"):
+            pool = [
+                f"{sec}正是风口！给我三个月，{name}的名号能传到邻国去。",
+                f"怕什么，{sec}亏了还有别的营生兜底，这笔我押八成。",
+                f"要做就做大的：把{sec}的招牌挂到城门上，亏也亏得漂亮。",
+            ]
+        elif tag in ("寡言", "憨直"):
+            pool = [
+                f"{sec}的地基不牢，说再多也没用，先把人手补齐。",
+                f"我听不懂绕弯子的话：{sec}到底做不做，给个准数。",
+                f"账我不太会算，但{sec}这活儿我肯干，管饭就行。",
+            ]
+        elif tag in ("人情", "搞怪"):
+            pool = [
+                f"{sec}的买卖得先看街坊脸色，价钱抬太狠，下次没人来。",
+                f"我倒有个怪主意：把{sec}和节庆搭一起卖，亏了就当请大家看热闹。",
+                f"{name}的老主顾都在{sec}上，先给他们留点面子，再谈涨价。",
+            ]
         else:
-            text = "唔……听起来像极了我昨晚的梦，不过梦里那笔生意好像是赚的。"
-        return {"role": "ai", "name": ai["name"], "text": text, "ts": time.time()}
+            pool = [
+                f"{sec}的事我听明白了，先按刚才说的试一季，不行就退回来。",
+                f"别光说{sec}，把账本摊开，谁出多少、亏了怎么算，都写清楚。",
+                f"{name}在{sec}上还有余力，我赞成先小步往前挪。",
+            ]
+        return random.choice(pool)
 
     def _summarize_meeting(self, code: str, snapshot: dict) -> None:
         comp = snapshot.get("comp") or {}
@@ -4658,6 +4741,27 @@ class CatStockPlugin:
             comp["prev_close"] = comp["price"]
             comp["week_open"] = comp["price"]
 
+    def _war_cash_refund(self, players: dict, code: str, amount: int) -> None:
+        """活动资金按持股比例直接退回股东猫薄荷，不再折进股价"""
+        if amount <= 0:
+            return
+        holders = []
+        for st in players.values():
+            shares = self._shares_of((st.get("holdings") or {}).get(code) or [])
+            if shares > 0:
+                holders.append((st, shares))
+        total = sum(shares for _, shares in holders)
+        if total <= 0:
+            return
+        given = 0
+        for idx, (st, shares) in enumerate(holders):
+            if idx == len(holders) - 1:
+                back = int(amount) - given
+            else:
+                back = int(round(int(amount) * shares / total))
+            st["catnip"] = int(st.get("catnip", 0) or 0) + back
+            given += back
+
     def _war_settle(self, market: dict, players: dict, war: dict,
                     annex_side: str = "") -> List[dict]:
         """结算商战：吞并对手，或按总支持度判出胜负"""
@@ -4719,13 +4823,13 @@ class CatStockPlugin:
             for st in players.values():
                 (st.get("holdings") or {}).pop(lose_code, None)
             self._war_payout(players, win_code, win_comp, payout)
-            self._war_payout(players, win_code, win_comp, refund_win)
+            self._war_cash_refund(players, win_code, refund_win)
             refund_a = refund_b = refund_win
         else:
-            # 没吞并：活动资金全额返还，按五五开分给两边股东
+            # 没吞并：活动资金全额返还，按五五开以猫薄荷现金退回两边股东
             refund_a = refund_b = int(round(CAT_STOCK_WAR_REFUND * cost_total))
-            self._war_payout(players, a_code, a_comp, refund_a)
-            self._war_payout(players, b_code, b_comp, refund_b)
+            self._war_cash_refund(players, a_code, refund_a)
+            self._war_cash_refund(players, b_code, refund_b)
         size_info = {"big": "", "small": "", "big_pct": 0.0,
                      "small_pct": 0.0, "money": 0}
         if not annex:
@@ -4744,7 +4848,7 @@ class CatStockPlugin:
                 f"{win_comp['name']}在全部地区压过 {lose_comp['name']}，将其吞并。"
                 f"对手股东原值 {lose_value:,} 猫薄荷，破产清算后按五成返还；"
                 f"获胜方股东同样只得五成、即 {payout:,} 猫薄荷，由股价拉升分配；"
-                f"双方活动资金 {cost_total:,} 全额返还，按五五开分给两边股东。")
+                f"双方活动资金 {cost_total:,} 全额返还，按五五开以猫薄荷现金退回两边股东。")
         else:
             size_text = "双方体量相当，股价未做重新定价。"
             if size_info["money"] > 0:
@@ -4756,7 +4860,7 @@ class CatStockPlugin:
                 f"商战到期，{win_comp['name']}以总支持度 "
                 f"{max(total_a, total_b):,.1f}:{min(total_a, total_b):,.1f} 领先，"
                 f"但没能在所有地区压过 65%，不吞并对手。"
-                f"双方活动投入 {cost_total:,} 全额返还，按五五开分给两边股东；"
+                f"双方活动投入 {cost_total:,} 全额返还，按五五开以猫薄荷现金退回两边股东；"
                 f"{size_text}")
         return [{"title": f"商战结算：{win_comp['name']}胜出",
                  "detail": war["result"]}]
@@ -5368,10 +5472,22 @@ class CatStockPlugin:
                     "time": (datetime.fromtimestamp(ts).strftime("%m-%d %H:%M")
                              if ts else ""),
                 })
+            trade_rows = []
+            for item in (st.get("trade_log") or [])[-60:]:
+                if item.get("code") != code:
+                    continue
+                ts = float(item.get("ts", 0) or 0)
+                trade_rows.append({
+                    "time": datetime.fromtimestamp(ts).strftime("%m-%d %H:%M") if ts else "",
+                    "side": "buy" if item.get("side") == "buy" else "sell",
+                    "shares": int(item.get("shares", 0) or 0),
+                    "price": round(float(item.get("price", 0) or 0), 2),
+                })
             if not comp:
                 rows.append({"code": code, "name": code, "shares": shares, "sellable": 0,
                              "locked": shares, "avg_cost": 0, "price": 0, "value": 0,
-                             "pnl": 0, "delisted": True, "lots": lot_rows})
+                             "pnl": 0, "delisted": True, "lots": lot_rows,
+                             "trades": trade_rows})
                 continue
             value = shares * comp["price"]
             total_value += value
@@ -5390,6 +5506,7 @@ class CatStockPlugin:
                 "pnl": round(value - cost, 0),
                 "delisted": False,
                 "lots": lot_rows,
+                "trades": trade_rows,
             })
         rows.sort(key=lambda r: r["value"], reverse=True)
 
@@ -7007,6 +7124,19 @@ class CatStockPlugin:
                             "可以呼应、升级、反转或写后果）：\n"
                             + "\n".join(f"- {n.get('title', '')}" for n in recent_news if n.get("title"))
                             + "\n")
+        # 商战结局是盘面既成事实，写新闻时必须与之自洽
+        war_results = []
+        for war in self._war_list(market).values():
+            if war.get("status") != "done" or not war.get("result"):
+                continue
+            if time.time() - float(war.get("ended_ts") or 0) > 86400:
+                continue
+            war_results.append(f"- {war['result']}")
+        war_block = ""
+        if war_results:
+            war_block = ("\n最近一天的商战结局（已经发生的事实，新闻可以写后续影响，"
+                         "但不能写成另一家公司仍独立经营、也不能否定胜负）：\n"
+                         + "\n".join(war_results[-4:]) + "\n")
         world_block = ""
         if world:
             items = list(world)
@@ -7102,7 +7232,7 @@ class CatStockPlugin:
             f"现在是 {now.strftime('%H:%M')}，股市开市。\n"
             "以下是当前上市企业（代码｜名称｜国家｜经营范围（可含多项业务）｜现价｜近1小时涨跌）：\n"
             + "\n".join(lines)
-            + recent_block + world_block + state_block + era_block + flow_block
+            + recent_block + war_block + world_block + state_block + era_block + flow_block
             + self._geography_prompt() +
             f"\n\n请生成 {CAT_STOCK_NEWS_TICK_MIN}~{CAT_STOCK_NEWS_TICK_MAX} 条本小时的世界新闻，"
             "不要写成十几条，也不要只有一条。"

@@ -737,6 +737,7 @@ class AIFunctionsPlugin:
         max_retries: int = 2,
         max_tokens: int = 0,
         tools: List[dict] = None,
+        timeout: int = 60,
     ) -> dict:
         """调用 OpenAI 兼容接口，返回 assistant 原始消息（可能带 tool_calls）"""
         api_key = Config.SILICONFLOW_API_KEY
@@ -764,7 +765,7 @@ class AIFunctionsPlugin:
         last_error = None
         for attempt in range(max_retries + 1):
             try:
-                resp = requests.post(url, headers=headers, json=payload, timeout=60)
+                resp = requests.post(url, headers=headers, json=payload, timeout=timeout)
                 if resp.status_code == 200:
                     data = resp.json()
                     return data["choices"][0]["message"]
@@ -781,9 +782,11 @@ class AIFunctionsPlugin:
         temperature: float = 0.7,
         max_retries: int = 2,
         max_tokens: int = 0,
+        timeout: int = 60,
     ) -> str:
         """调用模型并取纯文本回复"""
-        msg = self._request_chat(model, messages, temperature, max_retries, max_tokens)
+        msg = self._request_chat(model, messages, temperature, max_retries, max_tokens,
+                                 timeout=timeout)
         return (msg.get("content") or "").strip()
 
     def _call_ai_with_search(

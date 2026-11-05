@@ -107,8 +107,8 @@ CAT_STOCK_COMPANY_MAX = 40           # 市场最多容纳的上市公司数
 CAT_STOCK_COMPANY_START = 20         # 开局上市公司数量
 CAT_STOCK_COMPANY_GROWTH = 2         # 每个时代额外增加的企业数量
 CAT_STOCK_AI_ACTION_CHANCE = 0.25    # 无外部设定时，AI 推动上市/摘牌被采纳的概率
-CAT_STOCK_NEWS_TICK_MIN = 4          # 每个整点最少生成几条新闻
-CAT_STOCK_NEWS_TICK_MAX = 8          # 每个整点最多生成几条新闻
+CAT_STOCK_NEWS_TICK_MIN = 4          # 每个整点最少生成几条新闻（第一次尝试的体量）
+CAT_STOCK_NEWS_TICK_MAX = 8          # 每个整点最多生成几条新闻（第一次尝试的体量）
 CAT_STOCK_NEWS_IMPORTANT_MAX = 1     # 每个整点最多几条重要事件
 CAT_STOCK_NEWS_CALM_PCT = 0.05       # 平缓事件的股价影响上限
 CAT_STOCK_NEWS_FUN_MAX = 8           # 每个整点最多几条纯娱乐新闻（无 effects）
@@ -131,6 +131,9 @@ CAT_STOCK_ECON_SUPPORT_MAX = 0.008   # 过冷时每整点对持仓施加的最�
 CAT_STOCK_ECON_SUPPORT_COEF = 0.06   # 低于过冷线的比例换算成托底力度
 CAT_STOCK_PENDING_MAX = 20           # 休市期间每人最多挂多少笔次日开盘单
 CAT_STOCK_ERA_DAYS = 30              # 每个时代固定延续的自然日，到期按可能性随机翻页
+CAT_STOCK_ERA_CAPITAL_DAYS = 14      # 玩家买入额只统计最近 14 天，避免老资金永久左右走向
+CAT_STOCK_ERA_CAPITAL_PER_POINT = 2000  # 累计 2000 猫薄荷买入推进 1 点时代走向
+CAT_STOCK_ERA_CAPITAL_POINT_MAX = 2  # 单个走向每整点最多因资金推进 2 点
 CAT_STOCK_ERA_COLLAPSE_RATE = 0.5    # 亡国时该国企业持仓的清算比例
 CAT_STOCK_ERA_COUNTRY_MIN = 3        # 至少保留多少个尚存国家
 CAT_STOCK_ERA_WAR_CHANCE = 0.08      # 战事升级为亡国的概率
@@ -1033,6 +1036,7 @@ class CatStockPlugin:
             "started": start.strftime("%Y-%m-%d"),
             "ends": (start + timedelta(days=CAT_STOCK_ERA_DAYS)).strftime("%Y-%m-%d"),
             "points": {p["name"]: 0 for p in (data.get("paths") or [])},
+            "capital_claimed": {p["name"]: 0 for p in (data.get("paths") or [])},
             "techs": list(era.get("techs") or []),
             "fate": str(era.get("fate") or ""),
             "history": list(era.get("history") or []),
@@ -1792,11 +1796,69 @@ class CatStockPlugin:
                 if tag in self._sectors_of(comp)
                 or tag in [str(t) for t in (comp.get("tags") or [])]]
 
+    def _add_era_invest(self, st: dict, code: str, amount: float) -> None:
+        """记录买入额：卖出后仍保留，作为对相关产业的历史投入"""
+        if amount <= 0:
+            return
+        today = datetime.now().strftime("%Y-%m-%d")
+        history = st.get("era_invest")
+        if not isinstance(history, dict):
+            history = {}
+            st["era_invest"] = history
+        day = history.setdefault(today, {})
+        if not isinstance(day, dict):
+            day = {}
+            history[today] = day
+        day[code] = round(float(day.get(code, 0) or 0) + float(amount), 2)
+        cutoff = datetime.now() - timedelta(days=CAT_STOCK_ERA_CAPITAL_DAYS)
+        for key in list(history.keys()):
+            try:
+                if datetime.strptime(str(key), "%Y-%m-%d") < cutoff:
+                    history.pop(key, None)
+            except ValueError:
+                history.pop(key, None)
+
+    def _path_capital(self, market: dict, players: dict,
+                      paths: List[dict]) -> Dict[str, float]:
+        """最近 N 天玩家买入各走向相关企业的累计金额（卖出不扣减）"""
+        companies = market.get("companies") or {}
+        code_paths: Dict[str, List[str]] = {}
+        for path in paths:
+            pname = str(path.get("name") or "")
+            for code in self._path_aligned(companies, path):
+                code_paths.setdefault(code, []).append(pname)
+        cutoff = datetime.now() - timedelta(days=CAT_STOCK_ERA_CAPITAL_DAYS)
+        totals: Dict[str, float] = {str(p.get("name") or ""): 0.0 for p in paths}
+        for st in players.values():
+            day_map = st.get("era_invest")
+            if not isinstance(day_map, dict):
+                continue
+            for day_key, codes in day_map.items():
+                try:
+                    day = datetime.strptime(str(day_key), "%Y-%m-%d")
+                except ValueError:
+                    continue
+                if day < cutoff or not isinstance(codes, dict):
+                    continue
+                for code, amount in codes.items():
+                    try:
+                        value = float(amount or 0)
+                    except (TypeError, ValueError):
+                        continue
+                    matched = code_paths.get(code) or []
+                    if not matched:
+                        continue
+                    share = value / len(matched)
+                    for pname in matched:
+                        totals[pname] += share
+        return totals
+
     def _path_weight_facts(self, market: dict, players: dict,
                            paths: List[dict]) -> List[dict]:
         """把每条走向的资金、方针、企业现状整理成给 AI 判断的素材"""
         companies = market.get("companies") or {}
         points = (market.get("era") or {}).get("points") or {}
+        capital = self._path_capital(market, players, paths)
         facts: List[dict] = []
         for path in paths:
             aligned = self._path_aligned(companies, path)
@@ -1829,6 +1891,7 @@ class CatStockPlugin:
                 "invest": int(round(invest)),
                 "short_value": int(round(short_value)),
                 "holder_count": holder_count,
+                "history": int(round(capital.get(str(path.get("name") or ""), 0.0))),
                 "samples": samples,
                 "policies": policies[:3],
                 "points": int(points.get(path.get("name", ""), 0) or 0),
@@ -1876,13 +1939,16 @@ class CatStockPlugin:
         """
         companies = market.get("companies") or {}
         points = (market.get("era") or {}).get("points") or {}
+        capital = self._path_capital(market, players, paths)
         weights: List[float] = []
         for path in paths:
             tag = str(path.get("tag") or "")
             pname = str(path.get("name") or "")
             aligned = self._path_aligned(companies, path)
-            # 随机事件（战争、灾疫、灾变）与时代积累是主要推力，资金只是次要参考
-            score = 5.0 + float(points.get(pname, 0)) * 0.2
+            # 随机事件（战争、灾疫、灾变）与时代积累是主要推力，资金只是次要参考；
+            # 已卖出的买入额仍然算历史投入，避免「买过就走」的玩家被完全抹掉
+            score = (5.0 + float(points.get(pname, 0)) * 0.2
+                     + math.sqrt(max(0.0, capital.get(pname, 0.0))) * 0.02)
             contrib = 0.0
             for code in aligned:
                 comp = companies.get(code) or {}
@@ -1921,7 +1987,9 @@ class CatStockPlugin:
             if fact["samples"]:
                 line += "｜" + "；".join(fact["samples"])
             line += (f"｜玩家累计投入 {fact['invest']} 猫薄荷、做空 {fact['short_value']} 猫薄荷、"
-                     f"参与股东 {fact['holder_count']} 人")
+                     f"参与股东 {fact['holder_count']} 人、"
+                     f"近 {CAT_STOCK_ERA_CAPITAL_DAYS} 天累计买入 {fact['history']} 猫薄荷"
+                     "（卖出后仍计入）")
             if fact["policies"]:
                 line += "｜现有方针：" + "；".join(fact["policies"])
             lines.append(line)
@@ -1949,7 +2017,9 @@ class CatStockPlugin:
             + "\n".join(lines) + news_block + world_block + directive_block +
             "\n\n请按真实因果来判断，不要让「相关企业家数多或资金体量大」天然决定结果："
             "战争、灾疫、灾变、社会动荡、连续新闻事件与时代积累是主要推力；"
-            "资金投入、重仓与做空、公司方针只能作为次要参考，不能压过随机事件。"
+            "玩家近期真金白银的买入（哪怕之后已经卖出）说明他们真的押注这条走向，"
+            "可以给中等权重，但仍不能压过随机事件；"
+            "当前重仓、做空与公司方针只作为次要参考。"
             "请给每条走向打 0~100 的可能性分，并写一句简短理由。\n"
             "如果掌管者的世界走向点名了某条结局，该结局必须明显高于其余结局；"
             "但除非写明锁定，其他结局仍应保留至少 15% 的翻页可能，不要把话说死。\n"
@@ -2024,6 +2094,28 @@ class CatStockPlugin:
                 tag = str(path.get("tag") or "")
                 if (tag and tag in text) or path["name"] in text:
                     points[path["name"]] = int(points.get(path["name"], 0)) + 8
+
+        # 玩家真金白银买进相关产业：哪怕过几天卖掉，这笔投入仍算对走向的历史推动
+        capital = self._path_capital(market, players, paths)
+        claimed = era.get("capital_claimed")
+        if not isinstance(claimed, dict):
+            claimed = {}
+        for path in paths:
+            pname = str(path.get("name") or "")
+            total = capital.get(pname, 0.0)
+            used = float(claimed.get(pname, 0) or 0)
+            if total <= used:
+                if total < used:
+                    # 超过统计窗口的旧买入已经不计入，已认领额同步下调
+                    claimed[pname] = total
+                continue
+            gain = int((total - used) // CAT_STOCK_ERA_CAPITAL_PER_POINT)
+            if gain <= 0:
+                continue
+            gain = min(gain, CAT_STOCK_ERA_CAPITAL_POINT_MAX)
+            points[pname] = int(points.get(pname, 0)) + gain
+            claimed[pname] = used + gain * CAT_STOCK_ERA_CAPITAL_PER_POINT
+        era["capital_claimed"] = claimed
 
         hint = (actions or {}).get("era_hint") or {}
         name = str(hint.get("path") or "").strip()
@@ -2928,6 +3020,7 @@ class CatStockPlugin:
             # 成本价记录实际成交价，浮动盈亏即真正到手的盈亏
             lots.append({"shares": shares, "price": round((cost + fee) / shares, 4),
                          "ts": time.time()})
+            self._add_era_invest(st, comp["code"], cost)
             self._log_trade(st, comp["code"], "buy", shares, price)
             self._save_stock_players(players)
             new_balance = st["catnip"]
@@ -3118,6 +3211,7 @@ class CatStockPlugin:
                     st["holdings"].setdefault(code, []).append(
                         {"shares": shares,
                          "price": round((cost + fee) / shares, 4), "ts": time.time()})
+                    self._add_era_invest(st, code, cost)
                     self._log_trade(st, code, "buy", shares, price)
                     done.append(f"买入 {code} {comp.get('name', code)} {shares} 股"
                                 f"｜成交价 {self._fmt_price(price)}")
@@ -7267,12 +7361,14 @@ class CatStockPlugin:
             + "\n".join(lines)
             + recent_block + war_block + world_block + state_block + era_block + flow_block
             + self._geography_prompt() +
-            f"\n\n请生成 {CAT_STOCK_NEWS_TICK_MIN}~{CAT_STOCK_NEWS_TICK_MAX} 条本小时的世界新闻，"
+            "\n\n请生成 @@NEWS_MIN@@~@@NEWS_MAX@@ 条本小时的世界新闻，"
             "不要写成十几条，也不要只有一条。"
             "娱乐新闻就是与股市无关的小故事：段子、梗、冷笑话、市井轶事、奇人奇事、"
             "节庆趣闻、街头见闻、坊间传闻都可以，写得轻松好玩即可，"
             "不必提到上市公司，也不必影射涨跌，一律不给 effects。"
-            "娱乐条数要占一半以上（4~8 条里至少 3~5 条），负责让新闻流热闹起来。"
+            "娱乐条数要占一半以上（@@NEWS_MIN@@~@@NEWS_MAX@@ 条里至少 "
+            "@@FUN_MIN@@~@@FUN_MAX@@ 条），负责让新闻流热闹起来。"
+            "标题不超过 16 字，详情一句话不超过 30 字，少写形容词；"
             "只有两三条带 effects：以「平缓」为主，pct 控制在 ±0.05 以内；"
             "「重要」最多 1 条，只有真正改变行业格局、战争灾变、政策转向这类事件才算，"
             "大多数整点可以完全没有重要事件。"
@@ -7318,7 +7414,7 @@ class CatStockPlugin:
             "只输出一个 JSON 对象，不要解释，格式：\n"
             '{"news":[{"title":"新闻标题","detail":"一句话详情","level":"娱乐/平缓/重要",'
             '"effects":[{"code":"股票代码","pct":0.15},{"country":"国家代码","pct":-0.1}]}],'
-            '"world":{"story":"世界发展脉络（150字以内，在原有基础上延续推进，不要重写世界观）",'
+            '"world":{"story":"世界发展脉络（@@STORY_LEN@@字以内，在原有基础上延续推进，不要重写世界观）",'
             '"arc":"当前世界局势主线（一句话）",'
             '"relations":[{"a":"国家代码","b":"国家代码","state":"同盟/敌对/贸易往来/边境摩擦"}]}}\n'
             f"pct 是小数涨跌幅，平缓事件 -{calm_down:.2f} ~ +{calm_up:.2f}，"
@@ -7329,7 +7425,7 @@ class CatStockPlugin:
             "没有明确的全局利好或全局利空时，本小时 effects 的正负数量与总幅度要大致平衡，"
             "利空和利好各占一半左右，不要默认把新闻写成上涨。"
             "world 是可选的：如果本小时故事有推进，就给出更新后的世界发展脉络"
-            "（150字以内，要接着上一版写、不要推翻已有历史，只做本时代内部的小幅推进，"
+            "（@@STORY_LEN@@字以内，要接着上一版写、不要推翻已有历史，只做本时代内部的小幅推进，"
             "不要把几百年乃至几个时代的跨度压进一天）、当前主线（一句话）"
             "和仍然成立的完整国家关系列表（最多 10 条，没有变化可省略）。"
             "\n如果上面的局势设定明确要求某个产业兴起、或局势催生全新行业，可以额外返回 listings"
@@ -7351,7 +7447,8 @@ class CatStockPlugin:
             '"country_actions":[{"a":"国家代码","b":"国家代码或空",'
             '"action":"war/alliance/reform/plague","detail":"一句话"}]}。'
             "era_hint 只由新闻里的随机事件推动（新技术、制度变革、战争、灾疫或灾变），"
-            "资金买卖本身不应产生 era_hint；战争、灾疫、灾变这类事件可以给更高的 points，"
+            "资金买卖本身不要写进 era_hint（系统会单独累计玩家的资金贡献）；"
+            "战争、灾疫、灾变这类事件可以给更高的 points，"
             "但只代表这一小时积累的一小步，不要让一条新闻把整条走向直接写通；"
             "不要把三条走向同时写通，一个时代最终只会走通一条。"
             "country_actions 最多两条；war 必须是地理上相邻或海上可达的国家，"
@@ -7359,24 +7456,35 @@ class CatStockPlugin:
             "reform 只能是本时代内部的调整，不能写成文明阶段或科技体系的整体跃迁。"
             "亡国只在极少数情况下发生，不要每小时都灭国。\n"
         )
+        prompt_template = prompt
         data = None
         attempts = 0
         max_attempts = 4
-        short_note = (
-            "\n重要：上一次输出没有形成合法 JSON。这次只输出一个 JSON 对象，"
-            "前后不要任何解释和代码块标记；news 只写 4~6 条，world 整个省略，"
-            "effects 每条只保留 code/country/pct，字符串内不要出现未转义的换行或双引号，"
-            "确保 JSON 能被直接解析。\n")
+        # 第一次保持原本的体量，之后逐次压缩：条数、字数、tokens、超时都递减
+        plans = [
+            (CAT_STOCK_NEWS_TICK_MIN, CAT_STOCK_NEWS_TICK_MAX, 3, 5, 150, 4000, 120),
+            (4, 6, 2, 4, 120, 3000, 100),
+            (3, 4, 2, 3, 90, 2200, 90),
+            (2, 3, 1, 2, 60, 1600, 80),
+        ]
         while attempts < max_attempts:
+            news_min, news_max, fun_min, fun_max, story_len, tokens, timeout = plans[attempts]
             attempts += 1
+            prompt = (prompt_template
+                      .replace("@@NEWS_MIN@@", str(news_min))
+                      .replace("@@NEWS_MAX@@", str(news_max))
+                      .replace("@@FUN_MIN@@", str(fun_min))
+                      .replace("@@FUN_MAX@@", str(fun_max))
+                      .replace("@@STORY_LEN@@", str(story_len)))
             try:
                 text = self._ai._call_ai(
                     Config.AI_MODEL["chat"],
                     [{"role": "system", "content": "你是奇幻世界《猫猫远征队》if 线的财经新闻主编。"},
                      {"role": "user", "content": prompt}],
                     temperature=0.9,
-                    max_retries=1,
-                    max_tokens=4000,
+                    max_retries=0,
+                    max_tokens=tokens,
+                    timeout=timeout,
                 )
             except Exception as e:
                 _log_ai_news(f"AI 新闻调用失败（第 {attempts}/{max_attempts} 次）：{e}")
@@ -7391,9 +7499,6 @@ class CatStockPlugin:
             else:
                 _log_ai_news(f"AI 新闻 JSON 解析失败（第 {attempts}/{max_attempts} 次），"
                              f"原始输出尾部：{str(text or '')[-160:]}")
-            if short_note not in prompt:
-                # 后续尝试把输出压短：长 JSON 一旦被截断就会解析失败
-                prompt += short_note
         if not data:
             return [], [], None, None, {}
 
@@ -7638,7 +7743,7 @@ class CatStockPlugin:
         if era:
             lines.append(f"纪元 · 第 {int(era.get('index', 0)) + 1} 时代"
                          f"「{era.get('name', '')}」")
-        for item in news[:8]:
+        for item in news[:4]:
             lines.append(f"📰 {item.get('title', '')}")
             if item.get("detail"):
                 lines.append(f"  {item['detail']}")

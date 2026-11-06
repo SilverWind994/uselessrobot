@@ -7368,7 +7368,7 @@ class CatStockPlugin:
             "不必提到上市公司，也不必影射涨跌，一律不给 effects。"
             "娱乐条数要占一半以上（@@NEWS_MIN@@~@@NEWS_MAX@@ 条里至少 "
             "@@FUN_MIN@@~@@FUN_MAX@@ 条），负责让新闻流热闹起来。"
-            "标题不超过 16 字，详情一句话不超过 30 字，少写形容词；"
+            "@@LEN_NOTE@@"
             "只有两三条带 effects：以「平缓」为主，pct 控制在 ±0.05 以内；"
             "「重要」最多 1 条，只有真正改变行业格局、战争灾变、政策转向这类事件才算，"
             "大多数整点可以完全没有重要事件。"
@@ -7462,20 +7462,25 @@ class CatStockPlugin:
         max_attempts = 4
         # 第一次保持原本的体量，之后逐次压缩：条数、字数、tokens、超时都递减
         plans = [
-            (CAT_STOCK_NEWS_TICK_MIN, CAT_STOCK_NEWS_TICK_MAX, 3, 5, 150, 4000, 120),
-            (4, 6, 2, 4, 120, 3000, 100),
-            (3, 4, 2, 3, 90, 2200, 90),
-            (2, 3, 1, 2, 60, 1600, 80),
+            (CAT_STOCK_NEWS_TICK_MIN, CAT_STOCK_NEWS_TICK_MAX, 3, 5, 150, "", 4000, 120),
+            (4, 6, 2, 4, 120,
+             "标题不超过 24 字，详情一句话不超过 60 字，少写形容词；", 3000, 100),
+            (3, 4, 2, 3, 90,
+             "标题不超过 18 字，详情一句话不超过 40 字，少写形容词；", 2200, 90),
+            (2, 3, 1, 2, 60,
+             "标题不超过 14 字，详情一句话不超过 28 字，少写形容词；", 1600, 80),
         ]
         while attempts < max_attempts:
-            news_min, news_max, fun_min, fun_max, story_len, tokens, timeout = plans[attempts]
+            (news_min, news_max, fun_min, fun_max, story_len,
+             len_note, tokens, timeout) = plans[attempts]
             attempts += 1
             prompt = (prompt_template
                       .replace("@@NEWS_MIN@@", str(news_min))
                       .replace("@@NEWS_MAX@@", str(news_max))
                       .replace("@@FUN_MIN@@", str(fun_min))
                       .replace("@@FUN_MAX@@", str(fun_max))
-                      .replace("@@STORY_LEN@@", str(story_len)))
+                      .replace("@@STORY_LEN@@", str(story_len))
+                      .replace("@@LEN_NOTE@@", len_note))
             try:
                 text = self._ai._call_ai(
                     Config.AI_MODEL["chat"],

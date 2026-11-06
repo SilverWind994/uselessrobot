@@ -738,8 +738,13 @@ class AIFunctionsPlugin:
         max_tokens: int = 0,
         tools: List[dict] = None,
         timeout: int = 60,
+        stream: bool = False,
     ) -> dict:
-        """调用 OpenAI 兼容接口，返回 assistant 原始消息（可能带 tool_calls）"""
+        """调用 OpenAI 兼容接口，返回 assistant 原始消息（可能带 tool_calls）
+
+        stream=True 时按 SSE 增量接收，超时只看「相邻数据块间隔」，
+        生成时间较长但只要持续输出就不会断。
+        """
         api_key = Config.SILICONFLOW_API_KEY
         if not api_key or api_key.startswith("sk-") and len(api_key) <= 3:
             raise RuntimeError("API Key 未配置")
@@ -753,7 +758,7 @@ class AIFunctionsPlugin:
         payload = {
             "model": model,
             "messages": messages,
-            "stream": False,
+            "stream": stream,
             "temperature": temperature,
         }
         if max_tokens > 0:
@@ -765,6 +770,37 @@ class AIFunctionsPlugin:
         last_error = None
         for attempt in range(max_retries + 1):
             try:
+                if stream:
+                    resp = requests.post(url, headers=headers, json=payload,
+                                         timeout=timeout, stream=True)
+                    if resp.status_code != 200:
+                        last_error = RuntimeError(f"HTTP {resp.status_code}: {resp.text[:200]}")
+                        resp.close()
+                        continue
+                    chunks = []
+                    try:
+                        for line in resp.iter_lines():
+                            if not line:
+                                continue
+                            text = (line.decode("utf-8", "ignore")
+                                    if isinstance(line, bytes) else line)
+                            if not text.startswith("data:"):
+                                continue
+                            raw_part = text[5:].strip()
+                            if raw_part == "[DONE]":
+                                break
+                            try:
+                                delta = json.loads(raw_part)["choices"][0].get("delta") or {}
+                            except (ValueError, KeyError, IndexError):
+                                continue
+                            piece = delta.get("content")
+                            if piece:
+                                chunks.append(piece)
+                    finally:
+                        resp.close()
+                    if not chunks:
+                        raise RuntimeError("流式返回为空")
+                    return {"role": "assistant", "content": "".join(chunks)}
                 resp = requests.post(url, headers=headers, json=payload, timeout=timeout)
                 if resp.status_code == 200:
                     data = resp.json()
@@ -783,10 +819,11 @@ class AIFunctionsPlugin:
         max_retries: int = 2,
         max_tokens: int = 0,
         timeout: int = 60,
+        stream: bool = False,
     ) -> str:
         """调用模型并取纯文本回复"""
         msg = self._request_chat(model, messages, temperature, max_retries, max_tokens,
-                                 timeout=timeout)
+                                 timeout=timeout, stream=stream)
         return (msg.get("content") or "").strip()
 
     def _call_ai_with_search(

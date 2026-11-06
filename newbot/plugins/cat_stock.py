@@ -5812,11 +5812,13 @@ class CatStockPlugin:
                 # 收盘整点也要补一次，用来发当天的收盘新闻
                 slots.append(cursor)
             cursor += timedelta(hours=1)
+        current_key = current.strftime("%Y-%m-%d %H")
         for slot in slots[-CAT_STOCK_CATCHUP_MAX:]:
+            live = slot.strftime("%Y-%m-%d %H") == current_key
             if slot.hour == CAT_STOCK_CLOSE_HOUR:
-                self._close_tick(slot)
+                self._close_tick(slot, live=live)
             else:
-                self._tick(slot)
+                self._tick(slot, live=live)
             time.sleep(0.5)
 
     # ==================== 整点重跑（数据修复） ====================
@@ -5945,8 +5947,8 @@ class CatStockPlugin:
         threading.Thread(target=self._catch_up, args=(datetime.now(),), kwargs={"force": True},
                          daemon=True).start()
 
-    def _close_tick(self, now: datetime) -> None:
-        """20:00 收盘：盘面不再变动，只发布当天的收盘新闻与盘点"""
+    def _close_tick(self, now: datetime, live: bool = True) -> None:
+        """20:00 收盘：盘面不再变动，只发布当天的收盘新闻与盘点（live=False 时只记账不推送）"""
         key = now.strftime("%Y-%m-%d %H")
         with self._lock:
             market = self._load_market()
@@ -5967,7 +5969,8 @@ class CatStockPlugin:
                 base = float(comp.get("prev_close") or comp.get("price") or 1) or 1
                 moved.append((comp, (float(comp["price"]) / base - 1) * 100))
 
-        self._broadcast(now, market, moved, news, head="收盘快报")
+        if live:
+            self._broadcast(now, market, moved, news, head="收盘快报")
 
     def _close_news(self, market: dict) -> List[dict]:
         """按当天涨跌生成收盘新闻，本身不改变任何价格"""
@@ -5996,7 +5999,8 @@ class CatStockPlugin:
             "detail": "；".join(parts) + "。休市期间可挂单，次日开盘按开盘价成交。",
         }]
 
-    def _tick(self, now: datetime) -> None:
+    def _tick(self, now: datetime, live: bool = True) -> None:
+        """live=False 表示补算停机错过的历史整点：只推进行情，不调用 AI、不推送"""
         key = now.strftime("%Y-%m-%d %H")
         snapshot = self._load_market()
         if snapshot.get("last_tick") == key:
@@ -6009,7 +6013,7 @@ class CatStockPlugin:
         world_tone = _world_tone(world)
         # 开盘第一小时不出新闻，让价格从昨收自然起步；其余整点照常生成
         # AI 生成新闻较慢，先不占用锁，避免玩家交易被阻塞
-        if now.hour == CAT_STOCK_OPEN_HOUR:
+        if not live or now.hour == CAT_STOCK_OPEN_HOUR:
             ai_news, effects, world_update, ai_actions, ai_meta = [], [], None, None, {}
         else:
             ai_news, effects, world_update, ai_actions, ai_meta = self._make_news(
@@ -6217,10 +6221,11 @@ class CatStockPlugin:
                 before = price_before.get(code, comp["price"]) or 1
                 moved.append((comp, (comp["price"] - before) / before * 100))
 
-        self._broadcast(now, market, moved, news_entries)
+        if live:
+            self._broadcast(now, market, moved, news_entries)
         for qq, text in pending_results:
             self._sender.send_text(Target(user_id=qq), text)
-        if economy:
+        if economy and live:
             self._economy_report(now, market, economy)
 
     def _apply_effect(self, companies: dict, eff: dict,
@@ -6718,13 +6723,21 @@ class CatStockPlugin:
                        key=lambda c: c["price"])
         if force:
             return [self._do_delist(market, players, comp, True) for comp in force]
-        if len(companies) <= CAT_STOCK_COMPANY_MIN or random.random() >= CAT_STOCK_DELIST_CHANCE:
+        if len(companies) <= CAT_STOCK_COMPANY_MIN:
             return []
-        eligible = [c for c in companies.values()
-                    if int(c.get("bad_ticks", 0)) >= CAT_STOCK_DELIST_BAD_TICKS]
-        if not eligible:
-            return []
-        return [self._do_delist(market, players, random.choice(eligible), False)]
+        # 进入候选池后每家独立判定：入池当小时 2%，此后每多待一个整点概率 +1%
+        delisted = []
+        for comp in list(companies.values()):
+            ticks = int(comp.get("bad_ticks", 0))
+            if ticks < CAT_STOCK_DELIST_BAD_TICKS:
+                continue
+            chance = min(
+                1.0,
+                CAT_STOCK_DELIST_CHANCE
+                + 0.01 * (ticks - CAT_STOCK_DELIST_BAD_TICKS))
+            if random.random() < chance:
+                delisted.append(self._do_delist(market, players, comp, False))
+        return delisted
 
     def _do_delist(self, market: dict, players: dict, comp: dict, forced: bool) -> dict:
         """摘牌一家企业：按退市比例清算持仓，并把企业回收进候补名单"""
@@ -7095,12 +7108,10 @@ class CatStockPlugin:
         paid = False
         for st in players.values():
             lots = st.get("holdings", {}).pop(code, None)
-            if not lots:
-                continue
-            shares = self._shares_of(lots)
-            if shares > 0:
-                st["catnip"] = int(st.get("catnip", 0)) + shares * payout
+            if lot_shares := (self._shares_of(lots) if lots else 0):
+                st["catnip"] = int(st.get("catnip", 0)) + lot_shares * payout
                 paid = True
+            self._close_shorts_for(st, code, float(payout), "摘牌清算")
         market["companies"].pop(code, None)
         market.setdefault("catalog", []).append({
             "code": comp["code"], "name": comp["name"], "country": comp["country"],
@@ -7490,6 +7501,7 @@ class CatStockPlugin:
                     max_retries=0,
                     max_tokens=tokens,
                     timeout=timeout,
+                    stream=True,
                 )
             except Exception as e:
                 _log_ai_news(f"AI 新闻调用失败（第 {attempts}/{max_attempts} 次）：{e}")

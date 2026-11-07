@@ -31,7 +31,8 @@ SPECIAL_GROUPS = [123456789, 987654321]
 # 猫猫远征队：全服邮件功能的管理员 QQ
 CAT_ADMIN_QQ = 123456789
 
-# B 站开播 / 下播提醒：私聊通知的 QQ 与要盯的直播间号（房间号，不是 UID）
-BILIBILI_LIVE_NOTIFY_QQ = 2544910201
-BILIBILI_LIVE_ROOMS = [123456, 654321]
+# B 站开播 / 下播提醒
+# 订阅（哪些群、哪些人、推送哪些信息）用「直播提醒」指令配置，
+# 存在 assets/bilibili_live_subs.json；这里只配权限和轮询间隔。
+BILIBILI_LIVE_ADMIN_QQ = 2544910201
 BILIBILI_LIVE_POLL_SECONDS = 60

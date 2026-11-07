@@ -1,12 +1,22 @@
 """B 站开播 / 下播提醒。
 
-轮询 config_local.py 里配置的直播间，状态从「未开播」变成「直播中」时私聊通知，反向变化时同样提醒。
-上次状态落在 assets/bilibili_live.json（运行时数据，不入库），重启不会重复播报，也不会漏掉停机期间的变化。
-拉取失败、风控返回码、每次提醒都会写到 assets/bilibili_live.log（同样不入库，超过 1MB 轮转）。
+轮询订阅列表里的直播间，状态从「未开播」变成「直播中」时通知订阅者，反向变化时同样提醒。
+每个直播间可以单独配置接收方（群 / 私聊 QQ）和推送内容（主播、标题、链接、开播时间、下播提醒）。
+
+订阅配置落在 assets/bilibili_live_subs.json（运行时数据，不入库），用指令改，不用重启：
+    直播提醒                        查看当前订阅
+    直播提醒 添加房间 <房间号>        新建订阅（在当前群/私聊里创建，默认发给这里）
+    直播提醒 移除房间 <房间号>        取消整个直播间的订阅
+以上指令整个只有 BILIBILI_LIVE_ADMIN_QQ（默认 2544910201）能用；其他人触发会被静默忽略，
+不会回复、也不会暴露订阅了哪些直播间。
+
+订阅完全以 assets/bilibili_live_subs.json 为准，不再读 config 里的房间号/通知 QQ。
+
+开播状态落在 assets/bilibili_live.json，拉取失败、风控返回码、每次提醒都写到
+assets/bilibili_live.log（超过 1MB 轮转）。
 
 配置项（写进 newbot/config_local.py，该文件已在 .gitignore 中忽略）：
-    BILIBILI_LIVE_NOTIFY_QQ = 2544910201      # 提醒发往的 QQ（私聊）
-    BILIBILI_LIVE_ROOMS = [123456, 654321]    # 要盯的直播间号（房间号，不是 UID）
+    BILIBILI_LIVE_ADMIN_QQ = 2544910201       # 唯一能改订阅的 QQ
     BILIBILI_LIVE_POLL_SECONDS = 60           # 轮询间隔（秒）
 """
 
@@ -24,6 +34,7 @@ from core.message_sender import MessageSender, Target
 
 _BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # newbot/
 _STATE_PATH = os.path.join(_BASE_DIR, "assets", "bilibili_live.json")
+_SUBS_PATH = os.path.join(_BASE_DIR, "assets", "bilibili_live_subs.json")
 _LOG_PATH = os.path.join(_BASE_DIR, "assets", "bilibili_live.log")
 _LOG_MAX_BYTES = 1000 * 1000   # 超过 1MB 轮转成 bilibili_live.log.1
 
@@ -37,15 +48,43 @@ _HEADERS = {
     "Referer": "https://live.bilibili.com/",
 }
 
+# 推送内容开关：默认只在开播时发主播、标题、链接和下播提醒
+DEFAULT_OPTIONS = {
+    "anchor": True,    # 主播昵称
+    "title": True,     # 直播标题
+    "link": True,      # 直播间链接
+    "time": False,     # 开播时间
+    "offline": True,   # 是否也推送下播提醒
+}
+OPTION_LABELS = {
+    "anchor": "主播",
+    "title": "标题",
+    "link": "链接",
+    "time": "开播时间",
+    "offline": "下播提醒",
+}
+
+
+def _read_json(path: str):
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def _write_json(path: str, data: dict) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, path)
+
 
 def _load_state() -> dict:
-    if not os.path.exists(_STATE_PATH):
-        return {"rooms": {}}
-    try:
-        with open(_STATE_PATH, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, ValueError):
-        return {"rooms": {}}
+    data = _read_json(_STATE_PATH)
     if not isinstance(data, dict):
         return {"rooms": {}}
     data.setdefault("rooms", {})
@@ -53,9 +92,50 @@ def _load_state() -> dict:
 
 
 def _save_state(state: dict) -> None:
-    os.makedirs(os.path.dirname(_STATE_PATH), exist_ok=True)
-    with open(_STATE_PATH, "w", encoding="utf-8") as f:
-        json.dump(state, f, ensure_ascii=False, indent=2)
+    _write_json(_STATE_PATH, state)
+
+
+def _load_subs() -> Optional[dict]:
+    """返回 None 表示文件不存在（需要从旧配置迁移）"""
+    data = _read_json(_SUBS_PATH)
+    if not isinstance(data, dict):
+        return None
+    rooms = data.get("rooms")
+    if not isinstance(rooms, dict):
+        rooms = {}
+    data["rooms"] = {str(k): _normalize_room(v) for k, v in rooms.items()}
+    return data
+
+
+def _save_subs(subs: dict) -> None:
+    _write_json(_SUBS_PATH, subs)
+
+
+def _normalize_room(entry) -> dict:
+    """补全单个直播间的订阅结构，容忍手改 JSON 时的缺字段"""
+    entry = entry if isinstance(entry, dict) else {}
+    groups, users = [], []
+    for value in entry.get("groups") or []:
+        try:
+            groups.append(int(value))
+        except (TypeError, ValueError):
+            continue
+    for value in entry.get("users") or []:
+        try:
+            users.append(int(value))
+        except (TypeError, ValueError):
+            continue
+    options = dict(DEFAULT_OPTIONS)
+    raw_options = entry.get("options")
+    if isinstance(raw_options, dict):
+        for key in DEFAULT_OPTIONS:
+            if key in raw_options:
+                options[key] = bool(raw_options[key])
+    return {
+        "groups": sorted(set(groups)),
+        "users": sorted(set(users)),
+        "options": options,
+    }
 
 
 def _log(text: str) -> None:
@@ -79,19 +159,36 @@ class BilibiliLivePlugin:
         self._sender = sender
         self._lock = threading.Lock()
         self._state = _load_state()
-        self._rooms = [
-            str(room).strip()
-            for room in (getattr(Config, "BILIBILI_LIVE_ROOMS", None) or [])
-            if str(room).strip().isdigit()
-        ]
+        subs = _load_subs()
+        if subs is None:
+            subs = {"rooms": {}}
+            _save_subs(subs)
+        self._subs = subs
+        self._rooms = self._room_ids()
 
     def register(self, router: CommandRouter) -> None:
         router.register(
             ["喵直播", "直播提醒", "bili"],
             self.cmd_live,
-            description="[隐藏]B 站开播/下播提醒：查看订阅与测试通知"
+            description="[隐藏]B 站开播/下播提醒：按直播间配置接收群、接收人与推送内容"
         )
         self._start_scheduler()
+
+    # ==================== 订阅数据 ====================
+
+    def _room_ids(self) -> list:
+        with self._lock:
+            rooms = list((self._subs.get("rooms") or {}).keys())
+        return sorted(room for room in rooms if str(room).isdigit())
+
+    def _get_room(self, room_id: str) -> Optional[dict]:
+        with self._lock:
+            entry = (self._subs.get("rooms") or {}).get(room_id)
+            return entry
+
+    def _save(self) -> None:
+        with self._lock:
+            _save_subs(self._subs)
 
     # ==================== 定时轮询 ====================
 
@@ -126,6 +223,7 @@ class BilibiliLivePlugin:
             "title": str(info.get("title") or ""),
             "uid": int(info.get("uid", 0) or 0),
             "room_id": str(info.get("room_id") or room_id),
+            "live_time": int(info.get("live_time", 0) or 0),
         }
 
     def _anchor_name(self, room_id: str) -> str:
@@ -139,6 +237,7 @@ class BilibiliLivePlugin:
             return ""
 
     def _check_once(self) -> None:
+        self._rooms = self._room_ids()
         if not self._rooms:
             return
         with self._lock:
@@ -162,15 +261,11 @@ class BilibiliLivePlugin:
                 _log(f"room {room_id} live {was} -> {now}")
             if now and was is False:
                 name = name or self._anchor_name(room_id)
-                self._notify(
-                    f"【B站开播】{name or ('直播间 ' + room_id)}\n"
-                    f"{info['title'] or '（无标题）'}\n"
-                    f"https://live.bilibili.com/{info['room_id']}")
+                self._notify_room(room_id, "start", info, name)
             elif was is True and not now:
-                self._notify(
-                    f"【B站下播】{name or ('直播间 ' + room_id)}\n"
-                    f"上次的直播已结束\n"
-                    f"https://live.bilibili.com/{info['room_id']}")
+                info["title"] = info["title"] or old.get("title") or ""
+                info["live_time"] = old.get("live_time") or 0
+                self._notify_room(room_id, "end", info, name)
             with self._lock:
                 entry = self._state.setdefault("rooms", {}).setdefault(room_id, {})
                 entry.update(info)
@@ -181,44 +276,169 @@ class BilibiliLivePlugin:
             with self._lock:
                 _save_state(self._state)
 
-    def _notify(self, text: str) -> None:
-        qq = int(getattr(Config, "BILIBILI_LIVE_NOTIFY_QQ", 2544910201) or 2544910201)
+    # ==================== 消息组装与发送 ====================
+
+    def _format(self, kind: str, info: dict, name: str, options: dict) -> str:
+        room_id = str(info.get("room_id") or "")
+        title_name = name or f"直播间 {room_id}"
+        link = f"https://live.bilibili.com/{room_id}"
+        if kind == "start":
+            lines = ["【B站开播】" + (title_name if options.get("anchor") else "有主播开播了")]
+            if options.get("title") and info.get("title"):
+                lines.append(f"标题：{info['title']}")
+            if options.get("time"):
+                start_at = info.get("live_time") or 0
+                stamp = time.strftime("%m-%d %H:%M", time.localtime(start_at)) if start_at else "刚刚"
+                lines.append(f"开播时间：{stamp}")
+            if options.get("link"):
+                lines.append(link)
+        else:
+            lines = ["【B站下播】" + (title_name if options.get("anchor") else "一场直播结束了")]
+            lines.append("本次直播已结束")
+            if options.get("link"):
+                lines.append(link)
+        return "\n".join(line for line in lines if line.strip())
+
+    def _notify_room(self, room_id: str, kind: str, info: dict, name: str) -> tuple:
+        """把消息发给该直播间配置的群和私聊，返回 (群数, 人数)"""
+        room = self._get_room(room_id)
+        if not room:
+            return (0, 0)
+        options = room.get("options") or dict(DEFAULT_OPTIONS)
+        if kind == "end" and not options.get("offline", True):
+            return (0, 0)
+        text = self._format(kind, info, name, options)
+        groups = list(room.get("groups") or [])
+        users = list(room.get("users") or [])
+        if not groups and not users:
+            _log(f"room {room_id} no subscriber, skip {kind}")
+            return (0, 0)
+        for group_id in groups:
+            self._send(Target(user_id=0, group_id=group_id, is_group=True), text, f"群 {group_id}")
+        for user_id in users:
+            self._send(Target(user_id=user_id), text, f"私聊 {user_id}")
+        return (len(groups), len(users))
+
+    def _send(self, target: Target, text: str, label: str) -> None:
         head = text.splitlines()[0]
-        resp = self._sender.send_text(Target(user_id=qq), text)
+        resp = self._sender.send_text(target, text)
         if resp is None:
-            _log(f"notify {qq} failed: no response | {head}")
+            _log(f"notify {label} failed: no response | {head}")
             return
         body = (resp.text or "").replace("\n", " ")[:160]
-        _log(f"notify {qq} [{resp.status_code}] {head} | {body}")
+        _log(f"notify {label} [{resp.status_code}] {head} | {body}")
 
     # ==================== QQ 指令 ====================
 
     def cmd_live(self, ctx: CommandContext) -> None:
-        args = ctx.get_args().strip().lower()
-        if args in ("测试", "test"):
-            self._notify("【B站提醒测试】这条能收到，就说明私聊通道没问题喵")
-            qq = int(getattr(Config, "BILIBILI_LIVE_NOTIFY_QQ", 2544910201) or 2544910201)
-            self._sender.reply(ctx, f"已尝试私聊 {qq}，收到就说明通道正常")
+        # 只有指定管理员能用：其他人连订阅列表都看不到，直接静默忽略
+        if not self._is_owner(ctx):
+            _log(f"ignore command from {ctx.user_id} in {ctx.message_type or 'unknown'}")
             return
-        self._show_list(ctx)
+
+        parts = ctx.get_args().split()
+        action = parts[0] if parts else ""
+        rest = parts[1:]
+
+        if action in ("", "列表", "查看", "订阅"):
+            self._show_list(ctx)
+            return
+        if action in ("帮助", "help", "?"):
+            self._show_help(ctx)
+            return
+
+        if action in ("添加房间", "新增房间"):
+            self._add_room(ctx, rest)
+        elif action in ("移除房间", "删除房间", "取消房间"):
+            self._remove_room(ctx, rest)
+        else:
+            self._show_help(ctx)
+
+    def _show_help(self, ctx: CommandContext) -> None:
+        self._sender.reply(ctx, "\n".join([
+            "开播提醒用法：",
+            "直播提醒 —— 查看订阅",
+            "直播提醒 添加房间 <房间号>",
+            "直播提醒 移除房间 <房间号>",
+            "改订阅只有指定管理员可用；新建订阅默认发给当前会话。",
+        ]))
 
     def _show_list(self, ctx: CommandContext) -> None:
-        qq = int(getattr(Config, "BILIBILI_LIVE_NOTIFY_QQ", 2544910201) or 2544910201)
-        if not self._rooms:
+        rooms = self._room_ids()
+        if not rooms:
             self._sender.reply(
-                ctx, "还没配置直播间喵。在 newbot/config_local.py 里填 "
-                     "BILIBILI_LIVE_ROOMS = [房间号, ...]，重启后开播下播会私聊通知 "
-                     f"{qq}")
+                ctx, "还没订阅任何直播间喵。管理员可以发「直播提醒 添加房间 房间号」"
+                     "在当前会话新建一个订阅。")
             return
         with self._lock:
-            rooms = dict(self._state.get("rooms") or {})
-        lines = [f"已配置 {len(self._rooms)} 个直播间（提醒发往 {qq}）："]
-        for room_id in self._rooms:
-            entry = rooms.get(room_id) or {}
-            name = entry.get("name") or f"直播间 {room_id}"
-            state = "直播中" if entry.get("live") else "未开播"
-            title = entry.get("title") or ""
-            lines.append(f"· {name}（{room_id}）｜{state}"
-                         + (f"｜{title}" if title else ""))
-        lines.append("改订阅请编辑 newbot/config_local.py 的 BILIBILI_LIVE_ROOMS")
+            state = dict(self._state.get("rooms") or {})
+        lines = [f"开播提醒订阅（{len(rooms)} 个直播间）："]
+        for room_id in rooms:
+            entry = self._get_room(room_id) or {}
+            info = state.get(room_id) or {}
+            name = info.get("name") or ""
+            status = "直播中" if info.get("live") else "未开播"
+            groups = entry.get("groups") or []
+            users = entry.get("users") or []
+            options = entry.get("options") or dict(DEFAULT_OPTIONS)
+            label = f"{name}（{room_id}）" if name else f"直播间 {room_id}"
+            lines.append(f"· {label}｜{status}")
+            lines.append("  群：" + ("、".join(str(g) for g in groups) if groups else "无"))
+            lines.append("  人：" + ("、".join(str(u) for u in users) if users else "无"))
+            on = [OPTION_LABELS[k] for k in DEFAULT_OPTIONS if options.get(k)]
+            off = [OPTION_LABELS[k] for k in DEFAULT_OPTIONS if not options.get(k)]
+            lines.append("  推送：" + "/".join(on) + (f"（关：{'/'.join(off)}）" if off else ""))
+        lines.append("改订阅用「直播提醒 帮助」，或直接说想看哪个直播间。")
         self._sender.reply(ctx, "\n".join(lines))
+
+    # ---------- 各种修改 ----------
+
+    def _add_room(self, ctx: CommandContext, rest: list) -> None:
+        room_id = self._pick_room_arg(ctx, rest)
+        if not room_id:
+            return
+        if self._get_room(room_id):
+            self._sender.reply(ctx, f"直播间 {room_id} 已经在订阅里了，"
+                                    "要换接收方可以先移除再重新添加。")
+            return
+        init = {"options": dict(DEFAULT_OPTIONS)}
+        if ctx.is_group:
+            init["groups"] = [int(ctx.group_id)]
+        else:
+            init["users"] = [int(ctx.user_id)]
+        with self._lock:
+            self._subs.setdefault("rooms", {})[room_id] = _normalize_room(init)
+        self._save()
+        where = f"本群 {ctx.group_id}" if ctx.is_group else f"你的私聊 {ctx.user_id}"
+        self._sender.reply(ctx, f"已订阅直播间 {room_id}，开播会先发到{where}。")
+
+    def _remove_room(self, ctx: CommandContext, rest: list) -> None:
+        room_id = self._pick_room_arg(ctx, rest, must_exist=True)
+        if not room_id:
+            return
+        with self._lock:
+            (self._subs.get("rooms") or {}).pop(room_id, None)
+        self._save()
+        self._sender.reply(ctx, f"已取消直播间 {room_id} 的全部提醒。")
+
+    # ---------- 解析小工具 ----------
+
+    @staticmethod
+    def _is_owner(ctx: CommandContext) -> bool:
+        """只有 BILIBILI_LIVE_ADMIN_QQ 能改订阅"""
+        try:
+            owner = int(getattr(Config, "BILIBILI_LIVE_ADMIN_QQ", 0) or 0)
+            return owner != 0 and int(ctx.user_id or 0) == owner
+        except (TypeError, ValueError):
+            return False
+
+    def _pick_room_arg(self, ctx: CommandContext, rest: list, must_exist: bool = False):
+        if not rest or not str(rest[0]).isdigit():
+            self._sender.reply(ctx, "要带上直播间号（数字，不是 UID）喵，例如："
+                                    "直播提醒 添加房间 123456")
+            return None
+        room_id = str(rest[0])
+        if must_exist and not self._get_room(room_id):
+            self._sender.reply(ctx, f"直播间 {room_id} 还没订阅，先用「添加房间」建一个。")
+            return None
+        return room_id

@@ -23,6 +23,7 @@ import json
 import os
 import threading
 import time
+from datetime import datetime
 from typing import Optional
 
 import requests
@@ -151,6 +152,22 @@ def _log(text: str) -> None:
         pass
 
 
+def _parse_live_time(value) -> int:
+    """live_time 可能是时间戳、日期字符串，未开播时是 '0000-00-00 00:00:00'"""
+    if isinstance(value, (int, float)):
+        return int(value)
+    text = str(value or "").strip()
+    if not text:
+        return 0
+    if text.isdigit():
+        return int(text)
+    try:
+        stamp = datetime.strptime(text, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return 0
+    return int(stamp.timestamp()) if stamp.year > 1970 else 0
+
+
 class BilibiliLivePlugin:
     """B 站开播 / 下播提醒"""
 
@@ -222,7 +239,7 @@ class BilibiliLivePlugin:
             "title": str(info.get("title") or ""),
             "uid": int(info.get("uid", 0) or 0),
             "room_id": str(info.get("room_id") or room_id),
-            "live_time": int(info.get("live_time", 0) or 0),
+            "live_time": _parse_live_time(info.get("live_time")),
         }
 
     def _anchor_name(self, room_id: str) -> str:
@@ -250,7 +267,11 @@ class BilibiliLivePlugin:
         changed = False
         for room_id in self._rooms:
             old = rooms.get(room_id) or {}
-            info = self._fetch_room(room_id)
+            try:
+                info = self._fetch_room(room_id)
+            except Exception as e:   # 单个房间异常不影响其他房间
+                _log(f"fetch {room_id} error: {e}")
+                continue
             if not info:
                 continue
             was = old.get("live")

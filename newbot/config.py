@@ -81,9 +81,9 @@ class Config:
 
     # ==================== B 站开播提醒 ====================
     # 真实值请写进 config_local.py（该文件不入库），模板见 config.example.py
-    # 订阅（哪些群、哪些人、推送哪些信息）用「直播提醒」指令改，保存在
+    # 订阅（哪些群、哪些人）用「直播提醒」指令改，保存在
     # assets/bilibili_live_subs.json；下面两项只管权限和轮询。
-    BILIBILI_LIVE_ADMIN_QQ = 2544910201    # 唯一能改订阅的 QQ
+    BILIBILI_LIVE_ADMIN_QQ = 2544910201    # 唯一能用「直播提醒」指令的 QQ
     BILIBILI_LIVE_POLL_SECONDS = 60        # 轮询间隔（秒）
 
     # ==================== 锦标赛 ====================

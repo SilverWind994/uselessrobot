@@ -777,9 +777,12 @@ class CatExpeditionPlugin:
                 if key == "default":
                     continue
                 cats = pool.get("cats", [])
+                hidden = [c["name"] for c in cats if c["rarity"] == "hidden"]
                 legend = [c["name"] for c in cats if c["rarity"] == "legend"]
                 desc = pool.get("desc", "")
                 line = f"  · {pool.get('name', key)}（{len(cats)}张）"
+                if hidden:
+                    line += f"  隐秘：{'、'.join(hidden)}"
                 if legend:
                     line += f"  传说：{'、'.join(legend)}"
                 lines.append(line)
@@ -1988,7 +1991,7 @@ class CatExpeditionPlugin:
                            weather: Optional[str],
                            terrain: Optional[str]) -> float:
         """适性特性加成比例：战斗类型/天气/地形每匹配一项，
-        按稀有度加 2%/3%/4%/5%，3星×2、5星×3。
+        按稀有度加 2%/3%/4%/5%/8%（隐秘），3星×2、5星×3。
         猫的适性（trait_affinity）以后在 cat_pool.json 分配，留空时无加成。"""
         affinity = (pool_cat or {}).get("trait_affinity") or {}
         conditions = (

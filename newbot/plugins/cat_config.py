@@ -72,7 +72,7 @@ class CatConfig:
 
     # 猫猫基础战力（按稀有度，1星基准）
     CAT_BASE_POWER_BY_RARITY = {"normal": 20, "rare": 30, "epic": 40, "legend": 50,
-                                "hidden": 60}
+                                "hidden": 80}
 
     # 星级战力倍率：2星两倍兵力、3星转职、4星三倍兵力、5星转职
     CAT_STAR_POWER_MULT = {1: 1, 2: 2, 3: 2, 4: 3, 5: 3}
@@ -80,7 +80,7 @@ class CatConfig:
     # 特性适性加成：战斗类型/天气/地形每匹配一项的基础加成（按稀有度）
     # 3星×2、5星×3；仅出阵队员生效
     CAT_TRAIT_BONUS_BY_RARITY = {"normal": 0.02, "rare": 0.03, "epic": 0.04,
-                                 "legend": 0.05, "hidden": 0.06}
+                                 "legend": 0.05, "hidden": 0.08}
     CAT_TRAIT_MULT_BY_STAR = {1: 1, 2: 1, 3: 2, 4: 2, 5: 3}
 
     # 战况枚举（特性适性的两个维度，猫的适性以后在 cat_pool.json 分配）

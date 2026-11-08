@@ -23,7 +23,8 @@ class CatConfig:
 
     # ==================== 抽卡 ====================
     CAT_RARITY_RATES = {"normal": 0.75, "rare": 0.20, "epic": 0.04, "legend": 0.01}
-    CAT_RARITY_NAMES = {"normal": "普通", "rare": "稀有", "epic": "史诗", "legend": "传说"}
+    CAT_RARITY_NAMES = {"normal": "普通", "rare": "稀有", "epic": "史诗",
+                        "legend": "传说", "hidden": "隐秘"}
 
     # 抽卡幸运：单抽有 1% 概率直接变成十连（仍只按 1 抽扣费）
     CAT_SUMMON_LUCKY_CHANCE = 0.01
@@ -37,8 +38,11 @@ class CatConfig:
     CAT_SIGNIN_LOW_FISH = 2500     # 签到暴击提升的鱼干阈值（低于此值且非全服战力第一时生效）
     CAT_SIGNIN_BONUS_INTERVAL = 10  # 每多少天触发累计奖励
     CAT_SIGNIN_BONUS_CAP = 2000    # 累计奖励上限
+    CAT_SIGNIN_HIDDEN_MILESTONES = (50, 70, 90, 110, 130)  # 累计签到送隐秘喵喵的天数
+    CAT_SIGNIN_HIDDEN_CAT_ID = "mah01"                    # 隐秘喵喵「优衣喵(H)」
     CAT_WELCOME_FISH = 1000        # 新玩家初始
-    CAT_DUP_REFUND_BY_RARITY = {"normal": 20, "rare": 50, "epic": 100, "legend": 500}
+    CAT_DUP_REFUND_BY_RARITY = {"normal": 20, "rare": 50, "epic": 100,
+                                "legend": 500, "hidden": 1000}
 
     # 猫眼石（抽卡积累，100换一只指定猫。仅由抽卡动作产生）
     CAT_EYE_STONE_PER_SUMMON = 1
@@ -67,14 +71,16 @@ class CatConfig:
     CAT_MAX_STAR = 5              # 星级上限
 
     # 猫猫基础战力（按稀有度，1星基准）
-    CAT_BASE_POWER_BY_RARITY = {"normal": 20, "rare": 30, "epic": 40, "legend": 50}
+    CAT_BASE_POWER_BY_RARITY = {"normal": 20, "rare": 30, "epic": 40, "legend": 50,
+                                "hidden": 60}
 
     # 星级战力倍率：2星两倍兵力、3星转职、4星三倍兵力、5星转职
     CAT_STAR_POWER_MULT = {1: 1, 2: 2, 3: 2, 4: 3, 5: 3}
 
     # 特性适性加成：战斗类型/天气/地形每匹配一项的基础加成（按稀有度）
     # 3星×2、5星×3；仅出阵队员生效
-    CAT_TRAIT_BONUS_BY_RARITY = {"normal": 0.02, "rare": 0.03, "epic": 0.04, "legend": 0.05}
+    CAT_TRAIT_BONUS_BY_RARITY = {"normal": 0.02, "rare": 0.03, "epic": 0.04,
+                                 "legend": 0.05, "hidden": 0.06}
     CAT_TRAIT_MULT_BY_STAR = {1: 1, 2: 1, 3: 2, 4: 2, 5: 3}
 
     # 战况枚举（特性适性的两个维度，猫的适性以后在 cat_pool.json 分配）

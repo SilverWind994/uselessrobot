@@ -497,6 +497,7 @@ code { background: #120f0d; border: 1px solid var(--line); border-radius: 6px; p
 .summon-row.r-rare { border-color: #4d9fd6; }
 .summon-row.r-epic { border-color: #a06bd6; }
 .summon-row.r-legend { border-color: var(--gold); }
+.summon-row.r-hidden { border-color: var(--danger); }
 .summon-icon { width: 52px; height: 52px; object-fit: contain; border-radius: 8px; }
 .summon-info { flex: 1; }
 .summon-name { font-size: 15px; font-weight: 600; }
@@ -588,11 +589,12 @@ code { background: #120f0d; border: 1px solid var(--line); border-radius: 6px; p
 .cat-sub { font-size: 11px; color: var(--text-dim); }
 .cat-unknown { font-size: 30px; font-weight: 700; color: #4a4239; height: 64px; line-height: 64px; }
 
-/* 稀有度描边：普通/稀有/史诗/传说 */
+/* 稀有度描边：普通/稀有/史诗/传说/隐秘 */
 .cat-cell.r-normal { border-color: #3a3128; }
 .cat-cell.r-rare { border-color: #4d9fd6; }
 .cat-cell.r-epic { border-color: #a06bd6; }
 .cat-cell.r-legend { border-color: var(--gold); }
+.cat-cell.r-hidden { border-color: var(--danger); }
 
 /* ---------- 绘图 ---------- */
 
@@ -623,6 +625,7 @@ code { background: #120f0d; border: 1px solid var(--line); border-radius: 6px; p
 .detail-name.r-rare { color: var(--blue); }
 .detail-name.r-epic { color: #a06bd6; }
 .detail-name.r-legend { color: var(--gold); }
+.detail-name.r-hidden { color: var(--danger); }
 .detail-star { font-size: 12px; color: var(--text-dim); margin-left: 6px; }
 .detail-line { font-size: 12px; color: var(--text-dim); margin-top: 2px; }
 .detail-flag { height: 26px; border-radius: 3px; }

@@ -3276,7 +3276,7 @@ function poolNameOf(key) {
 }
 
 function rarityName(r) {
-  return { normal: '普通', rare: '稀有', epic: '史诗', legend: '传说' }[r] || r;
+  return { normal: '普通', rare: '稀有', epic: '史诗', legend: '传说', hidden: '隐秘' }[r] || r;
 }
 
 // ---------- 每周挑战 · 快艇骰子 ----------

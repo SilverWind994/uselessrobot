@@ -14,13 +14,14 @@ from core.command_router import CommandRouter, CommandContext
 from core.web_auth import check_password_text, hash_password, make_salt
 
 # 稀有度：排序、编号字母、文字颜色（图鉴用）
-CAT_RARITY_ORDER = ["normal", "rare", "epic", "legend"]
-CAT_RARITY_LETTER = {"normal": "N", "rare": "R", "epic": "E", "legend": "L"}
+CAT_RARITY_ORDER = ["normal", "rare", "epic", "legend", "hidden"]
+CAT_RARITY_LETTER = {"normal": "N", "rare": "R", "epic": "E", "legend": "L", "hidden": "H"}
 CAT_RARITY_RGB = {
     "normal": (90, 90, 90),
     "rare": (40, 110, 200),
     "epic": (150, 70, 200),
     "legend": (210, 140, 20),
+    "hidden": (200, 35, 50),
 }
 CAT_TEXT_RGB = (60, 45, 35)
 CAT_STAR_RGB = (225, 170, 30)
@@ -210,6 +211,9 @@ class CatExpeditionPlugin:
                         if legacy in owned:
                             del owned[legacy]
                             changed = True
+            # 补发累计签到应得的隐秘喵喵（老玩家已经超过里程碑的也补上）
+            if self._sync_signin_hidden(pl):
+                changed = True
             team = pl.get("deploy_team")
             if isinstance(team, list):
                 for i, cid in enumerate(team):
@@ -246,6 +250,7 @@ class CatExpeditionPlugin:
                 "collection": [],
                 "web_pwd_salt": "",   # 网页登录密码的盐与哈希（仅存哈希，不可回显）
                 "web_pwd_hash": "",
+                "signin_hidden_granted": 0,  # 累计签到已发放的隐秘喵喵只数
                 "insurance": None     # 喵保险保单：{tier, remaining}，None 表示没有
             }
             self._save_players(players)
@@ -397,6 +402,7 @@ class CatExpeditionPlugin:
             player["signin_streak"] = 1
         player["last_signin"] = today_str
         player["signin_total"] = player.get("signin_total", 0) + 1
+        hidden_granted = self._sync_signin_hidden(player)
 
         # 随机鱼干 80-120，概率暴击
         base = random.randint(CatConfig.CAT_SIGNIN_MIN, CatConfig.CAT_SIGNIN_MAX)
@@ -437,8 +443,28 @@ class CatExpeditionPlugin:
         lines = [f"签到成功！{crit_icon}+{base} 鱼干 🐟"]
         if bonus > 0:
             lines.append(f"🎉 累计签到 {player['signin_total']} 天！额外奖励 +{bonus} 鱼干")
+        for milestone, result in hidden_granted:
+            lines.append(f"🎉 累计签到 {milestone} 天！获得隐秘喵喵「{result['name']}」")
+            if result.get("job_up"):
+                lines.append(f"  ✨ 转职为 {result['job']}！")
         lines.append(f"当前余额：{player['fish']} 鱼干 | 连续签到：{player['signin_streak']}天")
         return lines
+
+    def _sync_signin_hidden(self, player: dict) -> list:
+        """按累计签到里程碑补齐隐秘喵喵，返回 [(里程碑, 发放结果)]"""
+        cat = self._find_pool_cat(CatConfig.CAT_SIGNIN_HIDDEN_CAT_ID)
+        if cat is None:
+            return []
+        milestones = CatConfig.CAT_SIGNIN_HIDDEN_MILESTONES
+        total = int(player.get("signin_total", 0))
+        expected = sum(1 for day in milestones if total >= day)
+        granted = int(player.get("signin_hidden_granted", 0))
+        if expected <= granted:
+            return []
+        results = [(day, self._grant_cat(player, cat))
+                   for day in milestones[granted:expected]]
+        player["signin_hidden_granted"] = expected
+        return results
 
     # ==================== 抽喵 ====================
 
@@ -770,7 +796,7 @@ class CatExpeditionPlugin:
         if desc:
             lines.append(desc)
         lines.append(f"共 {len(cats)} 张喵喵：")
-        order = ["legend", "epic", "rare", "normal"]
+        order = ["hidden", "legend", "epic", "rare", "normal"]
         for r in order:
             rc = [c for c in cats if c["rarity"] == r]
             if not rc:
@@ -889,6 +915,10 @@ class CatExpeditionPlugin:
                 f"可兑换的传说喵喵：{'、'.join(legends)}\n"
                 f"其他喵喵可用「喵卡池」查看。"
             )
+            return
+
+        if target.get("rarity") == "hidden":
+            self._sender.reply(ctx, "隐秘喵喵只能用累计签到获得，不能兑换喵")
             return
 
         # 扣猫眼石，直接grant给玩家（不走概率，固定这只）
@@ -1831,17 +1861,23 @@ class CatExpeditionPlugin:
         return path
 
     @staticmethod
+    def _img_key(name: str) -> str:
+        """图片名归一化：去掉空格与不可见字符（部分素材文件名带零宽字符）"""
+        return "".join(ch for ch in name
+                       if ch not in " \t\u200b\u200c\u200d\u200e\u200f\ufeff")
+
+    @staticmethod
     def _find_img(folder: str, name: str) -> Optional[str]:
-        """精确匹配文件名，容忍多余空格；找不到返回 None"""
+        """精确匹配文件名，容忍多余空格与不可见字符；找不到返回 None"""
         if not name or not os.path.isdir(folder):
             return None
         exact = os.path.join(folder, f"{name}.png")
         if os.path.exists(exact):
             return exact
-        compact = name.replace(" ", "")
+        compact = CatExpeditionPlugin._img_key(name)
         for fn in os.listdir(folder):
             if fn.lower().endswith(".png") and \
-                    os.path.splitext(fn)[0].replace(" ", "") == compact:
+                    CatExpeditionPlugin._img_key(os.path.splitext(fn)[0]) == compact:
                 return os.path.join(folder, fn)
         return None
 

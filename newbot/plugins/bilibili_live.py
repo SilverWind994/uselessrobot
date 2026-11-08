@@ -277,10 +277,11 @@ class BilibiliLivePlugin:
             was = old.get("live")
             now = info["live"]
             name = old.get("name") or ""
+            if not name:
+                name = self._anchor_name(room_id)   # 昵称缺失才取，取到后一直复用
             if was is not None and was != now:
                 _log(f"room {room_id} live {was} -> {now}")
             if now and was is False:
-                name = name or self._anchor_name(room_id)
                 self._notify_room(room_id, "start", info, name)
             elif was is True and not now:
                 info["title"] = info["title"] or old.get("title") or ""
@@ -334,14 +335,32 @@ class BilibiliLivePlugin:
             _log(f"room {room_id} no subscriber, skip {kind}")
             return (0, 0)
         for group_id in groups:
-            self._send(Target(user_id=0, group_id=group_id, is_group=True), text, f"群 {group_id}")
+            at_all = kind == "start" and self._can_at_all(group_id)
+            self._send(Target(user_id=0, group_id=group_id, is_group=True), text,
+                       f"群 {group_id}", at_all=at_all)
         for user_id in users:
             self._send(Target(user_id=user_id), text, f"私聊 {user_id}")
         return (len(groups), len(users))
 
-    def _send(self, target: Target, text: str, label: str) -> None:
+    def _can_at_all(self, group_id: int) -> bool:
+        """机器人是群主/管理员才能 @全体，查不到就当没权限"""
+        bot_qq = int(getattr(Config, "BOT_QQ", 0) or 0)
+        if not bot_qq:
+            return False
+        try:
+            resp = self._sender.get_group_member_info(group_id, bot_qq)
+            if resp is None:
+                return False
+            data = resp.json() or {}
+        except Exception as e:
+            _log(f"check role in {group_id} failed: {e}")
+            return False
+        role = str((data.get("data") or {}).get("role") or "")
+        return role in ("owner", "admin")
+
+    def _send(self, target: Target, text: str, label: str, at_all: bool = False) -> None:
         head = text.splitlines()[0]
-        resp = self._sender.send_text(target, text)
+        resp = self._sender.send_text(target, text, at_all=at_all)
         if resp is None:
             _log(f"notify {label} failed: no response | {head}")
             return

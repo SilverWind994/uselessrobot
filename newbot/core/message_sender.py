@@ -54,9 +54,15 @@ class MessageSender:
         segments.append({"type": "text", "data": {"text": text if at_user_id is None else f" {text}"}})
         return segments
 
-    def send_text(self, target: Target, text: str, at_user_id: Optional[int] = None) -> Optional[requests.Response]:
+    def send_text(self, target: Target, text: str, at_user_id: Optional[int] = None,
+                  at_all: bool = False) -> Optional[requests.Response]:
         if not text:
             return None
+        if at_all and target.is_group and at_user_id is None:
+            return self._send_segments(target, [
+                {"type": "at", "data": {"qq": "all"}},
+                {"type": "text", "data": {"text": f" {text}"}},
+            ])
         if at_user_id is not None:
             return self._send_segments(target, self._build_text_segment(text, at_user_id))
         return self._send_to_target(target, {"type": "text", "data": {"text": text}})
@@ -102,3 +108,8 @@ class MessageSender:
 
     def get_group_members(self, group_id: int) -> Optional[requests.Response]:
         return self._post("get_group_member_list", {"group_id": group_id, "no_cache": True})
+
+    def get_group_member_info(self, group_id: int, user_id: int) -> Optional[requests.Response]:
+        return self._post("get_group_member_info", {
+            "group_id": group_id, "user_id": user_id, "no_cache": True
+        })

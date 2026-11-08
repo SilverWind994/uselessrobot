@@ -183,12 +183,19 @@ class CatExpeditionPlugin:
     # ==================== 数据加载 ====================
 
     def _load_pool(self):
-        """加载卡池与国家表。返回 (默认全量卡池, 全部卡池dict)"""
+        """加载卡池与国家表。返回 (默认全量卡池, 全部卡池dict)。
+        主题卡池只存 cat_ids，这里按全量卡池展开成完整猫对象，避免重复维护。"""
         data = _load_json(CatConfig.CAT_POOL_PATH)
         self._countries = data.get("countries", {})
         pools = data.get("pools", {})
         default = pools.get("default", {})
-        return default.get("cats", []), pools
+        cats = default.get("cats", [])
+        by_id = {c["id"]: c for c in cats}
+        for pool in pools.values():
+            ids = pool.pop("cat_ids", None)
+            if ids is not None:
+                pool["cats"] = [by_id[cid] for cid in ids if cid in by_id]
+        return cats, pools
 
     def _migrate_players(self) -> None:
         """启动时迁移玩家存档：把历史 id 补零为两位数。

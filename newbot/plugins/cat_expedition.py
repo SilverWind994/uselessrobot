@@ -1,7 +1,8 @@
-import os
 import json
+import os
 import random
 import re
+import time
 from datetime import date, timedelta
 from typing import List, Optional
 
@@ -25,6 +26,8 @@ CAT_RARITY_RGB = {
 }
 CAT_TEXT_RGB = (60, 45, 35)
 CAT_STAR_RGB = (225, 170, 30)
+# 鱼干 / 猫眼石 全服流水（一行一笔，便于事后对账）
+CAT_CURRENCY_LOG_PATH = os.path.join(CatConfig.CAT_EXPEDITION_DIR, "currency_log.jsonl")
 
 # 娱乐指令「喵充值」的汇率文案（充值需找到文中对应的柜员）
 RECHARGE_RATES_TEXT = (
@@ -269,22 +272,51 @@ class CatExpeditionPlugin:
         players[str(qq)] = player
         self._save_players(players)
 
-    def add_fish(self, qq: int, amount: int) -> None:
+    def _log_currency(self, qq, field: str, delta: int,
+                      balance: int, reason: str = "") -> None:
+        """把一次鱼干/猫眼石变动追加到全服流水；写盘失败不影响业务"""
+        if not delta:
+            return
+        try:
+            os.makedirs(os.path.dirname(CAT_CURRENCY_LOG_PATH), exist_ok=True)
+            entry = {
+                "ts": int(time.time()),
+                "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "qq": int(qq),
+                "field": field,
+                "delta": int(delta),
+                "balance": int(balance),
+                "reason": str(reason),
+            }
+            with open(CAT_CURRENCY_LOG_PATH, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        except (OSError, TypeError, ValueError):
+            pass
+
+    def _change_currency(self, qq, player: dict, field: str, delta: int,
+                         reason: str = "") -> int:
+        """就地改动玩家鱼干/猫眼石并记流水，返回新余额"""
+        player[field] = int(player.get(field, 0)) + int(delta)
+        self._log_currency(qq, field, delta, player[field], reason)
+        return player[field]
+
+    def add_fish(self, qq: int, amount: int, reason: str = "") -> None:
         """为玩家增加鱼干（供其它插件发放奖励；玩家不存在时自动建档）"""
         player = self._get_player(qq)
-        player["fish"] += amount
+        self._change_currency(qq, player, "fish", amount, reason or "其他插件发放")
         self._update_player(qq, player)
 
     def get_eye_stones(self, qq: int) -> int:
         """查询玩家猫眼石余额（负数表示欠债）"""
         return self._get_player(qq).get("eye_stones", 0)
 
-    def add_eye_stones(self, qq: int, amount: int) -> int:
+    def add_eye_stones(self, qq: int, amount: int, reason: str = "") -> int:
         """增减玩家猫眼石（amount 可为负，负余额即欠债）；返回新余额"""
         player = self._get_player(qq)
-        player["eye_stones"] = player.get("eye_stones", 0) + amount
+        balance = self._change_currency(
+            qq, player, "eye_stones", amount, reason or "其他插件发放")
         self._update_player(qq, player)
-        return player["eye_stones"]
+        return balance
 
     # ==================== 注册命令 ====================
 
@@ -389,11 +421,11 @@ class CatExpeditionPlugin:
 
     def cmd_signin(self, ctx: CommandContext) -> None:
         player = self._get_player(ctx.user_id)
-        lines = self._signin_core(player)
+        lines = self._signin_core(player, ctx.user_id)
         self._update_player(ctx.user_id, player)
         self._sender.reply(ctx, "\n".join(lines))
 
-    def _signin_core(self, player: dict) -> list:
+    def _signin_core(self, player: dict, qq=None) -> list:
         """签到核心逻辑（就地修改 player，不落盘），返回消息行列表"""
         today = date.today()
         today_str = today.isoformat()
@@ -431,7 +463,10 @@ class CatExpeditionPlugin:
         elif r < super_chance + crit_chance:
             base *= 2
             crit_type = "crit"
-        player["fish"] += base
+        if qq is None:
+            player["fish"] += base
+        else:
+            self._change_currency(qq, player, "fish", base, "喵签到")
 
         # 累计签到奖励：每满10天一次，天数*10，上限2000（按累计签到天数，与连续无关）
         bonus = 0
@@ -439,7 +474,10 @@ class CatExpeditionPlugin:
         if player["signin_total"] % interval == 0:
             raw_bonus = player["signin_total"] * 10
             bonus = min(raw_bonus, CatConfig.CAT_SIGNIN_BONUS_CAP)
-            player["fish"] += bonus
+            if qq is None:
+                player["fish"] += bonus
+            else:
+                self._change_currency(qq, player, "fish", bonus, "累计签到奖励")
 
         crit_icon = ""
         if crit_type == "super":
@@ -520,7 +558,8 @@ class CatExpeditionPlugin:
             )
             return
 
-        results, cost, lucky, insurance = self._summon_batch_core(player, count, pool_key)
+        results, cost, lucky, insurance = self._summon_batch_core(
+            player, count, pool_key, ctx.user_id)
         self._update_player(ctx.user_id, player)
 
         # 拼消息
@@ -555,7 +594,7 @@ class CatExpeditionPlugin:
         return lines
 
     def _summon_batch_core(self, player: dict, count: int,
-                           pool_key: Optional[str] = None):
+                           pool_key: Optional[str] = None, qq=None):
         """执行一次抽卡扣费与结算（就地修改 player），
         返回 (results, total_cost, lucky, insurance_event)。调用方需自行保证鱼干足够。"""
         total_cost = count * CatConfig.CAT_SUMMON_COST
@@ -563,12 +602,17 @@ class CatExpeditionPlugin:
         lucky = (count == 1
                  and random.random() < CatConfig.CAT_SUMMON_LUCKY_CHANCE)
         draw_count = CatConfig.CAT_SUMMON_LUCKY_COUNT if lucky else count
-        results = self._do_summon(player, draw_count, pool_key)
-        player["fish"] -= total_cost
+        results = self._do_summon(player, draw_count, pool_key, qq)
         # 每次抽卡获得猫眼石（幸运十连只按实际付费抽数计）
-        player["eye_stones"] = player.get("eye_stones", 0) + count * CatConfig.CAT_EYE_STONE_PER_SUMMON
+        gained_eye = count * CatConfig.CAT_EYE_STONE_PER_SUMMON
+        if qq is None:
+            player["fish"] -= total_cost
+            player["eye_stones"] = player.get("eye_stones", 0) + gained_eye
+        else:
+            self._change_currency(qq, player, "fish", -total_cost, "抽喵消耗")
+            self._change_currency(qq, player, "eye_stones", gained_eye, "抽喵附赠猫眼石")
         player["summon_count"] = player.get("summon_count", 0) + count
-        insurance = self._insurance_consume(player, count, results, lucky)
+        insurance = self._insurance_consume(player, count, results, lucky, qq)
         return results, total_cost, lucky, insurance
 
     # ==================== 喵保险 ====================
@@ -611,7 +655,7 @@ class CatExpeditionPlugin:
             return arg
         return aliases.get(arg)
 
-    def _insurance_buy(self, player: dict, tier: str) -> Optional[str]:
+    def _insurance_buy(self, player: dict, tier: str, qq=None) -> Optional[str]:
         """购买保单（就地修改 player），成功返回 None，失败返回错误信息"""
         if player.get("insurance"):
             return "你已经有一张生效中的保单喵，先抽完这 10 次再来吧"
@@ -624,28 +668,43 @@ class CatExpeditionPlugin:
         if eye and player.get("eye_stones", 0) < eye:
             return (f"猫眼石不够喵！{cfg['name']}需要 {eye} 猫眼石，"
                     f"当前只有 {player.get('eye_stones', 0)} 个")
-        player["fish"] = player.get("fish", 0) - fish
-        player["eye_stones"] = player.get("eye_stones", 0) - eye
+        if fish or eye:
+            if qq is None:
+                player["fish"] = player.get("fish", 0) - fish
+                player["eye_stones"] = player.get("eye_stones", 0) - eye
+            else:
+                name = cfg["name"]
+                if fish:
+                    self._change_currency(qq, player, "fish", -fish, f"购买保险·{name}")
+                if eye:
+                    self._change_currency(qq, player, "eye_stones", -eye, f"购买保险·{name}")
         player["insurance"] = {"tier": tier,
                                "remaining": CatConfig.CAT_INSURANCE_WINDOW}
         return None
 
-    def _insurance_payout(self, player: dict, tier: str) -> dict:
+    def _insurance_payout(self, player: dict, tier: str, qq=None) -> dict:
         """按档位发放赔付（就地修改 player），返回展示用数据"""
         kind = CatConfig.CAT_INSURANCE_TIERS.get(tier, {}).get("payout")
         if kind == "ten_pull":
-            results = self._do_summon(player, 10, None)
+            results = self._do_summon(player, 10, None, qq)
             return {"kind": kind, "text": "全卡池十连一次", "results": results}
         if kind == "fish_eye":
             fish = CatConfig.CAT_INSURANCE_PAYOUT_FISH
             eye = CatConfig.CAT_INSURANCE_PAYOUT_EYE
-            player["fish"] = player.get("fish", 0) + fish
-            player["eye_stones"] = player.get("eye_stones", 0) + eye
+            if qq is None:
+                player["fish"] = player.get("fish", 0) + fish
+                player["eye_stones"] = player.get("eye_stones", 0) + eye
+            else:
+                self._change_currency(qq, player, "fish", fish, "保险赔付")
+                self._change_currency(qq, player, "eye_stones", eye, "保险赔付")
             return {"kind": kind, "fish": fish, "eye": eye,
                     "text": f"{fish} 鱼干 + {eye} 猫眼石"}
         if kind == "eye":
             eye = CatConfig.CAT_INSURANCE_PAYOUT_EYE_ONLY
-            player["eye_stones"] = player.get("eye_stones", 0) + eye
+            if qq is None:
+                player["eye_stones"] = player.get("eye_stones", 0) + eye
+            else:
+                self._change_currency(qq, player, "eye_stones", eye, "保险赔付")
             return {"kind": kind, "eye": eye, "text": f"{eye} 猫眼石"}
         if kind == "legends":
             # 普通（default）卡池没有传说，从其余卡池中随机抽一个，赔付其全部传说
@@ -653,14 +712,14 @@ class CatExpeditionPlugin:
             pool_key = random.choice(pool_keys)
             pool = self._pools[pool_key]
             cats = [c for c in pool.get("cats", []) if c.get("rarity") == "legend"]
-            results = [self._grant_cat(player, c) for c in cats]
+            results = [self._grant_cat(player, c, qq) for c in cats]
             pool_name = pool.get("name", pool_key)
             return {"kind": kind, "pool": pool_name,
                     "text": f"{pool_name} 全部传说各一只", "results": results}
         return {"kind": "none", "text": ""}
 
     def _insurance_consume(self, player: dict, count: int,
-                           results: List[dict], lucky: bool) -> dict:
+                           results: List[dict], lucky: bool, qq=None) -> dict:
         """结算本次抽卡对保单的影响（就地修改 player），返回展示用事件"""
         policy = player.get("insurance")
         if not policy:
@@ -686,7 +745,7 @@ class CatExpeditionPlugin:
                         "order": window - policy["remaining"],
                         "rarity": r["rarity"], "name": r["name"]}
             if policy["remaining"] <= 0:
-                payout = self._insurance_payout(player, tier)
+                payout = self._insurance_payout(player, tier, qq)
                 player["insurance"] = None
                 return {**base, "status": "paid", "remaining": 0, "used": window,
                         "payout": payout}
@@ -753,7 +812,7 @@ class CatExpeditionPlugin:
             self._sender.reply(ctx, f"没找到保险档位「{args}」喵。\n\n"
                                     f"{self._insurance_help(player)}")
             return
-        err = self._insurance_buy(player, tier)
+        err = self._insurance_buy(player, tier, ctx.user_id)
         if err:
             self._sender.reply(ctx, err)
             return
@@ -817,7 +876,8 @@ class CatExpeditionPlugin:
                 lines.append(f"  · {c['name']}")
         self._sender.reply(ctx, "\n".join(lines))
 
-    def _do_summon(self, player: dict, count: int, pool_key: Optional[str] = None) -> List[dict]:
+    def _do_summon(self, player: dict, count: int,
+                   pool_key: Optional[str] = None, qq=None) -> List[dict]:
         """核心抽卡逻辑，返回每只的抽卡结果。
         pool_key=None 表示全部卡池（全量池抽取，即「全」）；
         指定 pool_key 时，稀有度 rare 及以上的卡只从该卡池中抽取，
@@ -842,11 +902,11 @@ class CatExpeditionPlugin:
             if not candidates:
                 candidates = default_by_rarity.get("normal", [])
             cat = random.choice(candidates)
-            results.append(self._grant_cat(player, cat))
+            results.append(self._grant_cat(player, cat, qq))
 
         return results
 
-    def _grant_cat(self, player: dict, cat_pool: dict) -> dict:
+    def _grant_cat(self, player: dict, cat_pool: dict, qq=None) -> dict:
         """把一只喵喵给玩家，处理重复、升星、返还、自动转职"""
         job_path = cat_pool.get("job_path", [])
 
@@ -879,7 +939,11 @@ class CatExpeditionPlugin:
         # 已满星：返还鱼干
         if old_star >= CatConfig.CAT_MAX_STAR:
             refund = CatConfig.CAT_DUP_REFUND_BY_RARITY.get(cat_pool["rarity"], 50)
-            player["fish"] += refund
+            if qq is None:
+                player["fish"] += refund
+            else:
+                self._change_currency(qq, player, "fish", refund,
+                                      f"满星重复返还·{cat_pool['name']}")
             return {**owned, "name": cat_pool["name"], "rarity": cat_pool["rarity"],
                     "job": old_job,
                     "is_dup": True, "refunded": True, "refund_amt": refund,
@@ -932,8 +996,10 @@ class CatExpeditionPlugin:
             return
 
         # 扣猫眼石，直接grant给玩家（不走概率，固定这只）
-        player["eye_stones"] -= CatConfig.CAT_EYE_STONE_COST
-        result = self._grant_cat(player, target)
+        self._change_currency(ctx.user_id, player, "eye_stones",
+                              -CatConfig.CAT_EYE_STONE_COST,
+                              f"图鉴兑换·{target['name']}")
+        result = self._grant_cat(player, target, ctx.user_id)
         self._update_player(ctx.user_id, player)
 
         rname = CatConfig.CAT_RARITY_NAMES[target["rarity"]]
@@ -1169,7 +1235,7 @@ class CatExpeditionPlugin:
 
         # —— 1. 签到 ——
         lines.append("—— 签到 ——")
-        lines.extend(self._signin_core(player))
+        lines.extend(self._signin_core(player, ctx.user_id))
         self._update_player(ctx.user_id, player)
 
         # —— 2. 抽卡：全卡池单抽循环，直到鱼干不足（满星返还会回血，故逐次循环）——
@@ -1185,7 +1251,8 @@ class CatExpeditionPlugin:
         insurance_notes = []
         MAX_SWEEP_DRAWS = 500   # 安全上限，防止极端返还导致长时间循环
         while player["fish"] >= cost and total_draws < MAX_SWEEP_DRAWS:
-            results, spent, lucky, insurance = self._summon_batch_core(player, 1, None)
+            results, spent, lucky, insurance = self._summon_batch_core(
+                player, 1, None, ctx.user_id)
             total_draws += 1
             total_got += len(results)
             total_spent += spent
@@ -1402,8 +1469,8 @@ class CatExpeditionPlugin:
             p = self._peek_player(int(qq))
             if p is None:
                 continue
-            p["fish"] += stage_cfg["reward_fish"]
-            p["eye_stones"] = p.get("eye_stones", 0) + stage_cfg["reward_eye"]
+            self._change_currency(int(qq), p, "fish", stage_cfg["reward_fish"], "远征通关奖励")
+            self._change_currency(int(qq), p, "eye_stones", stage_cfg["reward_eye"], "远征通关奖励")
             self._update_player(int(qq), p)
         lines.append(f"通关奖励（全员 {len(participants)} 人）：🐟{stage_cfg['reward_fish']} 💎{stage_cfg['reward_eye']}")
 
@@ -1421,8 +1488,10 @@ class CatExpeditionPlugin:
             for i, (qq, dmg) in enumerate(sorted_players[:3], 1):
                 p = self._peek_player(int(qq))
                 if p:
-                    p["fish"] += stage_cfg[f"top{i}_fish"]
-                    p["eye_stones"] = p.get("eye_stones", 0) + stage_cfg[f"top{i}_eye"]
+                    self._change_currency(int(qq), p, "fish",
+                                          stage_cfg[f"top{i}_fish"], f"远征第{i}名")
+                    self._change_currency(int(qq), p, "eye_stones",
+                                          stage_cfg[f"top{i}_eye"], f"远征第{i}名")
                     self._update_player(int(qq), p)
                 name = names.get(qq, qq)
                 lines.append(f"  第{i}名 {name}：🐟{stage_cfg[f'top{i}_fish']} 💎{stage_cfg[f'top{i}_eye']}")
@@ -1433,8 +1502,10 @@ class CatExpeditionPlugin:
             last_qq = last_hit[-1]["qq"]
             p = self._peek_player(int(last_qq))
             if p:
-                p["fish"] += stage_cfg["last_hit_fish"]
-                p["eye_stones"] = p.get("eye_stones", 0) + stage_cfg["last_hit_eye"]
+                self._change_currency(int(last_qq), p, "fish",
+                                      stage_cfg["last_hit_fish"], "远征最后一击")
+                self._change_currency(int(last_qq), p, "eye_stones",
+                                      stage_cfg["last_hit_eye"], "远征最后一击")
                 self._update_player(int(last_qq), p)
             lines.append(f"  最后一击 {last_hit[-1]['name']}：🐟{stage_cfg['last_hit_fish']} 💎{stage_cfg['last_hit_eye']}")
 
@@ -1582,9 +1653,13 @@ class CatExpeditionPlugin:
 
         me[field] = balance - amount
         target[field] = target.get(field, 0) + amount
+        who = target.get("nick") or str(target_qq)
+        self._log_currency(ctx.user_id, field, -amount, me[field],
+                           f"赠送{name}给 {who}")
+        self._log_currency(target_qq, field, amount, target[field],
+                           f"收到 {ctx.user_id} 赠送的{name}")
         self._save_players(players)
 
-        who = target.get("nick") or str(target_qq)
         self._sender.reply(
             ctx,
             f"已赠送给 {who} {amount} {name} 🎁\n"
@@ -1630,7 +1705,8 @@ class CatExpeditionPlugin:
 
         count = 0
         for qq, player in players.items():
-            player[field] = player.get(field, 0) + amount
+            self._change_currency(qq, player, field, amount,
+                                  f"全服邮件·{note}" if note else "全服邮件")
             count += 1
         self._save_players(players)
 

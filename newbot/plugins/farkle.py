@@ -1879,7 +1879,7 @@ class FarklePlugin:
         if self._cat is None:
             return
         try:
-            self._cat.add_fish(qq, amount)
+            self._cat.add_fish(qq, amount, "快艇骰子周榜奖励")
         except Exception:
             pass
 

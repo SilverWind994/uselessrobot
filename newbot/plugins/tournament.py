@@ -673,11 +673,11 @@ class TournamentPlugin:
             if rf > 0:
                 got.append(f"{rf} 鱼干")
                 if self._cat is not None:
-                    self._cat.add_fish(pid, rf)
+                    self._cat.add_fish(pid, rf, "锦标赛奖励")
             if rs > 0:
                 got.append(f"{rs} 猫眼石")
                 if self._cat is not None:
-                    self._cat.add_eye_stones(pid, rs)
+                    self._cat.add_eye_stones(pid, rs, "锦标赛奖励")
             reward_text = "、".join(got) if got else "无"
             lines.append(f"{tier} {name}：{reward_text}")
         if fish == 0 and stone == 0:

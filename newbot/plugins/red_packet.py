@@ -97,9 +97,9 @@ class RedPacketPlugin:
         if kind == "catnip":
             self._stock.catnip_transfer_in(sender, amount)
         elif kind == "fish":
-            self._cat.add_fish(sender, amount)
+            self._cat.add_fish(sender, amount, "红包过期退回")
         else:
-            self._cat.add_eye_stones(sender, amount)
+            self._cat.add_eye_stones(sender, amount, "红包过期退回")
 
     # ==================== 命令入口 ====================
 
@@ -191,7 +191,7 @@ class RedPacketPlugin:
                     self._sender.send_text(
                         target, f"{name}不够啦！你现在有 {balance} {name}，红包不能发成负债喵")
                     return
-                player[kind] = balance - total
+                self._cat._change_currency(qq, player, kind, -total, "发红包")
                 self._cat._update_player(qq, player)
 
             pid = self._new_id(packets)
@@ -256,9 +256,9 @@ class RedPacketPlugin:
             self._sender.send_text(
                 target, f"🧧 抢到 {amount} 猫薄荷！当前共 {balance} 猫薄荷")
         elif kind == "fish":
-            self._cat.add_fish(qq, amount)
+            self._cat.add_fish(qq, amount, "抢红包")
         else:
-            self._cat.add_eye_stones(qq, amount)
+            self._cat.add_eye_stones(qq, amount, "抢红包")
         if kind != "catnip":
             left_count = pkt["count"] - len(pkt["claims"])
             left_amount = self._remaining(pkt)

@@ -898,8 +898,7 @@ class CatStockPlugin:
                         continue
                     player = self._cat._get_player(qq)
                     if player:
-                        player["fish"] = int(player.get("fish", 0)) + fish_gain
-                        self._cat._update_player(qq, player)
+                        self._cat.add_fish(qq, fish_gain, "股市资产迁移")
             self._save_stock_players(players)
             # 新股市从基准价重新开盘
             for comp in companies.values():
@@ -5188,8 +5187,7 @@ class CatStockPlugin:
                 f"猫眼石不足喵：你有 {player.get('eye_stones', 0)}，需要 {stone_amount}"
             )
             return
-        player["eye_stones"] = int(player.get("eye_stones", 0)) - stone_amount
-        self._cat._update_player(qq, player)
+        stone_left = self._cat.add_eye_stones(qq, -stone_amount, "股市充值·兑换猫薄荷")
 
         gain = stone_amount * CAT_STOCK_STONE_TO_CATNIP
         with self._lock:
@@ -5204,7 +5202,7 @@ class CatStockPlugin:
         self._sender.send_text(
             target,
             f"充值成功：-{stone_amount} 猫眼石，+{gain} 猫薄荷\n"
-            f"当前猫薄荷 {catnip}｜剩余猫眼石 {player['eye_stones']}"
+            f"当前猫薄荷 {catnip}｜剩余猫眼石 {stone_left}"
         )
 
     def _withdraw(self, target: Target, qq: int, rest: List[str]) -> None:
@@ -5241,7 +5239,7 @@ class CatStockPlugin:
             self._save_stock_players(players)
             left = st["catnip"]
 
-        self._cat.add_eye_stones(qq, stone_amount)
+        self._cat.add_eye_stones(qq, stone_amount, "股市提现·猫薄荷换猫眼石")
         self._sender.send_text(
             target,
             f"提现成功：-{need} 猫薄荷，+{stone_amount} 猫眼石\n剩余猫薄荷 {left}"

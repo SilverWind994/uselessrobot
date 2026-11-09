@@ -346,14 +346,14 @@ def _finish_tournament_locked(t: dict) -> None:
             got.append(f"{rf} 鱼干")
             if plugin is not None:
                 try:
-                    plugin.add_fish(p["qq"], rf)
+                    plugin.add_fish(p["qq"], rf, "锦标赛奖励")
                 except Exception:
                     pass
         if rs > 0:
             got.append(f"{rs} 猫眼石")
             if plugin is not None:
                 try:
-                    plugin.add_eye_stones(p["qq"], rs)
+                    plugin.add_eye_stones(p["qq"], rs, "锦标赛奖励")
                 except Exception:
                     pass
         lines.append(f"{tier} {p['name']}：{'、'.join(got) if got else '无'}")

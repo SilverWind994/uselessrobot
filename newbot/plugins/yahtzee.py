@@ -633,7 +633,7 @@ class YahtzeePlugin:
                 continue
             if self._cat is not None:
                 try:
-                    self._cat.add_fish(int(qq), reward)
+                    self._cat.add_fish(int(qq), reward, "快艇骰子周榜奖励")
                 except Exception:
                     pass
         settled.append(prev)

@@ -757,6 +757,9 @@ let yzSelected = new Set();
 let yzLobbyTimer = null;
 let yzRoomTimer = null;
 let yzToastTimer = null;
+// 操作在途时递增，用来丢弃比操作更早发出的轮询响应，避免画面先跳新状态又闪回旧状态
+let yzBarrier = 0;
+let yzBusy = false;
 
 function yzMsg(text, ok) {
   yzToast.textContent = text || '';
@@ -860,19 +863,25 @@ async function cancelYzRoom() {
 }
 
 async function yzAct(action, extra) {
-  if (!yzCode) return;
+  if (!yzCode || yzBusy) return;
+  yzBusy = true;
+  yzBarrier++;
   const body = Object.assign({ code: yzCode, action: action }, extra || {});
-  const { status, data } = await api('/api/yahtzee/action', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  if (status === 200 && data.ok) {
-    if (!data.room) { backToYzLobby(); yzMsg('对局已取消喵'); return; }
-    yzSig = yzSignature(data.room);
-    renderYzRoom(data.room);
-  } else {
-    yzMsg(data.msg || '操作失败喵');
+  try {
+    const { status, data } = await api('/api/yahtzee/action', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (status === 200 && data.ok) {
+      if (!data.room) { backToYzLobby(); yzMsg('对局已取消喵'); return; }
+      yzSig = yzSignature(data.room);
+      renderYzRoom(data.room);
+    } else {
+      yzMsg(data.msg || '操作失败喵');
+    }
+  } finally {
+    yzBusy = false;
   }
 }
 
@@ -892,6 +901,8 @@ async function enterYzRoom(code) {
   yzSig = null;
   yzDiceSig = null;
   yzSelected = new Set();
+  yzBarrier++;
+  yzBusy = false;
   yzLobby.classList.add('hidden');
   yzRoom.classList.remove('hidden');
   showChat('yz');
@@ -904,8 +915,10 @@ async function enterYzRoom(code) {
 async function pollYzRoom() {
   const code = yzCode;
   if (!code) return;
+  const barrier = yzBarrier;
   const { status, data } = await api('/api/yahtzee/state?code=' + encodeURIComponent(code));
   if (code !== yzCode) return;   // 已离开或换了房间，丢弃旧响应
+  if (barrier !== yzBarrier) return;   // 请求发出后有操作完成，这份状态已过期
   if (status === 401) { clearInterval(yzRoomTimer); yzPanel.classList.add('hidden'); showLogin(); return; }
   if (status === 404) { yzMsg('房间已结束喵'); backToYzLobby(); return; }
   if (status !== 200 || !data.ok) return;

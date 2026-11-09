@@ -3313,14 +3313,7 @@ class CatStockPlugin:
         with self._lock:
             players = self._load_stock_players()
             st = self._stock_player(qq, players)
-            existing = self._shares_of(st.get("holdings", {}).get(comp["code"], []))
-            shorted = sum(int(s.get("shares", 0)) for s in st.get("shorts") or []
-                          if s.get("code") == comp["code"])
-            limit_msg = self._holding_limit_error(st, comp["code"], existing + shorted + shares)
-            if limit_msg:
-                self._save_stock_players(players)
-                self._sender.send_text(target, limit_msg)
-                return
+            # 空头不占用股本，做空数量不受「重点持股两家」的上限约束
             catnip = int(st.get("catnip", 0))
             if catnip < total:
                 self._save_stock_players(players)

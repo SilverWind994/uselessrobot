@@ -108,6 +108,18 @@ def _entry_avg(info: dict) -> float:
     return (sum(scores) / len(scores)) if scores else 0.0
 
 
+def _claim_week_payout(week: str) -> bool:
+    """跨进程防重复发奖：抢到该周的独占锁文件才允许结算"""
+    try:
+        os.makedirs(YAHTZEE_DIR, exist_ok=True)
+        fd = os.open(os.path.join(YAHTZEE_DIR, f"settled_{week}.lock"),
+                     os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.close(fd)
+        return True
+    except FileExistsError:
+        return False
+
+
 def _rank_rewards(keys: list, rewards: list) -> list:
     """按已排好序的分数分配名次与奖励：同分并列、共同领该名次的最高档奖励（1,1,3…）"""
     out = []
@@ -616,13 +628,15 @@ class YahtzeePlugin:
         return weekly
 
     def _settle_week(self, weekly: dict) -> None:
-        """按上一周前 3 局平均分排名发放鱼干奖励（满 3 局才算数，同分并列领同一档）"""
+        """按上一周前 3 局平均分排名发放鱼干奖励（满 3 局才算数；同分并列时占用的几档奖励合并平分）"""
         prev = weekly.get("week")
         scores = weekly.get("scores") or {}
         if not prev or not scores:
             return
         settled = weekly.setdefault("settled", [])
         if prev in settled:
+            return
+        if not _claim_week_payout(prev):
             return
         entries = sorted(scores.items(), key=lambda kv: _entry_avg(kv[1]), reverse=True)
         full = [kv for kv in entries

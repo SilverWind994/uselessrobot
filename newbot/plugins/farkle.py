@@ -851,13 +851,27 @@ def _dumb_week_ensure(add_fish=None) -> dict:
     return weekly
 
 
+def _claim_week_payout(week: str) -> bool:
+    """跨进程防重复发奖：抢到该周的独占锁文件才允许结算"""
+    try:
+        os.makedirs(FARKLE_DIR, exist_ok=True)
+        fd = os.open(os.path.join(FARKLE_DIR, f"settled_{week}.lock"),
+                     os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.close(fd)
+        return True
+    except FileExistsError:
+        return False
+
+
 def _dumb_week_settle(weekly: dict, add_fish=None) -> None:
-    """按上一周胜率排名发放鱼干奖励（满 10 局才算数，同分并列领同一档；同一周只结算一次）"""
+    """按上一周胜率排名发放鱼干奖励（满 10 局才算数；同分并列时占用的几档奖励合并平分；同一周只结算一次）"""
     prev = weekly.get("week")
     if not prev:
         return
     settled = weekly.setdefault("settled", [])
     if prev in settled:
+        return
+    if not _claim_week_payout(prev):
         return
     rows = _bot_week_rows(weekly)
     tiers = _rank_rewards(rows, BOT_WEEKLY_REWARDS)
@@ -1879,7 +1893,7 @@ class FarklePlugin:
         if self._cat is None:
             return
         try:
-            self._cat.add_fish(qq, amount, "快艇骰子周榜奖励")
+            self._cat.add_fish(qq, amount, "Farkle 周榜奖励")
         except Exception:
             pass
 

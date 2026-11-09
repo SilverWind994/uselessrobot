@@ -521,7 +521,7 @@ class Room:
 def _add_fish(qq: int, amount: int) -> None:
     """发放鱼干奖励（猫猫系统不可用时静默跳过）"""
     try:
-        _cat().add_fish(qq, amount, "快艇骰子奖励")
+        _cat().add_fish(qq, amount, "Farkle 奖励")
     except Exception:
         pass
 

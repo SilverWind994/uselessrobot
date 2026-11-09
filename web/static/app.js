@@ -3854,13 +3854,18 @@ function renderStock(data) {
     `充值 1 猫眼石 → ${r.stone_to_catnip} 猫薄荷，提现 ${r.catnip_to_stone} 猫薄荷 → 1 猫眼石；`
     + `当前猫薄荷约可提现 ${stockMoney(p.catnip_to_stone_est)} 猫眼石`;
 
+  const profit = Number(p.profit || 0);
+  const dayPnl = Number(p.day_pnl || 0);
   stockWalletEl.innerHTML = [
     ['猫薄荷', stockMoney(p.catnip)],
     ['猫眼石', stockMoney(p.stone)],
     ['总资产', stockMoney(Math.round(p.total_assets || 0))],
     ['持仓市值', stockMoney(Math.round(p.total_value || 0))],
-  ].map(([label, val]) => `
-    <div class="stat"><div class="stat-num">${esc(val)}</div><div class="stat-label">${label}</div></div>`).join('');
+    [`总收益（${Number(p.profit_pct || 0) >= 0 ? '+' : ''}${Number(p.profit_pct || 0).toFixed(1)}%）`,
+     `${profit >= 0 ? '+' : ''}${stockMoney(profit)}`, profit],
+    ['今日盈亏', `${dayPnl >= 0 ? '+' : ''}${stockMoney(dayPnl)}`, dayPnl],
+  ].map(([label, val, tone]) => `
+    <div class="stat"><div class="stat-num${typeof tone === 'number' ? (tone >= 0 ? ' stock-up' : ' stock-down') : ''}">${esc(val)}</div><div class="stat-label">${esc(label)}</div></div>`).join('');
 
   const era = data.era || {};
   if (stockEraNameEl) {
@@ -3960,7 +3965,9 @@ function renderStock(data) {
   renderStockWars(data);
 
   stockHoldSubEl.textContent =
-    `总资产 ${stockMoney(Math.round(p.total_assets || 0))}`;
+    `总资产 ${stockMoney(Math.round(p.total_assets || 0))}｜累计收益 `
+    + `${Number(p.profit || 0) >= 0 ? '+' : ''}${stockMoney(Math.round(p.profit || 0))}｜今日 `
+    + `${Number(p.day_pnl || 0) >= 0 ? '+' : ''}${stockMoney(Math.round(p.day_pnl || 0))}`;
 
   if (!holdings.length) {
     stockHoldingsEl.innerHTML = '<p class="room-empty">当前空仓喵，先去大盘挑一只吧</p>';
@@ -4014,7 +4021,7 @@ function renderStock(data) {
   if (shorts.length) {
     const shortRows = shorts.map((s) => `
       <tr>
-        <td>${esc(s.code)}</td>
+        <td><button class="stock-detail-btn" type="button" data-code="${esc(s.code)}" title="查看K线与买卖记录">${esc(s.code)}</button></td>
         <td>${esc(s.name)}</td>
         <td>${s.shares}</td>
         <td>${Number(s.entry).toFixed(1)}</td>
@@ -4235,10 +4242,41 @@ function stockTrendChart(history) {
 
 function openStockDetail(code) {
   const c = ((stockLastData || {}).companies || []).find((x) => x.code === code);
-  if (!c) return;
-  const holders = c.all_holders || c.holders || [];
   const mine = (((stockLastData || {}).portfolio || {}).holdings || [])
     .find((h) => h.code === code);
+  const myShort = (((stockLastData || {}).portfolio || {}).shorts || [])
+    .find((s) => s.code === code);
+  if (!c) {
+    // 已退市但仍挂在持仓里的股票：没有行情，只展示持仓与买卖记录
+    stockModalEl.dataset.bondCountry = '';
+    stockModalTitleEl.textContent = code;
+    stockModalBodyEl.innerHTML = `
+      <div class="stock-detail-meta"><span>已退市</span><span>行情不可用</span></div>
+      ${mine ? `<div class="stock-detail-holders">
+        <div class="section-title">我的持股</div>
+        <div class="stock-detail-holder"><span>${stockMoney(mine.shares)} 股（锁定中）</span>
+          <span>成本 ${Number(mine.avg_cost || 0).toFixed(1)}</span></div>
+        ${(mine.lots || []).map((l) => `<div class="hint">${esc(l.time || '—')} ${stockMoney(l.shares)} 股｜成本 ${Number(l.cost).toFixed(1)}</div>`).join('')}
+      </div>` : ''}
+      ${myShort ? `<div class="stock-detail-holders">
+        <div class="section-title">我的空头</div>
+        <div class="stock-detail-holder"><span>做空 ${stockMoney(myShort.shares)} 股</span>
+          <span>入场 ${Number(myShort.entry || 0).toFixed(1)} → 现价 ${Number(myShort.price || 0).toFixed(1)}</span></div>
+        <div class="hint">保证金 ${stockMoney(Math.round(myShort.margin || 0))}｜浮动 ${Number(myShort.pnl || 0) >= 0 ? '+' : ''}${stockMoney(myShort.pnl || 0)}</div>
+      </div>` : ''}
+      ${!mine && !myShort ? '<p class="room-empty">你在这只股票上没有持仓喵</p>' : ''}
+      <div class="stock-detail-holders">
+        <div class="section-title">我的买卖记录</div>
+        ${((mine && mine.trades) || []).length
+          ? [...(mine.trades || [])].reverse().map((t) => `<div class="stock-detail-holder">
+              <span>${esc(t.time || '—')} ${t.side === 'buy' ? '买入' : '卖出'} ${stockMoney(t.shares)} 股</span>
+              <span>成交价 ${Number(t.price || 0).toFixed(1)}</span></div>`).join('')
+          : '<p class="room-empty">暂无买卖记录</p>'}
+      </div>`;
+    stockModalEl.classList.remove('hidden');
+    return;
+  }
+  const holders = c.all_holders || c.holders || [];
   const hist = c.history || [];
   const pct = Number(c.pct || 0);
   stockModalTitleEl.textContent = `${c.name}（${c.code}）`;
@@ -4250,6 +4288,14 @@ function openStockDetail(code) {
     </div>
     ${c.intro ? `<p class="stock-detail-policy">来历：${esc(c.intro)}</p>` : ''}
     ${c.policy ? `<p class="stock-detail-policy">当前方针：${esc(c.policy)}</p>` : ''}
+    <div class="stock-short-box">
+      <div class="section-title">买卖</div>
+      <div class="stock-trade">
+        <input class="stock-trade-shares stock-detail-shares" type="number" min="1" step="1" placeholder="股数" data-code="${esc(c.code)}">
+        <button class="btn btn-primary btn-sm stock-detail-buy" type="button" data-code="${esc(c.code)}">买入</button>
+        <button class="btn btn-ghost btn-sm stock-detail-sell" type="button" data-code="${esc(c.code)}">卖出</button>
+      </div>
+    </div>
     ${(c.board || []).length ? `
     <div class="stock-detail-holders">
       <div class="section-title">常驻董事</div>
@@ -4291,7 +4337,7 @@ function openStockDetail(code) {
     </div>
     <div class="stock-short-box">
       <div class="section-title">押它下跌（做空）</div>
-      <p class="hint">先付五成保证金，不收手续费，不设固定期限；开仓当天不能平，要到第二天才能平空。</p>
+      <p class="hint">先付一成保证金，不收手续费，不设固定期限；开仓当天不能平，要到第二天才能平空。</p>
       <div class="stock-short-row">
         <input id="stock-short-shares" class="stock-short-shares" type="number" min="1" step="1" placeholder="股数" data-code="${esc(c.code)}">
         <button class="btn btn-primary btn-sm stock-short-btn" type="button" data-code="${esc(c.code)}">开空</button>
@@ -4554,6 +4600,22 @@ stockBondBodyEl.addEventListener('keydown', (e) => {
 });
 
 stockModalBodyEl.addEventListener('click', async (e) => {
+  const tradeBtn = e.target.closest('.stock-detail-buy, .stock-detail-sell');
+  if (tradeBtn) {
+    const code = tradeBtn.dataset.code || '';
+    const input = stockModalBodyEl.querySelector('.stock-detail-shares');
+    const shares = input ? input.value.trim() : '';
+    if (!shares) {
+      stockMsgEl.textContent = '先填要交易的股数喵';
+      stockMsgEl.classList.remove('ok');
+      return;
+    }
+    const isBuy = tradeBtn.classList.contains('stock-detail-buy');
+    const ok = await stockAction(`/api/stock/${isBuy ? 'buy' : 'sell'}`,
+      { code, shares }, isBuy ? '买入' : '卖出');
+    if (ok) openStockDetail(code);
+    return;
+  }
   const shortBtn = e.target.closest('.stock-short-btn');
   if (shortBtn) {
     const code = shortBtn.dataset.code || '';
@@ -4611,6 +4673,13 @@ stockModalBodyEl.addEventListener('click', async (e) => {
     closeStockModal();
     openStockBondDetail(country);
   }
+});
+
+stockModalBodyEl.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter' || !e.target.classList.contains('stock-detail-shares')) return;
+  e.preventDefault();
+  const buyBtn = stockModalBodyEl.querySelector('.stock-detail-buy');
+  if (buyBtn) buyBtn.click();
 });
 
 document.getElementById('btn-stock-deposit').addEventListener('click', () => {

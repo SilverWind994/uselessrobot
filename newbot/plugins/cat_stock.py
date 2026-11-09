@@ -137,7 +137,7 @@ CAT_STOCK_ERA_CAPITAL_POINT_MAX = 2  # 单个走向每整点最多因资金推�
 CAT_STOCK_ERA_COLLAPSE_RATE = 0.5    # 亡国时该国企业持仓的清算比例
 CAT_STOCK_ERA_COUNTRY_MIN = 3        # 至少保留多少个尚存国家
 CAT_STOCK_ERA_WAR_CHANCE = 0.08      # 战事升级为亡国的概率
-CAT_STOCK_SHORT_MARGIN = 0.5         # 开空所需保证金比例
+CAT_STOCK_SHORT_MARGIN = 0.1         # 开空所需保证金比例
 CAT_STOCK_SHORT_FEE = 0.0            # 开空不收手续费
 CAT_STOCK_SHORT_MIN_SHARES = 1       # 做空也不设最小股数限制
 CAT_STOCK_ERA_MAP_PATH = os.path.join(STOCK_DIR, "era_map.png")
@@ -2801,14 +2801,16 @@ class CatStockPlugin:
             if not isinstance(day_asset, dict) or day_asset.get("day") != today:
                 day_asset = {"day": today,
                              "value": round(self._assets_of(
-                                 st, market["companies"], market.get("bonds") or {}), 0)}
+                                 st, market["companies"], market.get("bonds") or {}), 0),
+                             "deposit": int(st.get("deposit_catnip", 0) or 0),
+                             "withdraw": int(st.get("withdraw_catnip", 0) or 0)}
                 st["day_asset"] = day_asset
             self._save_stock_players(players)
 
         lines = [f"【喵股市 · 我的持仓】{self._market_status_line()}"]
         lines.append(f"猫薄荷：{catnip}｜约合猫眼石：{catnip // CAT_STOCK_CATNIP_TO_STONE}（提现 105:1）")
         if not holdings and not bond_lots and not shorts and not pending:
-            day_pnl = catnip - float(day_asset.get("value") or 0)
+            day_pnl = self._day_pnl_of(st, float(catnip), day_asset)
             lines.append(f"总资产：{catnip}｜今日盈亏：{day_pnl:+.0f}")
             lines.append("当前空仓，也没有在押的空头")
             self._sender.send_text(target, "\n".join(lines))
@@ -2880,7 +2882,7 @@ class CatStockPlugin:
                              f"{int(item.get('shares', 0) or 0)} 股{kind}")
             lines.append("")
         assets = self._assets_of(st, market["companies"], market.get("bonds") or {})
-        day_pnl = assets - float(day_asset.get("value") or 0)
+        day_pnl = self._day_pnl_of(st, assets, day_asset)
         lines.append(f"总资产：{assets:.0f}｜今日盈亏：{day_pnl:+.0f}"
                      f"｜总市值：{total_value:.0f}｜总浮动：{total_pnl:+.0f}｜猫薄荷：{catnip}")
         lines.append("（当天买入的股份要到第二天才能卖出，当天开的空单要到第二天才能平空）")
@@ -2888,41 +2890,21 @@ class CatStockPlugin:
 
     # ==================== 盈亏排行 ====================
 
-    def rank_players(self) -> List[dict]:
+    def rank_players(self, market: Optional[dict] = None) -> List[dict]:
         """按累计盈亏排序（从高到低）
 
-        盈亏 =（猫薄荷 + 持仓市值）-（初始 1000 + 累计充值 - 累计提现），
-        这样充值/提现不会被误算成盈利或亏损。
+        盈亏 = 总资产 -（初始 1000 + 累计充值 - 累计提现），
+        这样充值/提现不会被误算成盈利或亏损；与网页端个人收益共用同一套算法。
         """
-        market = self._load_market()
+        market = market or self._load_market()
         companies = market["companies"]
         bonds = market.get("bonds") or {}
         players = self._load_stock_players()
         cat_players = self._cat._load_players()
         rows: List[dict] = []
         for key, st in players.items():
-            catnip = int(st.get("catnip", 0))
-            value = 0.0
-            for code, lots in st.get("holdings", {}).items():
-                comp = companies.get(code)
-                if comp:
-                    value += self._shares_of(lots) * comp["price"]
-            for country, lots in st.get("bonds", {}).items():
-                bond = bonds.get(country)
-                if bond:
-                    value += self._shares_of(lots) * float(bond["price"])
-            # 空头保证金与浮动盈亏同样算进资产，做空只是另一种押注方向
-            for short in st.get("shorts") or []:
-                comp = companies.get(short.get("code"))
-                entry = float(short.get("entry", 0) or 0)
-                shares = int(short.get("shares", 0) or 0)
-                price = float(comp["price"]) if comp else entry
-                value += (float(short.get("margin", 0) or 0)
-                          + (entry - price) * shares)
-            net_in = (CAT_STOCK_INITIAL_CATNIP
-                      + int(st.get("deposit_catnip", 0))
-                      - int(st.get("withdraw_catnip", 0)))
-            assets = catnip + value
+            assets = self._assets_of(st, companies, bonds)
+            net_in = self._net_in_of(st)
             profit = assets - net_in
             player = cat_players.get(str(key)) or {}
             rows.append({
@@ -5297,9 +5279,9 @@ class CatStockPlugin:
                 result.append(item)
         return result
 
-    def snapshot(self, qq: Optional[int] = None) -> dict:
+    def snapshot(self, qq: Optional[int] = None, market: Optional[dict] = None) -> dict:
         """整理成网页端用的结构化行情 / 新闻 / 持仓（只读，不改动存档）"""
-        market = self._load_market()
+        market = market or self._load_market()
         now = datetime.now()
         companies = market["companies"]
 
@@ -5558,6 +5540,24 @@ class CatStockPlugin:
             total += float(short.get("margin", 0) or 0) + (entry - price) * shares
         return total
 
+    def _net_in_of(self, st: dict) -> int:
+        """玩家累计净投入：初始资金 + 累计充值 - 累计提现（红包、转账同样计入流水）"""
+        return (CAT_STOCK_INITIAL_CATNIP
+                + int(st.get("deposit_catnip", 0) or 0)
+                - int(st.get("withdraw_catnip", 0) or 0))
+
+    def _day_pnl_of(self, st: dict, assets: float, day_asset: dict) -> float:
+        """今日盈亏：只算持仓与空头带来的资产变化，剔除充值/提现/转账等外部资金进出"""
+        base = float(day_asset.get("value") or 0)
+        dep_now = int(st.get("deposit_catnip", 0) or 0)
+        wd_now = int(st.get("withdraw_catnip", 0) or 0)
+        dep_base = day_asset.get("deposit")
+        wd_base = day_asset.get("withdraw")
+        # 旧存档的当日基准没记流水快照时，按当天没有资金进出处理
+        dep_base = dep_now if dep_base is None else int(dep_base)
+        wd_base = wd_now if wd_base is None else int(wd_base)
+        return assets - base - (dep_now - dep_base) + (wd_now - wd_base)
+
     def _portfolio_view(self, qq: int, companies: dict, bonds: Optional[dict] = None) -> dict:
         """某个玩家的持仓明细（含可卖 / 锁定股数）"""
         bonds = bonds or {}
@@ -5573,7 +5573,9 @@ class CatStockPlugin:
             day_asset = st.get("day_asset")
             if not isinstance(day_asset, dict) or day_asset.get("day") != today:
                 day_asset = {"day": today,
-                             "value": round(self._assets_of(st, companies, bonds), 0)}
+                             "value": round(self._assets_of(st, companies, bonds), 0),
+                             "deposit": int(st.get("deposit_catnip", 0) or 0),
+                             "withdraw": int(st.get("withdraw_catnip", 0) or 0)}
                 st["day_asset"] = day_asset
             self._save_stock_players(players)
 
@@ -5695,8 +5697,15 @@ class CatStockPlugin:
         short_rows.sort(key=lambda r: r["opened"], reverse=True)
 
         player = self._cat._peek_player(qq) or {}
+        # 累计收益与盈亏排行同口径：总资产 -（初始资金 + 累计充值 - 累计提现）
+        assets = self._assets_of(st, companies, bonds)
+        net_in = self._net_in_of(st)
+        profit = assets - net_in
         return {
             "catnip": catnip,
+            "net_in": int(net_in),
+            "profit": round(profit, 0),
+            "profit_pct": round(profit / net_in * 100, 1) if net_in > 0 else 0.0,
             "stone": int(player.get("eye_stones", 0)),
             "catnip_to_stone_est": catnip // CAT_STOCK_CATNIP_TO_STONE,
             "holdings": rows,
@@ -5713,8 +5722,8 @@ class CatStockPlugin:
             "short_pnl": round(total_short_pnl, 0),
             "total_value": round(total_value, 0),
             "total_pnl": round(total_value - total_cost, 0),
-            "total_assets": round(catnip + total_value, 0),
-            "day_pnl": round(catnip + total_value - float(day_asset.get("value") or 0), 0),
+            "total_assets": round(assets, 0),
+            "day_pnl": round(self._day_pnl_of(st, assets, day_asset), 0),
         }
 
     # ==================== 帮助 ====================
@@ -5743,7 +5752,7 @@ class CatStockPlugin:
             "持股：一位股东最多深度介入两家公司的经营，其他公司只允许保留一小把零散股份。\n"
             "同业竞争：同一门生意里的企业会互相抢客，跑赢同行的涨幅会被对手分流一部分，"
             "落后的一方反而容易补涨，同事不同命。\n"
-            "做空：押注某家企业会跌，需先付五成保证金，不收手续费，不设固定期限；"
+            "做空：押注某家企业会跌，需先付一成保证金，不收手续费，不设固定期限；"
             "开空后随时可「平空」了结，但开仓当天不能平，要到第二天才能平空。\n"
             "经营方向：企业可以同时做几门营生，最大股东在开市时段可「拓展」新方向或「改营」整体换向。\n"
             "买卖：喵股市 买 <代码> <股数>｜喵股市 卖 <代码> <股数>（休市期间下单会挂到次日开盘）\n"
@@ -6029,12 +6038,14 @@ class CatStockPlugin:
                     comp["prev_close"] = comp["price"]
                 for bond in (market.get("bonds") or {}).values():
                     bond["prev_close"] = bond["price"]
-                # 同时给每位玩家记下开盘总资产，用于网页端今日盈亏
+                # 同时给每位玩家记下开盘总资产与资金流水，用于网页端今日盈亏
                 for st in players.values():
                     st["day_asset"] = {
                         "day": today,
                         "value": round(self._assets_of(
                             st, companies, market.get("bonds") or {}), 0),
+                        "deposit": int(st.get("deposit_catnip", 0) or 0),
+                        "withdraw": int(st.get("withdraw_catnip", 0) or 0),
                     }
                 market["day"] = today
             # 旧存档可能没有 prev_close：当天也要补上一个基准，否则日线总涨跌失效

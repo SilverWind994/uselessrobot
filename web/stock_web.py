@@ -48,9 +48,13 @@ def _run(func, qq: int, rest: list, **kwargs) -> str:
 
 
 def overview(qq: int) -> dict:
-    """行情 + 新闻 + 本人持仓 + 盈亏排行"""
-    data = _plugin.snapshot(qq)
-    data["ranking"] = _plugin.rank_players()
+    """行情 + 新闻 + 本人持仓 + 盈亏排行
+
+    同一份行情快照同时算个人收益与排行榜，避免整点更新时两边价格不一致。
+    """
+    market = _plugin._load_market()
+    data = _plugin.snapshot(qq, market=market)
+    data["ranking"] = _plugin.rank_players(market=market)
     return data
 
 

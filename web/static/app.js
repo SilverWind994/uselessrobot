@@ -2684,286 +2684,427 @@ wireChat('yz', '/api/yahtzee/say', () => yzCode, yzMsg);
 wireChat('mj', '/api/mahjong17/say', () => mjCode, mjMsg);
 wireChat('gold', '/api/mahjong_gold/say', () => goldCode, goldMsg);
 
-// ==================== Can't Stop 网页版（同屏轮流） ====================
+// ==================== Can't Stop 网页版（在线房间） ====================
 
 const csPanel = document.getElementById('cantstop-panel');
-const csSetupEl = document.getElementById('cs-setup');
-const csGameEl = document.getElementById('cs-game');
-const csBoardEl = document.getElementById('cs-board');
-const csDiceEl = document.getElementById('cs-dice');
-const csPairsEl = document.getElementById('cs-pairs');
-const csTurnEl = document.getElementById('cs-turn');
-const csHintEl = document.getElementById('cs-hint');
-const csMsgEl = document.getElementById('cs-msg');
-const csLogEl = document.getElementById('cs-log');
-const csLegendEl = document.getElementById('cs-legend');
-const csRollBtn = document.getElementById('btn-cs-roll');
-const csStopBtn = document.getElementById('btn-cs-stop');
+const csLobby = document.getElementById('cs-lobby');
+const csRoom = document.getElementById('cs-room');
+const csRooms = document.getElementById('cs-rooms');
+const csLobbyMsg = document.getElementById('cs-lobby-msg');
+const csToast = document.getElementById('cs-toast');
 
-const CS_SUMS = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
-// 每列需要走到的格数：2 与 12 最短，7 最长
-const CS_HEIGHTS = {
-  2: 3, 3: 5, 4: 7, 5: 9, 6: 11, 7: 13, 8: 11, 9: 9, 10: 7, 11: 5, 12: 3,
+const CS_RULES = [
+  '每回合掷 4 颗骰子，两两相加可得到 3 种配对，每种配对是两个列号和。',
+  '选一种配对落子：两个列各前进一格；两个和相同时只前进一格。',
+  '本回合最多同时使用 3 枚临时标记：走到新列会占用一枚，已有标记的列只向前移动。',
+  '落子后可以继续掷，也可以随时「收手」，把本回合的临时进度落定为永久进度。',
+  '三种配对都无法落子（列已被占下或临时标记不够）时爆掉，本回合临时进度全部作废并换人。',
+  '某列走到顶格即被该玩家占下，其他人不能再走这一列；先占满 3 列者获胜。',
+];
+const csRuleItems = CS_RULES.map((text) => `<li>${text}</li>`).join('');
+
+document.getElementById('cs-lobby-rules').innerHTML = csRuleItems;
+
+const CS_STAGE_HINTS = {
+  idle: '掷 4 颗骰子，再把骰子两两配对落子',
+  rolled: '选一组配对落子',
+  continue: '可以继续掷，也可以收手把临时进度落定',
 };
-const CS_MAX_MARKERS = 3;
-const CS_WIN_COLUMNS = 3;
 
+let csCode = null;
 let csState = null;
-let csTimer = null;
+let csSig = null;
+let csLobbyTimer = null;
+let csRoomTimer = null;
+let csToastTimer = null;
+// 操作在途时递增，用来丢弃比操作更早发出的轮询响应，避免画面先跳新状态又闪回旧状态
+let csBarrier = 0;
+let csBusy = false;
 
-function csLog(text) {
-  csState.log.push(text);
-  if (csState.log.length > 60) csState.log = csState.log.slice(-60);
+function csMsg(text, ok) {
+  csToast.textContent = text || '';
+  csToast.classList.toggle('ok', !!ok);
+  clearTimeout(csToastTimer);
+  if (text) csToastTimer = setTimeout(() => { csToast.textContent = ''; }, 4000);
 }
 
-function csPlayer() {
-  return csState.players[csState.turn];
+async function enterCantStop() {
+  loginPanel.classList.add('hidden');
+  homePanel.classList.add('hidden');
+  pwdPanel.classList.add('hidden');
+  csPanel.classList.remove('hidden');
+  csLobby.classList.remove('hidden');
+  csRoom.classList.add('hidden');
+  csCode = null;
+  csLobbyMsg.textContent = '';
+  const { status, data } = await api('/api/cantstop/mine');
+  if (status === 401) { csPanel.classList.add('hidden'); showLogin(); return; }
+  if (status === 200 && data.ok && data.code) { enterCsRoom(data.code); return; }
+  await refreshCsRooms();
+  clearInterval(csRoomTimer);
+  csRoomTimer = null;
+  csLobbyTimer = setInterval(refreshCsRooms, 2500);
 }
 
-function csOwner(sum) {
-  return csState.players.findIndex((p) => p.claimed.includes(sum));
+function backToCsLobby() {
+  clearInterval(csRoomTimer);
+  csRoomTimer = null;
+  csCode = null;
+  csState = null;
+  csSig = null;
+  csRoom.classList.add('hidden');
+  csLobby.classList.remove('hidden');
+  refreshCsRooms();
+  clearInterval(csLobbyTimer);
+  csLobbyTimer = setInterval(refreshCsRooms, 2500);
 }
 
-function csLater(fn, ms) {
-  clearTimeout(csTimer);
-  csTimer = setTimeout(fn, ms);
+async function refreshCsRooms() {
+  const { status, data } = await api('/api/cantstop/rooms');
+  if (status === 401) { clearInterval(csLobbyTimer); csPanel.classList.add('hidden'); showLogin(); return; }
+  if (status !== 200 || !data.ok) return;
+  csRooms.innerHTML = '';
+  if (!data.rooms.length) {
+    const p = document.createElement('p');
+    p.className = 'room-empty';
+    p.textContent = '还没有房间，创建一个等对手来吧';
+    csRooms.appendChild(p);
+    return;
+  }
+  data.rooms.forEach((r) => {
+    const row = document.createElement('div');
+    row.className = 'room-row';
+    const ongoing = r.phase !== 'waiting';
+    const meta = document.createElement('div');
+    meta.className = 'room-meta';
+    meta.textContent = (ongoing ? '对局中 · ' : '') + `${r.count}/${r.max} 人` + ` · 房间号 ${r.code}`;
+    const host = document.createElement('div');
+    host.className = 'room-host';
+    host.textContent = ongoing ? (r.players || []).join(' vs ') : r.host;
+    const btn = document.createElement('button');
+    btn.className = 'btn btn-primary btn-sm';
+    btn.textContent = ongoing ? '观战' : '加入';
+    btn.addEventListener('click', () => (ongoing ? enterCsRoom(r.code) : joinCsRoom(r.code)));
+    row.appendChild(host);
+    row.appendChild(meta);
+    row.appendChild(btn);
+    csRooms.appendChild(row);
+  });
 }
 
-function csPairings(dice) {
-  const [a, b, c, d] = dice;
-  return [[a + b, c + d], [a + c, b + d], [a + d, b + c]];
+async function createCsRoom() {
+  csLobbyMsg.textContent = '';
+  const { status, data } = await api('/api/cantstop/create', { method: 'POST' });
+  if (status === 200 && data.ok) enterCsRoom(data.code);
+  else csLobbyMsg.textContent = data.msg || '创建失败喵';
 }
 
-// 在临时标记的副本上模拟一次落子，判断这组配对是否可行
-function csPairLegal(sums) {
-  const active = Object.assign({}, csState.active);
-  const p = csPlayer();
-  const step = (sum) => {
-    if (csOwner(sum) >= 0) return false;
-    if (active[sum] !== undefined) {
-      if (active[sum] >= CS_HEIGHTS[sum]) return false;
-      active[sum] += 1;
-      // 到顶就占下这一列，临时标记收回，后面的配对还能继续用
-      if (active[sum] >= CS_HEIGHTS[sum]) delete active[sum];
+async function joinCsRoom(code) {
+  csLobbyMsg.textContent = '';
+  const { status, data } = await api('/api/cantstop/join', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code: code }),
+  });
+  if (status === 200 && data.ok) enterCsRoom(data.code);
+  else csLobbyMsg.textContent = data.msg || '加入失败喵';
+}
+
+async function cancelCsRoom() {
+  if (!csCode) return;
+  const { status, data } = await api('/api/cantstop/cancel', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code: csCode }),
+  });
+  if (status === 200 && data.ok) backToCsLobby();
+  else csMsg(data.msg || '取消失败喵');
+}
+
+async function csAct(action, extra) {
+  if (!csCode || csBusy) return false;
+  csBusy = true;
+  csBarrier++;
+  const body = Object.assign({ code: csCode, action: action }, extra || {});
+  try {
+    const { status, data } = await api('/api/cantstop/action', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (status === 200 && data.ok) {
+      if (!data.room) { backToCsLobby(); csMsg('房间已解散喵'); return true; }
+      csSig = csSignature(data.room);
+      renderCsRoom(data.room);
       return true;
     }
-    if (Object.keys(active).length >= CS_MAX_MARKERS) return false;
-    active[sum] = (p.progress[sum] || 0) + 1;
-    if (active[sum] >= CS_HEIGHTS[sum]) delete active[sum];   // 直接封顶也算占下
-    return true;
-  };
-  return step(sums[0]) && (sums[1] === sums[0] || step(sums[1]));
-}
-
-function csApplyPairing(sums) {
-  const p = csPlayer();
-  const targets = sums[1] === sums[0] ? [sums[0]] : [sums[0], sums[1]];
-  const done = [];
-  targets.forEach((sum) => {
-    if (csState.active[sum] === undefined) {
-      csState.active[sum] = (p.progress[sum] || 0) + 1;
-    } else {
-      csState.active[sum] += 1;
-    }
-    if (csState.active[sum] >= CS_HEIGHTS[sum]) {
-      // 到顶即占下这一列，临时标记收回
-      delete csState.active[sum];
-      p.progress[sum] = CS_HEIGHTS[sum];
-      if (!p.claimed.includes(sum)) p.claimed.push(sum);
-      csLog(`${p.name} 走到 ${sum} 列顶格，占下这一列！`);
-      done.push(`${sum}（占下）`);
-    } else {
-      done.push(`${sum}→第 ${csState.active[sum]} 格`);
-    }
-  });
-  if (p.claimed.length >= CS_WIN_COLUMNS) {
-    csState.phase = 'over';
-    csState.winner = csState.turn;
-    csState.pairs = [];
-    csLog(`🏆 ${p.name} 占满 ${CS_WIN_COLUMNS} 列，赢下本局！`);
-    csNotice(`🏆 ${p.name} 获胜！`, true);
-    return;
+    csMsg(data.msg || '操作失败喵');
+    return false;
+  } finally {
+    csBusy = false;
   }
-  csState.phase = 'continue';
-  csNotice(`${p.name} 落子：${done.join('、')}`, true);
 }
 
-function csRoll() {
-  if (!csState || csState.phase === 'over') return;
-  if (csState.phase !== 'idle' && csState.phase !== 'continue') return;
-  const dice = Array.from({ length: 4 }, () => 1 + Math.floor(Math.random() * 6));
-  csState.dice = dice;
-  const seen = new Set();
-  const legal = [];
-  csPairings(dice).forEach((sums) => {
-    const key = sums.slice().sort((x, y) => x - y).join('+');
-    if (seen.has(key) || !csPairLegal(sums)) return;
-    seen.add(key);
-    legal.push(sums);
-  });
-  if (!legal.length) {
-    const p = csPlayer();
-    csState.phase = 'bust';
-    csState.pairs = [];
-    csState.active = {};
-    csLog(`${p.name} 掷出 ${dice.join(' ')}，配不出可落子的列，本回合进度清零`);
-    csNotice('爆掉！本回合的临时进度全部作废', false);
-    csRender();
-    csLater(csNextTurn, 900);
-    return;
+function csSignature(r) {
+  return JSON.stringify([
+    r.phase, r.turn, r.stage, r.dice, r.pairs, r.active,
+    r.players.map((p) => [p.claimed, p.progress, p.left]),
+    r.winner, r.log.length,
+  ]);
+}
+
+async function enterCsRoom(code) {
+  clearInterval(csLobbyTimer);
+  csLobbyTimer = null;
+  csCode = code;
+  csState = null;
+  csSig = null;
+  csBarrier++;
+  csBusy = false;
+  csLobby.classList.add('hidden');
+  csRoom.classList.remove('hidden');
+  buildCsRoomDom();
+  await pollCsRoom();
+  clearInterval(csRoomTimer);
+  csRoomTimer = setInterval(pollCsRoom, 1200);
+}
+
+async function pollCsRoom() {
+  const code = csCode;
+  if (!code) return;
+  const barrier = csBarrier;
+  const { status, data } = await api('/api/cantstop/state?code=' + encodeURIComponent(code));
+  if (code !== csCode) return;   // 已离开或换了房间，丢弃旧响应
+  if (barrier !== csBarrier) return;   // 请求发出后有操作完成，这份状态已过期
+  if (status === 401) { clearInterval(csRoomTimer); csPanel.classList.add('hidden'); showLogin(); return; }
+  if (status === 404) { csMsg('房间已结束喵'); backToCsLobby(); return; }
+  if (status !== 200 || !data.ok) return;
+  const s = csSignature(data.room);
+  if (s !== csSig) {
+    csSig = s;
+    renderCsRoom(data.room);
   }
-  csState.pairs = legal;
-  csState.phase = 'rolled';
-  csNotice(legal.length === 1 ? '只有一种配对可选' : '选一组配对落子', true);
-  csRender();
 }
 
-function csStop() {
-  if (!csState || csState.phase !== 'continue') return;
-  const p = csPlayer();
-  const banked = Object.keys(csState.active).map(Number);
-  if (!banked.length) return;
-  banked.sort((a, b) => a - b).forEach((sum) => {
-    p.progress[sum] = Math.max(p.progress[sum] || 0, csState.active[sum]);
+function buildCsRoomDom() {
+  csRoom.innerHTML = `
+    <div class="card fk-head">
+      <div class="fk-head-top">
+        <div class="fk-title">Can't Stop · <span id="cs-status"></span></div>
+        <div class="fk-head-right">
+          <div class="fk-code">房间号 <b id="cs-code-show"></b></div>
+          <div id="cs-spectate-badge" class="fk-spectate hidden">观战中</div>
+        </div>
+      </div>
+      <div id="cs-players" class="fk-players"></div>
+    </div>
+
+    <div id="cs-waiting" class="card fk-card hidden">
+      <div class="fk-info">等待玩家加入……现在是 <b id="cs-count"></b> 人（2~4 人即可开始），把房间号 <b id="cs-wait-code"></b> 发给朋友吧</div>
+      <div class="actions">
+        <button id="cs-start" class="btn btn-primary btn-sm">开始对局</button>
+        <button id="cs-cancel" class="btn btn-ghost btn-sm">解散房间</button>
+      </div>
+    </div>
+
+    <div id="cs-play" class="card fk-card hidden">
+      <div class="panel-head">
+        <div>
+          <div id="cs-turn" class="panel-title"></div>
+          <div id="cs-hint" class="panel-sub"></div>
+        </div>
+        <div id="cs-dice" class="dice-row cs-dice"></div>
+      </div>
+      <div id="cs-pairs" class="cs-pairs"></div>
+      <div class="create-row cs-actions">
+        <button id="btn-cs-roll" class="btn btn-primary btn-sm" type="button">掷骰子</button>
+        <button id="btn-cs-stop" class="btn btn-ghost btn-sm" type="button">收手落定</button>
+      </div>
+    </div>
+
+    <details class="card mg-rules cs-rules">
+      <summary>游戏规则</summary>
+      <ol class="mg-rule-list">${csRuleItems}</ol>
+    </details>
+
+    <div id="cs-board-card" class="card hidden">
+      <div class="panel-head">
+        <div>
+          <div class="panel-title">棋盘</div>
+          <div class="panel-sub">亮边圆点是本回合的临时标记，实心圆点是已落定的进度</div>
+        </div>
+      </div>
+      <div id="cs-board" class="cs-board"></div>
+      <div id="cs-legend" class="cs-legend"></div>
+    </div>
+
+    <div id="cs-result" class="card fk-result hidden"></div>
+
+    <div class="card fk-card">
+      <div class="panel-title">对局记录</div>
+      <div id="cs-log" class="log"></div>
+    </div>
+
+    <div class="actions">
+      <button id="cs-leave" class="btn btn-ghost btn-sm">离开房间</button>
+      <button id="cs-back-lobby" class="btn btn-ghost btn-sm">返回大厅</button>
+    </div>`;
+
+  document.getElementById('cs-start').addEventListener('click', () => csAct('start'));
+  document.getElementById('cs-cancel').addEventListener('click', cancelCsRoom);
+  document.getElementById('cs-leave').addEventListener('click', leaveCsRoom);
+  document.getElementById('cs-back-lobby').addEventListener('click', backToCsLobby);
+  document.getElementById('btn-cs-roll').addEventListener('click', () => csAct('roll'));
+  document.getElementById('btn-cs-stop').addEventListener('click', () => csAct('stop'));
+}
+
+async function leaveCsRoom() {
+  if (!csCode) { backToCsLobby(); return; }
+  if (!window.confirm('确定离开房间吗？对局中离开将直接退出这一局喵')) return;
+  if (await csAct('leave')) backToCsLobby();
+}
+
+function renderCsRoom(state) {
+  csState = state;
+  document.getElementById('cs-status').textContent = state.phase === 'waiting'
+    ? '等待开始' : (state.phase === 'finished' ? '对局结束' : '对局中');
+  document.getElementById('cs-code-show').textContent = state.code;
+  document.getElementById('cs-wait-code').textContent = state.code;
+
+  const isWaiting = state.phase === 'waiting';
+  const isPlay = state.phase === 'playing';
+  const isOver = state.phase === 'finished';
+  fkToggle('cs-waiting', isWaiting);
+  fkToggle('cs-play', isPlay);
+  fkToggle('cs-board-card', isPlay || isOver);
+  fkToggle('cs-result', isOver);
+
+  const spectator = !state.is_player;
+  document.getElementById('cs-spectate-badge').classList.toggle('hidden', !spectator);
+  document.getElementById('cs-leave').classList.toggle('hidden', spectator);
+  if (isWaiting) {
+    document.getElementById('cs-count').textContent = state.players.length;
+    document.getElementById('cs-start').classList.toggle('hidden', spectator || state.my_index !== 0);
+    document.getElementById('cs-cancel').classList.toggle('hidden', spectator || state.my_index !== 0);
+  }
+
+  renderCsPlayers(state);
+  if (isPlay) renderCsPlay(state);
+  renderCsBoard(state);
+  if (isOver) renderCsResult(state);
+  renderCsLog(state);
+}
+
+function renderCsPlayers(state) {
+  const wrap = document.getElementById('cs-players');
+  wrap.innerHTML = '';
+  state.players.forEach((p, i) => {
+    const div = document.createElement('div');
+    div.className = 'fk-player'
+      + (i === state.turn && state.phase === 'playing' ? ' active' : '')
+      + (i === state.my_index ? ' you' : '');
+    div.innerHTML = `<div class="pname">${esc(p.name)}${i === state.my_index ? '（你）' : ''}`
+      + `${p.left ? '（已离开）' : ''}</div>`
+      + `<div class="ptotal">${p.columns}/${state.win_columns} 列</div>`;
+    wrap.appendChild(div);
   });
-  csLog(`${p.name} 收手，落定 ${banked.map((sum) => `${sum} 列第 ${p.progress[sum]} 格`).join('、')}`);
-  csNotice(`${p.name} 收手，进度已落定`, true);
-  csState.active = {};
-  csState.phase = 'banked';
-  csRender();
-  csLater(csNextTurn, 600);
 }
 
-function csNextTurn() {
-  if (!csState || csState.phase === 'over') return;
-  csState.turn = (csState.turn + 1) % csState.players.length;
-  csState.dice = [];
-  csState.pairs = [];
-  csState.active = {};
-  csState.phase = 'idle';
-  csLog(`—— 轮到 ${csPlayer().name} ——`);
-  csNotice('', false);
-  csRender();
+function renderCsPlay(state) {
+  const p = state.players[state.turn] || {};
+  const turnEl = document.getElementById('cs-turn');
+  turnEl.textContent = state.is_turn ? '轮到你行动' : `${p.name} 正在行动……`;
+  turnEl.classList.toggle('waiting', !state.is_turn);
+  document.getElementById('cs-hint').textContent = CS_STAGE_HINTS[state.stage] || '';
+
+  const diceEl = document.getElementById('cs-dice');
+  diceEl.innerHTML = '';
+  state.dice.forEach((value) => {
+    diceEl.appendChild(dieEl({ value, fill: '#fff', outline: '#b9b2a6' }, { small: true }));
+  });
+
+  const pairsEl = document.getElementById('cs-pairs');
+  pairsEl.innerHTML = '';
+  if (state.stage === 'rolled') {
+    state.pairs.forEach((sums) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'btn btn-ghost btn-sm cs-pair';
+      btn.textContent = `${sums[0]} + ${sums[1]}`;
+      btn.disabled = !state.is_turn;
+      btn.addEventListener('click', () => csAct('pair', { sums: sums }));
+      pairsEl.appendChild(btn);
+    });
+  }
+
+  const rollBtn = document.getElementById('btn-cs-roll');
+  rollBtn.textContent = state.stage === 'continue' ? '继续掷' : '掷骰子';
+  rollBtn.disabled = !(state.is_turn && (state.stage === 'idle' || state.stage === 'continue'));
+  const stopBtn = document.getElementById('btn-cs-stop');
+  stopBtn.disabled = !(state.is_turn && state.stage === 'continue'
+    && Object.keys(state.active || {}).length > 0);
 }
 
-function csNotice(text, ok) {
-  csMsgEl.textContent = text || '';
-  csMsgEl.classList.toggle('ok', !!ok);
+function csOwnerIndex(state, total) {
+  return state.players.findIndex((p) => p.claimed.includes(total));
 }
 
-function csBoardHtml() {
-  return CS_SUMS.map((sum) => {
-    const height = CS_HEIGHTS[sum];
-    const owner = csOwner(sum);
+function renderCsBoard(state) {
+  const heights = state.heights || {};
+  const board = document.getElementById('cs-board');
+  board.innerHTML = state.sums.map((total) => {
+    const height = heights[total] || heights[String(total)] || 1;
+    const owner = csOwnerIndex(state, total);
     const cells = [];
     for (let pos = height; pos >= 1; pos--) {
-      const dots = csState.players.map((pl, i) => {
-        const temp = i === csState.turn && csState.active[sum] === pos;
-        const perm = (pl.progress[sum] || 0) === pos;
+      const dots = state.players.map((p, i) => {
+        const temp = i === state.turn && state.phase === 'playing'
+          && Number(state.active[total]) === pos;
+        const perm = Number(p.progress[total]) === pos;
         if (!temp && !perm) return '';
         return `<span class="cs-dot cs-p${i}${temp ? ' cs-temp' : ''}"></span>`;
       }).join('');
       cells.push(`<div class="cs-cell">${dots}</div>`);
     }
-    const claim = owner >= 0 ? ` title="${esc(csState.players[owner].name)} 已占下"` : '';
+    const claim = owner >= 0 ? ` title="${esc(state.players[owner].name)} 已占下"` : '';
     return `<div class="cs-col${owner >= 0 ? ' cs-claimed' : ''}"${claim}>`
       + `<div class="cs-cells">${cells.join('')}</div>`
-      + `<div class="cs-col-num${owner >= 0 ? ' cs-p' + owner : ''}">${sum}</div>`
+      + `<div class="cs-col-num${owner >= 0 ? ' cs-p' + owner : ''}">${total}</div>`
       + '</div>';
   }).join('');
-}
 
-function csRender() {
-  if (!csState) return;
-  const p = csPlayer();
-  const hints = {
-    idle: '掷 4 颗骰子，选一组配对落子',
-    rolled: '选一组配对落子',
-    continue: '可以继续掷，也可以收手把临时进度落定',
-    bust: '配不出可落子的列，本回合进度作废',
-    banked: '进度已落定，换下一位',
-    over: '本局结束，点「重开一局」再来',
-  };
-  csTurnEl.textContent = csState.phase === 'over'
-    ? `🏆 ${csState.players[csState.winner].name} 获胜`
-    : `轮到 ${p.name}`;
-  csHintEl.textContent = hints[csState.phase] || '';
-
-  csDiceEl.innerHTML = '';
-  csState.dice.forEach((value) => {
-    csDiceEl.appendChild(dieEl({ value, fill: '#fff', outline: '#b9b2a6' }, { small: true }));
-  });
-
-  csPairsEl.innerHTML = '';
-  if (csState.phase === 'rolled') {
-    csState.pairs.forEach((sums) => {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'btn btn-ghost btn-sm cs-pair';
-      btn.textContent = `${sums[0]} + ${sums[1]}`;
-      btn.addEventListener('click', () => {
-        csApplyPairing(sums);
-        csRender();
-      });
-      csPairsEl.appendChild(btn);
-    });
-  }
-
-  csRollBtn.textContent = csState.phase === 'continue' ? '继续掷' : '掷骰子';
-  csRollBtn.disabled = !(csState.phase === 'idle' || csState.phase === 'continue');
-  csStopBtn.disabled = csState.phase !== 'continue';
-  csBoardEl.innerHTML = csBoardHtml();
-  csLegendEl.innerHTML = csState.players.map((pl, i) => {
-    const active = i === csState.turn && csState.phase !== 'over';
+  const legend = document.getElementById('cs-legend');
+  legend.innerHTML = state.players.map((p, i) => {
+    const active = i === state.turn && state.phase === 'playing';
     return `<span class="cs-chip${active ? ' cs-active' : ''}">`
-      + `<span class="cs-dot cs-p${i}"></span>${esc(pl.name)}`
-      + ` · ${pl.claimed.length}/${CS_WIN_COLUMNS} 列</span>`;
+      + `<span class="cs-dot cs-p${i}"></span>${esc(p.name)}`
+      + ` · ${p.columns}/${state.win_columns} 列${p.left ? ' · 已离开' : ''}</span>`;
   }).join('');
-  csLogEl.innerHTML = csState.log.map((line) => `<div>${esc(line)}</div>`).join('');
-  csLogEl.scrollTop = csLogEl.scrollHeight;
 }
 
-function csStartGame() {
-  const count = Math.min(4, Math.max(2, parseInt(document.getElementById('cs-count').value, 10) || 2));
-  csState = {
-    players: Array.from({ length: count }, (_, i) => ({
-      name: `玩家${i + 1}`, progress: {}, claimed: [],
-    })),
-    turn: 0,
-    dice: [],
-    pairs: [],
-    active: {},
-    phase: 'idle',
-    winner: null,
-    log: [`—— 轮到 玩家1 ——`],
-  };
-  csSetupEl.classList.add('hidden');
-  csGameEl.classList.remove('hidden');
-  csNotice('', false);
-  csRender();
+function renderCsResult(state) {
+  const lines = state.result_lines || [];
+  const box = document.getElementById('cs-result');
+  box.innerHTML =
+    '<div class="panel-title">对局结束</div>'
+    + lines.map((l) => `<div class="line">${esc(l)}</div>`).join('')
+    + rematchButton('cs', state.is_player);
+  bindRematch(box, 'cs', rematchCs);
 }
 
-function csReset() {
-  clearTimeout(csTimer);
-  csTimer = null;
-  csState = null;
-  csGameEl.classList.add('hidden');
-  csSetupEl.classList.remove('hidden');
+function rematchCs() {
+  return rematchGame('/api/cantstop/rematch', csCode, csMsg, enterCsRoom);
 }
 
-function enterCantStop() {
-  loginPanel.classList.add('hidden');
-  homePanel.classList.add('hidden');
-  pwdPanel.classList.add('hidden');
-  csPanel.classList.remove('hidden');
-  if (csState) {
-    csSetupEl.classList.add('hidden');
-    csGameEl.classList.remove('hidden');
-    csRender();
-  } else {
-    csSetupEl.classList.remove('hidden');
-    csGameEl.classList.add('hidden');
-  }
+function renderCsLog(state) {
+  const box = document.getElementById('cs-log');
+  box.innerHTML = '';
+  state.log.forEach((l) => {
+    const d = document.createElement('div');
+    d.textContent = l;
+    box.appendChild(d);
+  });
+  box.scrollTop = box.scrollHeight;
 }
 
 document.getElementById('btn-cantstop').addEventListener('click', enterCantStop);
@@ -2971,10 +3112,7 @@ document.getElementById('btn-cs-back').addEventListener('click', () => {
   closeGamePanels();
   refresh();
 });
-document.getElementById('btn-cs-start').addEventListener('click', csStartGame);
-document.getElementById('btn-cs-reset').addEventListener('click', csReset);
-csRollBtn.addEventListener('click', csRoll);
-csStopBtn.addEventListener('click', csStop);
+document.getElementById('btn-cs-create').addEventListener('click', createCsRoom);
 
 // ==================== 顶部导航（喵喵远征队 / 小游戏 / 个人 / 开发中 / 管理） ====================
 
@@ -2989,7 +3127,8 @@ function showTabNav() {
 
 function closeGamePanels() {
   [fkLobbyTimer, yzLobbyTimer, mjLobbyTimer, goldLobbyTimer,
-    fkRoomTimer, yzRoomTimer, mjRoomTimer, goldRoomTimer]
+    fkRoomTimer, yzRoomTimer, mjRoomTimer, goldRoomTimer,
+    csLobbyTimer, csRoomTimer]
     .forEach((t) => clearInterval(t));
   fkLobbyTimer = null;
   yzLobbyTimer = null;
@@ -2999,6 +3138,8 @@ function closeGamePanels() {
   yzRoomTimer = null;
   mjRoomTimer = null;
   goldRoomTimer = null;
+  csLobbyTimer = null;
+  csRoomTimer = null;
   fkPanel.classList.add('hidden');
   yzPanel.classList.add('hidden');
   mjPanel.classList.add('hidden');

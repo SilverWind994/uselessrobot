@@ -37,6 +37,7 @@ from core.web_auth import (make_token, parse_token, verify_password,           #
 import cat_web                                                       # noqa: E402
 import farkle_web                                                    # noqa: E402
 import yahtzee_web                                                   # noqa: E402
+import cantstop_web                                                  # noqa: E402
 import mahjong17_web                                                 # noqa: E402
 import mahjong_gold_web                                              # noqa: E402
 import tournament_web                                                # noqa: E402
@@ -437,6 +438,92 @@ def yahtzee_say(payload: dict, cat_token: str = Cookie(default="")) -> JSONRespo
         return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
     err, room = yahtzee_web.say(str(payload.get("code", "")).strip(), qq,
                                 payload.get("text"), _nick_of(qq))
+    if err:
+        return JSONResponse({"ok": False, "msg": err}, status_code=400)
+    return JSONResponse({"ok": True, "room": room})
+
+
+# ==================== Can't Stop 网页版 ====================
+
+@app.get("/api/cantstop/rooms")
+def cantstop_rooms(cat_token: str = Cookie(default="")) -> JSONResponse:
+    if _auth_qq(cat_token) is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    return JSONResponse({"ok": True, "rooms": cantstop_web.list_rooms()})
+
+
+@app.get("/api/cantstop/mine")
+def cantstop_mine(cat_token: str = Cookie(default="")) -> JSONResponse:
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    return JSONResponse({"ok": True, "code": cantstop_web.my_room(qq)})
+
+
+@app.post("/api/cantstop/create")
+def cantstop_create(cat_token: str = Cookie(default="")) -> JSONResponse:
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    code, err = cantstop_web.create_room(qq, _nick_of(qq))
+    if err:
+        return JSONResponse({"ok": False, "msg": err}, status_code=400)
+    return JSONResponse({"ok": True, "code": code})
+
+
+@app.post("/api/cantstop/join")
+def cantstop_join(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    code = str(payload.get("code", "")).strip()
+    err = cantstop_web.join_room(code, qq, _nick_of(qq))
+    if err:
+        return JSONResponse({"ok": False, "msg": err}, status_code=400)
+    return JSONResponse({"ok": True, "code": code})
+
+
+@app.post("/api/cantstop/cancel")
+def cantstop_cancel(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    err = cantstop_web.cancel_room(str(payload.get("code", "")).strip(), qq)
+    if err:
+        return JSONResponse({"ok": False, "msg": err}, status_code=400)
+    return JSONResponse({"ok": True})
+
+
+@app.post("/api/cantstop/rematch")
+def cantstop_rematch(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    code, err = cantstop_web.rematch(str(payload.get("code", "")).strip(), qq)
+    if err:
+        return JSONResponse({"ok": False, "msg": err}, status_code=400)
+    return JSONResponse({"ok": True, "code": code})
+
+
+@app.get("/api/cantstop/state")
+def cantstop_state(code: str, cat_token: str = Cookie(default="")) -> JSONResponse:
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    room = cantstop_web.snapshot(code, qq)
+    if room is None:
+        return JSONResponse({"ok": False, "msg": "房间不存在或已结束喵"}, status_code=404)
+    return JSONResponse({"ok": True, "room": room})
+
+
+@app.post("/api/cantstop/action")
+def cantstop_action(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    code = str(payload.get("code", "")).strip()
+    action = str(payload.get("action", "")).strip()
+    err, room = cantstop_web.act(code, qq, action, payload)
     if err:
         return JSONResponse({"ok": False, "msg": err}, status_code=400)
     return JSONResponse({"ok": True, "room": room})

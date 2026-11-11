@@ -1113,7 +1113,9 @@ code { background: #120f0d; border: 1px solid var(--line); border-radius: 6px; p
 }
 .cs-chip.cs-active { border-color: var(--gold); color: var(--text); }
 
-.cs-log { max-height: 150px; overflow-y: auto; font-size: 13px; color: var(--text-dim); line-height: 1.7; }
+.cs-rules summary { cursor: pointer; font-size: 15px; font-weight: 700; }
+.cs-rules summary:hover { color: var(--gold); }
+.cs-rules[open] summary { margin-bottom: 4px; }
 
 @media (max-width: 640px) {
   .cs-board { gap: 2px; }

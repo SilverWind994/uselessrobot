@@ -2684,6 +2684,298 @@ wireChat('yz', '/api/yahtzee/say', () => yzCode, yzMsg);
 wireChat('mj', '/api/mahjong17/say', () => mjCode, mjMsg);
 wireChat('gold', '/api/mahjong_gold/say', () => goldCode, goldMsg);
 
+// ==================== Can't Stop 网页版（同屏轮流） ====================
+
+const csPanel = document.getElementById('cantstop-panel');
+const csSetupEl = document.getElementById('cs-setup');
+const csGameEl = document.getElementById('cs-game');
+const csBoardEl = document.getElementById('cs-board');
+const csDiceEl = document.getElementById('cs-dice');
+const csPairsEl = document.getElementById('cs-pairs');
+const csTurnEl = document.getElementById('cs-turn');
+const csHintEl = document.getElementById('cs-hint');
+const csMsgEl = document.getElementById('cs-msg');
+const csLogEl = document.getElementById('cs-log');
+const csLegendEl = document.getElementById('cs-legend');
+const csRollBtn = document.getElementById('btn-cs-roll');
+const csStopBtn = document.getElementById('btn-cs-stop');
+
+const CS_SUMS = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+// 每列需要走到的格数：2 与 12 最短，7 最长
+const CS_HEIGHTS = {
+  2: 3, 3: 5, 4: 7, 5: 9, 6: 11, 7: 13, 8: 11, 9: 9, 10: 7, 11: 5, 12: 3,
+};
+const CS_MAX_MARKERS = 3;
+const CS_WIN_COLUMNS = 3;
+
+let csState = null;
+let csTimer = null;
+
+function csLog(text) {
+  csState.log.push(text);
+  if (csState.log.length > 60) csState.log = csState.log.slice(-60);
+}
+
+function csPlayer() {
+  return csState.players[csState.turn];
+}
+
+function csOwner(sum) {
+  return csState.players.findIndex((p) => p.claimed.includes(sum));
+}
+
+function csLater(fn, ms) {
+  clearTimeout(csTimer);
+  csTimer = setTimeout(fn, ms);
+}
+
+function csPairings(dice) {
+  const [a, b, c, d] = dice;
+  return [[a + b, c + d], [a + c, b + d], [a + d, b + c]];
+}
+
+// 在临时标记的副本上模拟一次落子，判断这组配对是否可行
+function csPairLegal(sums) {
+  const active = Object.assign({}, csState.active);
+  const p = csPlayer();
+  const step = (sum) => {
+    if (csOwner(sum) >= 0) return false;
+    if (active[sum] !== undefined) {
+      if (active[sum] >= CS_HEIGHTS[sum]) return false;
+      active[sum] += 1;
+      // 到顶就占下这一列，临时标记收回，后面的配对还能继续用
+      if (active[sum] >= CS_HEIGHTS[sum]) delete active[sum];
+      return true;
+    }
+    if (Object.keys(active).length >= CS_MAX_MARKERS) return false;
+    active[sum] = (p.progress[sum] || 0) + 1;
+    if (active[sum] >= CS_HEIGHTS[sum]) delete active[sum];   // 直接封顶也算占下
+    return true;
+  };
+  return step(sums[0]) && (sums[1] === sums[0] || step(sums[1]));
+}
+
+function csApplyPairing(sums) {
+  const p = csPlayer();
+  const targets = sums[1] === sums[0] ? [sums[0]] : [sums[0], sums[1]];
+  const done = [];
+  targets.forEach((sum) => {
+    if (csState.active[sum] === undefined) {
+      csState.active[sum] = (p.progress[sum] || 0) + 1;
+    } else {
+      csState.active[sum] += 1;
+    }
+    if (csState.active[sum] >= CS_HEIGHTS[sum]) {
+      // 到顶即占下这一列，临时标记收回
+      delete csState.active[sum];
+      p.progress[sum] = CS_HEIGHTS[sum];
+      if (!p.claimed.includes(sum)) p.claimed.push(sum);
+      csLog(`${p.name} 走到 ${sum} 列顶格，占下这一列！`);
+      done.push(`${sum}（占下）`);
+    } else {
+      done.push(`${sum}→第 ${csState.active[sum]} 格`);
+    }
+  });
+  if (p.claimed.length >= CS_WIN_COLUMNS) {
+    csState.phase = 'over';
+    csState.winner = csState.turn;
+    csState.pairs = [];
+    csLog(`🏆 ${p.name} 占满 ${CS_WIN_COLUMNS} 列，赢下本局！`);
+    csNotice(`🏆 ${p.name} 获胜！`, true);
+    return;
+  }
+  csState.phase = 'continue';
+  csNotice(`${p.name} 落子：${done.join('、')}`, true);
+}
+
+function csRoll() {
+  if (!csState || csState.phase === 'over') return;
+  if (csState.phase !== 'idle' && csState.phase !== 'continue') return;
+  const dice = Array.from({ length: 4 }, () => 1 + Math.floor(Math.random() * 6));
+  csState.dice = dice;
+  const seen = new Set();
+  const legal = [];
+  csPairings(dice).forEach((sums) => {
+    const key = sums.slice().sort((x, y) => x - y).join('+');
+    if (seen.has(key) || !csPairLegal(sums)) return;
+    seen.add(key);
+    legal.push(sums);
+  });
+  if (!legal.length) {
+    const p = csPlayer();
+    csState.phase = 'bust';
+    csState.pairs = [];
+    csState.active = {};
+    csLog(`${p.name} 掷出 ${dice.join(' ')}，配不出可落子的列，本回合进度清零`);
+    csNotice('爆掉！本回合的临时进度全部作废', false);
+    csRender();
+    csLater(csNextTurn, 900);
+    return;
+  }
+  csState.pairs = legal;
+  csState.phase = 'rolled';
+  csNotice(legal.length === 1 ? '只有一种配对可选' : '选一组配对落子', true);
+  csRender();
+}
+
+function csStop() {
+  if (!csState || csState.phase !== 'continue') return;
+  const p = csPlayer();
+  const banked = Object.keys(csState.active).map(Number);
+  if (!banked.length) return;
+  banked.sort((a, b) => a - b).forEach((sum) => {
+    p.progress[sum] = Math.max(p.progress[sum] || 0, csState.active[sum]);
+  });
+  csLog(`${p.name} 收手，落定 ${banked.map((sum) => `${sum} 列第 ${p.progress[sum]} 格`).join('、')}`);
+  csNotice(`${p.name} 收手，进度已落定`, true);
+  csState.active = {};
+  csState.phase = 'banked';
+  csRender();
+  csLater(csNextTurn, 600);
+}
+
+function csNextTurn() {
+  if (!csState || csState.phase === 'over') return;
+  csState.turn = (csState.turn + 1) % csState.players.length;
+  csState.dice = [];
+  csState.pairs = [];
+  csState.active = {};
+  csState.phase = 'idle';
+  csLog(`—— 轮到 ${csPlayer().name} ——`);
+  csNotice('', false);
+  csRender();
+}
+
+function csNotice(text, ok) {
+  csMsgEl.textContent = text || '';
+  csMsgEl.classList.toggle('ok', !!ok);
+}
+
+function csBoardHtml() {
+  return CS_SUMS.map((sum) => {
+    const height = CS_HEIGHTS[sum];
+    const owner = csOwner(sum);
+    const cells = [];
+    for (let pos = height; pos >= 1; pos--) {
+      const dots = csState.players.map((pl, i) => {
+        const temp = i === csState.turn && csState.active[sum] === pos;
+        const perm = (pl.progress[sum] || 0) === pos;
+        if (!temp && !perm) return '';
+        return `<span class="cs-dot cs-p${i}${temp ? ' cs-temp' : ''}"></span>`;
+      }).join('');
+      cells.push(`<div class="cs-cell">${dots}</div>`);
+    }
+    const claim = owner >= 0 ? ` title="${esc(csState.players[owner].name)} 已占下"` : '';
+    return `<div class="cs-col${owner >= 0 ? ' cs-claimed' : ''}"${claim}>`
+      + `<div class="cs-cells">${cells.join('')}</div>`
+      + `<div class="cs-col-num${owner >= 0 ? ' cs-p' + owner : ''}">${sum}</div>`
+      + '</div>';
+  }).join('');
+}
+
+function csRender() {
+  if (!csState) return;
+  const p = csPlayer();
+  const hints = {
+    idle: '掷 4 颗骰子，选一组配对落子',
+    rolled: '选一组配对落子',
+    continue: '可以继续掷，也可以收手把临时进度落定',
+    bust: '配不出可落子的列，本回合进度作废',
+    banked: '进度已落定，换下一位',
+    over: '本局结束，点「重开一局」再来',
+  };
+  csTurnEl.textContent = csState.phase === 'over'
+    ? `🏆 ${csState.players[csState.winner].name} 获胜`
+    : `轮到 ${p.name}`;
+  csHintEl.textContent = hints[csState.phase] || '';
+
+  csDiceEl.innerHTML = '';
+  csState.dice.forEach((value) => {
+    csDiceEl.appendChild(dieEl({ value, fill: '#fff', outline: '#b9b2a6' }, { small: true }));
+  });
+
+  csPairsEl.innerHTML = '';
+  if (csState.phase === 'rolled') {
+    csState.pairs.forEach((sums) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'btn btn-ghost btn-sm cs-pair';
+      btn.textContent = `${sums[0]} + ${sums[1]}`;
+      btn.addEventListener('click', () => {
+        csApplyPairing(sums);
+        csRender();
+      });
+      csPairsEl.appendChild(btn);
+    });
+  }
+
+  csRollBtn.textContent = csState.phase === 'continue' ? '继续掷' : '掷骰子';
+  csRollBtn.disabled = !(csState.phase === 'idle' || csState.phase === 'continue');
+  csStopBtn.disabled = csState.phase !== 'continue';
+  csBoardEl.innerHTML = csBoardHtml();
+  csLegendEl.innerHTML = csState.players.map((pl, i) => {
+    const active = i === csState.turn && csState.phase !== 'over';
+    return `<span class="cs-chip${active ? ' cs-active' : ''}">`
+      + `<span class="cs-dot cs-p${i}"></span>${esc(pl.name)}`
+      + ` · ${pl.claimed.length}/${CS_WIN_COLUMNS} 列</span>`;
+  }).join('');
+  csLogEl.innerHTML = csState.log.map((line) => `<div>${esc(line)}</div>`).join('');
+  csLogEl.scrollTop = csLogEl.scrollHeight;
+}
+
+function csStartGame() {
+  const count = Math.min(4, Math.max(2, parseInt(document.getElementById('cs-count').value, 10) || 2));
+  csState = {
+    players: Array.from({ length: count }, (_, i) => ({
+      name: `玩家${i + 1}`, progress: {}, claimed: [],
+    })),
+    turn: 0,
+    dice: [],
+    pairs: [],
+    active: {},
+    phase: 'idle',
+    winner: null,
+    log: [`—— 轮到 玩家1 ——`],
+  };
+  csSetupEl.classList.add('hidden');
+  csGameEl.classList.remove('hidden');
+  csNotice('', false);
+  csRender();
+}
+
+function csReset() {
+  clearTimeout(csTimer);
+  csTimer = null;
+  csState = null;
+  csGameEl.classList.add('hidden');
+  csSetupEl.classList.remove('hidden');
+}
+
+function enterCantStop() {
+  loginPanel.classList.add('hidden');
+  homePanel.classList.add('hidden');
+  pwdPanel.classList.add('hidden');
+  csPanel.classList.remove('hidden');
+  if (csState) {
+    csSetupEl.classList.add('hidden');
+    csGameEl.classList.remove('hidden');
+    csRender();
+  } else {
+    csSetupEl.classList.remove('hidden');
+    csGameEl.classList.add('hidden');
+  }
+}
+
+document.getElementById('btn-cantstop').addEventListener('click', enterCantStop);
+document.getElementById('btn-cs-back').addEventListener('click', () => {
+  closeGamePanels();
+  refresh();
+});
+document.getElementById('btn-cs-start').addEventListener('click', csStartGame);
+document.getElementById('btn-cs-reset').addEventListener('click', csReset);
+csRollBtn.addEventListener('click', csRoll);
+csStopBtn.addEventListener('click', csStop);
+
 // ==================== 顶部导航（喵喵远征队 / 小游戏 / 个人 / 开发中 / 管理） ====================
 
 const mainNav = document.getElementById('main-nav');
@@ -2711,6 +3003,7 @@ function closeGamePanels() {
   yzPanel.classList.add('hidden');
   mjPanel.classList.add('hidden');
   goldPanel.classList.add('hidden');
+  csPanel.classList.add('hidden');
   hideChat('fk');
   hideChat('yz');
   hideChat('mj');

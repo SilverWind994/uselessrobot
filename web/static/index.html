@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>串子小车 · 网页端</title>
-  <link rel="stylesheet" href="/static/style.css?v=33">
+  <link rel="stylesheet" href="/static/style.css?v=34">
 </head>
 <body>
   <div class="bg-glow"></div>
@@ -238,6 +238,11 @@
             <div class="game-name">麻酱宝藏</div>
             <div class="game-desc">印加宝藏麻将版，翻牌押运 · 2~5 人 · 5 轮</div>
             <button id="btn-gold" class="btn btn-primary btn-sm" type="button">进入大厅</button>
+          </div>
+          <div class="card game-card">
+            <div class="game-name">Can't Stop</div>
+            <div class="game-desc">4 颗骰子两两配对，3 枚临时标记，先占满 3 列获胜 · 2~4 人同屏</div>
+            <button id="btn-cantstop" class="btn btn-primary btn-sm" type="button">进入游戏</button>
           </div>
         </div>
       </section>
@@ -1002,6 +1007,83 @@
         </form>
       </div>
     </section>
+
+    <!-- Can't Stop 网页版（同屏轮流） -->
+    <section id="cantstop-panel" class="hidden">
+      <div class="card panel-head">
+        <div>
+          <div class="panel-title">Can't Stop</div>
+          <div class="panel-sub">2~4 人同屏轮流 · 4 颗骰子两两配对 · 先占满 3 列获胜</div>
+        </div>
+        <button id="btn-cs-back" class="btn btn-ghost" type="button">返回主页</button>
+      </div>
+
+      <!-- 开局设置 -->
+      <div id="cs-setup">
+        <div class="card create-card">
+          <div class="panel-title">开始游戏</div>
+          <div class="create-row">
+            <label class="field inline">
+              <span>人数</span>
+              <select id="cs-count">
+                <option value="2">2 人</option>
+                <option value="3">3 人</option>
+                <option value="4">4 人</option>
+              </select>
+            </label>
+            <button id="btn-cs-start" class="btn btn-primary" type="button">开始游戏</button>
+          </div>
+          <p class="hint">同一台设备轮流操作，不需要其他人联网；随时可以点「重开一局」重新选人数。</p>
+        </div>
+
+        <div class="card mg-rules">
+          <div class="panel-title">规则速览</div>
+          <ol class="mg-rule-list">
+            <li>每回合掷 4 颗骰子，两两相加得到两个和，选择其中一组配对落子。</li>
+            <li>同时最多用 3 枚临时标记；两个和落在同一列时只前进一格，一列最多放一枚。</li>
+            <li>可以一直掷下去，也可以随时「收手」把临时进度变成永久进度。</li>
+            <li>掷出的骰子配不出任何可落子的列，本回合临时进度全部作废。</li>
+            <li>某列走到顶格即归你所有，该列对其他人关闭；先占满 3 列的人获胜。</li>
+          </ol>
+        </div>
+      </div>
+
+      <!-- 对局中 -->
+      <div id="cs-game" class="hidden">
+        <div class="card">
+          <div class="panel-head">
+            <div>
+              <div id="cs-turn" class="panel-title">轮到 玩家1</div>
+              <div id="cs-hint" class="panel-sub">掷骰子开始回合</div>
+            </div>
+            <div id="cs-dice" class="dice-row cs-dice"></div>
+          </div>
+          <div id="cs-pairs" class="cs-pairs"></div>
+          <div class="create-row cs-actions">
+            <button id="btn-cs-roll" class="btn btn-primary" type="button">掷骰子</button>
+            <button id="btn-cs-stop" class="btn btn-ghost" type="button">收手落子</button>
+            <button id="btn-cs-reset" class="btn btn-ghost" type="button">重开一局</button>
+          </div>
+          <p id="cs-msg" class="msg"></p>
+        </div>
+
+        <div class="card">
+          <div class="panel-head">
+            <div>
+              <div class="panel-title">棋盘</div>
+              <div class="panel-sub">亮边圆点是本回合的临时标记，实心圆点是已落定的进度</div>
+            </div>
+          </div>
+          <div id="cs-board" class="cs-board"></div>
+          <div id="cs-legend" class="cs-legend"></div>
+        </div>
+
+        <div class="card">
+          <div class="panel-title">回合记录</div>
+          <div id="cs-log" class="cs-log"></div>
+        </div>
+      </div>
+    </section>
   </main>
 
   <!-- 喵喵详情弹层 -->
@@ -1065,6 +1147,6 @@
 
   <footer class="foot">串子小车 · 网页端</footer>
 
-  <script src="/static/app.js?v=53"></script>
+  <script src="/static/app.js?v=54"></script>
 </body>
 </html>

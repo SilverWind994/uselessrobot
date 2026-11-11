@@ -1044,4 +1044,82 @@ code { background: #120f0d; border: 1px solid var(--line); border-radius: 6px; p
 .feedback-btn.is-on { color: var(--gold); border-color: var(--gold); }
 .feedback-reply-input { flex: 1; min-width: 160px; }
 
+/* ==================== Can't Stop 网页版 ==================== */
+
+.cs-board {
+  display: grid;
+  grid-template-columns: repeat(11, 1fr);
+  gap: 5px;
+  align-items: end;
+  margin: 14px 0 4px;
+}
+.cs-col { display: flex; flex-direction: column; gap: 3px; }
+.cs-cells { display: flex; flex-direction: column; gap: 3px; }
+.cs-cell {
+  min-height: 16px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 1px 2px;
+  background: #120f0d;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+.cs-claimed .cs-cell { opacity: .32; border-style: dashed; }
+.cs-col-num {
+  margin-top: 2px;
+  padding: 2px 0;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-dim);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.cs-col-num.cs-p0 { background: #e0a92c; border-color: #e0a92c; color: #2a1d06; }
+.cs-col-num.cs-p1 { background: #4d9fd6; border-color: #4d9fd6; color: #0b1c28; }
+.cs-col-num.cs-p2 { background: #58b368; border-color: #58b368; color: #0c2012; }
+.cs-col-num.cs-p3 { background: #d3564d; border-color: #d3564d; color: #2a0c0a; }
+
+.cs-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+.cs-p0 { background: #e0a92c; }
+.cs-p1 { background: #4d9fd6; }
+.cs-p2 { background: #58b368; }
+.cs-p3 { background: #d3564d; }
+.cs-dot.cs-temp {
+  outline: 2px solid #f2e9dd;
+  outline-offset: 1px;
+  transform: scale(1.12);
+}
+
+.cs-dice { margin-bottom: 0; min-height: 34px; }
+.cs-pairs { display: flex; flex-wrap: wrap; gap: 10px; margin: 14px 0 2px; }
+.cs-pair { font-size: 15px; padding: 8px 18px; }
+.cs-actions { margin-top: 12px; }
+.cs-actions .btn { width: auto; }
+
+.cs-legend { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.cs-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 99px;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+.cs-chip.cs-active { border-color: var(--gold); color: var(--text); }
+
+.cs-log { max-height: 150px; overflow-y: auto; font-size: 13px; color: var(--text-dim); line-height: 1.7; }
+
+@media (max-width: 640px) {
+  .cs-board { gap: 2px; }
+  .cs-dot { width: 7px; height: 7px; }
+  .cs-cell { min-height: 13px; padding: 0 1px; gap: 1px; }
+  .cs-col-num { font-size: 11px; }
+}
+
 

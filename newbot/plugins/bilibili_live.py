@@ -152,6 +152,19 @@ def _log(text: str) -> None:
         pass
 
 
+def _duration_text(seconds: int) -> str:
+    """把直播秒数写成「X 小时 Y 分钟」，不足一分钟单独说明"""
+    minutes = max(0, int(seconds)) // 60
+    if minutes < 1:
+        return "不足 1 分钟"
+    hours, minutes = divmod(minutes, 60)
+    if hours and minutes:
+        return f"{hours} 小时 {minutes} 分钟"
+    if hours:
+        return f"{hours} 小时"
+    return f"{minutes} 分钟"
+
+
 def _parse_live_time(value) -> int:
     """live_time 可能是时间戳、日期字符串，未开播时是 '0000-00-00 00:00:00'"""
     if isinstance(value, (int, float)):
@@ -316,6 +329,11 @@ class BilibiliLivePlugin:
         else:
             lines = ["【B站下播】" + (title_name if options.get("anchor") else "一场直播结束了")]
             lines.append("本次直播已结束")
+            start_at = info.get("live_time") or 0
+            if start_at:
+                elapsed = int(time.time()) - int(start_at)
+                if elapsed > 0:
+                    lines.append(f"直播时长：{_duration_text(elapsed)}")
             if options.get("link"):
                 lines.append(link)
         return "\n".join(line for line in lines if line.strip())

@@ -4,7 +4,7 @@
 每人轮流掷 4 颗骰子，把骰子两两配对后落子。每回合最多 3 枚临时标记，可以一直
 掷到爆掉或主动收手；某列走到顶格即被占下、对其他人关闭，先占满 3 列者获胜。
 
-爆掉（三种配对都配不出可落子的列）时本回合临时进度全部作废。
+爆掉（所有配对都走不了任何一列）时本回合临时进度全部作废。
 """
 
 import random
@@ -36,7 +36,7 @@ class Room:
         self.turn = 0
         self.stage = "idle"           # idle / rolled / continue
         self.dice = []
-        self.pairs = []
+        self.moves = []
         self.active = {}              # 本回合临时标记：{列和: 已走到的格}
         self.winner = None
         self.result_lines = []
@@ -76,30 +76,59 @@ class Room:
         a, b, c, d = dice
         return [[a + b, c + d], [a + c, b + d], [a + d, b + c]]
 
-    def _pair_legal(self, sums) -> bool:
-        """在临时标记的副本上模拟一次落子，判断这组配对是否可行"""
-        active = dict(self.active)
-        player = self.players[self.turn]
-
-        def step(total: int) -> bool:
-            if self._claimed_by(total) >= 0:
-                return False
-            if total in active:
-                if active[total] >= HEIGHTS[total]:
-                    return False
-                active[total] += 1
-                # 到顶就占下这一列，临时标记收回，后面的配对还能继续用
-                if active[total] >= HEIGHTS[total]:
-                    del active[total]
-                return True
-            if len(active) >= MAX_MARKERS:
-                return False
-            active[total] = player["progress"].get(total, 0) + 1
+    def _sim_step(self, active: dict, total: int) -> bool:
+        """在给定的临时标记副本上走一格（就地修改 active），走不了返回 False"""
+        if self._claimed_by(total) >= 0:
+            return False
+        if total in active:
             if active[total] >= HEIGHTS[total]:
-                del active[total]   # 直接封顶也算占下
+                return False
+            active[total] += 1
+            # 到顶就占下这一列，临时标记收回，后面的配对还能继续用
+            if active[total] >= HEIGHTS[total]:
+                del active[total]
             return True
+        if len(active) >= MAX_MARKERS:
+            return False
+        active[total] = self.players[self.turn]["progress"].get(total, 0) + 1
+        if active[total] >= HEIGHTS[total]:
+            del active[total]   # 直接封顶也算占下
+        return True
 
-        return step(sums[0]) and (sums[1] == sums[0] or step(sums[1]))
+    def _simulate(self, order):
+        """按顺序模拟落子，全部可行返回结果临时标记，否则返回 None"""
+        active = dict(self.active)
+        for total in order:
+            if not self._sim_step(active, total):
+                return None
+        return active
+
+    def _moves(self) -> list:
+        """当前骰子的所有可用落子：单列 [x] 或双列 [x, y]"""
+        moves = []
+        seen = set()
+
+        def add(order) -> None:
+            key = tuple(sorted(order))
+            if key in seen:
+                return
+            seen.add(key)
+            moves.append(sorted(order))
+
+        for a, b in self._pairings(self.dice):
+            # 只走一列也允许，所以每个能单独走的列都单独列出来
+            for total in ((a,) if a == b else (a, b)):
+                if self._simulate([total]) is not None:
+                    add([total])
+            if a == b:
+                continue
+            order = [a, b]
+            if self._simulate(order) is None:
+                order = [b, a]
+            if self._simulate(order) is not None:
+                add(order)
+        moves.sort(key=lambda m: (len(m), m))
+        return moves
 
     # ==================== 开局 / 加入 ====================
 
@@ -126,7 +155,7 @@ class Room:
         self.turn = 0
         self.stage = "idle"
         self.dice = []
-        self.pairs = []
+        self.moves = []
         self.active = {}
         names = "、".join(p["name"] for p in self.players)
         self._log(f"对局开始：{names}（{len(self.players)} 人）")
@@ -151,46 +180,47 @@ class Room:
         if err:
             return err
         if self.stage == "rolled":
-            return "先选一组配对落子喵"
+            return "先选一种落子喵"
         p = self.players[self.turn]
         dice = [random.randint(1, 6) for _ in range(4)]
         self.dice = dice
-        seen = set()
-        legal = []
-        for sums in self._pairings(dice):
-            key = tuple(sorted(sums))
-            if key in seen or not self._pair_legal(sums):
-                continue
-            seen.add(key)
-            legal.append(list(sums))
+        legal = self._moves()
         if not legal:
             self._log(f"{p['name']} 掷出 {' '.join(str(v) for v in dice)}，"
                       f"配不出可落子的列，本回合临时进度作废")
             self._next_turn()
             return None
-        self.pairs = legal
+        self.moves = legal
         self.stage = "rolled"
         self._log(f"{p['name']} 掷出 {' '.join(str(v) for v in dice)}")
         self._touch()
         return None
 
-    def pair(self, qq: int, sums):
+    def move(self, qq: int, sums):
         if self.phase != "playing":
             return "现在没有进行中的对局喵"
         err = self._guard_turn(qq)
         if err:
             return err
         if self.stage != "rolled":
-            return "现在没有等待落子的配对喵"
+            return "现在没有等待落子的选择喵"
         try:
-            a, b = int(sums[0]), int(sums[1])
-        except (TypeError, ValueError, IndexError, KeyError):
-            return "配对不对喵"
-        if not any(sorted([a, b]) == sorted(s) for s in self.pairs):
-            return "这组配对不能落子喵"
+            order = [int(v) for v in sums]
+        except (TypeError, ValueError):
+            return "落子选择不对喵"
+        if len(order) == 2 and order[0] == order[1]:
+            order = [order[0]]
+        if len(order) not in (1, 2):
+            return "落子选择不对喵"
+        if sorted(order) not in [sorted(m) for m in self.moves]:
+            return "这组落子不能选喵"
+        if self._simulate(order) is None and len(order) == 2:
+            order = [order[1], order[0]]
+        if self._simulate(order) is None:
+            return "这组落子不能选喵"
         p = self.players[self.turn]
         done = []
-        for total in ([a] if a == b else [a, b]):
+        for total in order:
             if total in self.active:
                 self.active[total] += 1
             else:
@@ -205,7 +235,7 @@ class Room:
                 done.append(f"{total}（占下）")
             else:
                 done.append(f"{total}→第 {self.active[total]} 格")
-        self.pairs = []
+        self.moves = []
         self.stage = "continue"
         self._log(f"{p['name']} 落子：{'、'.join(done)}")
         if len(p["claimed"]) >= WIN_COLUMNS:
@@ -241,7 +271,7 @@ class Room:
                 break
         self.stage = "idle"
         self.dice = []
-        self.pairs = []
+        self.moves = []
         self.active = {}
         self._log(f"—— 轮到 {self.players[self.turn]['name']} ——")
         self._touch()
@@ -278,7 +308,7 @@ class Room:
         self.winner = winner["qq"] if winner else None
         self.stage = "idle"
         self.dice = []
-        self.pairs = []
+        self.moves = []
         self.active = {}
         head = f"🏆 {winner['name']} 获胜（{reason}）" if winner else "🏆 本局结束"
         self.result_lines = [head]
@@ -310,7 +340,7 @@ class Room:
             "turn": self.turn,
             "stage": self.stage,
             "dice": list(self.dice),
-            "pairs": self.pairs,
+            "moves": self.moves,
             "active": {str(k): v for k, v in self.active.items()},
             "my_index": mine,
             "is_player": mine >= 0,
@@ -465,8 +495,8 @@ def act(code: str, qq: int, action: str, payload: dict):
             err = room.start(qq)
         elif action == "roll":
             err = room.roll(qq)
-        elif action == "pair":
-            err = room.pair(qq, (payload or {}).get("sums") or [])
+        elif action == "move":
+            err = room.move(qq, (payload or {}).get("sums") or [])
         elif action == "stop":
             err = room.stop(qq)
         elif action == "leave":

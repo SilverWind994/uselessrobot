@@ -2695,10 +2695,10 @@ const csToast = document.getElementById('cs-toast');
 
 const CS_RULES = [
   '每回合掷 4 颗骰子，两两相加可得到 3 种配对，每种配对是两个列号和。',
-  '选一种配对落子：两个列各前进一格；两个和相同时只前进一格。',
+  '选一种配对落子：可以让两列各前进一格，也可以只让其中一列前进；两个和相同时只前进一格。',
   '本回合最多同时使用 3 枚临时标记：走到新列会占用一枚，已有标记的列只向前移动。',
   '落子后可以继续掷，也可以随时「收手」，把本回合的临时进度落定为永久进度。',
-  '三种配对都无法落子（列已被占下或临时标记不够）时爆掉，本回合临时进度全部作废并换人。',
+  '所有配对都走不了任何一列（列已被占下或临时标记不够）时爆掉，本回合临时进度全部作废并换人。',
   '某列走到顶格即被该玩家占下，其他人不能再走这一列；先占满 3 列者获胜。',
 ];
 const csRuleItems = CS_RULES.map((text) => `<li>${text}</li>`).join('');
@@ -2707,7 +2707,7 @@ document.getElementById('cs-lobby-rules').innerHTML = csRuleItems;
 
 const CS_STAGE_HINTS = {
   idle: '掷 4 颗骰子，再把骰子两两配对落子',
-  rolled: '选一组配对落子',
+  rolled: '选一种落子：两列一起走，或只走其中一列',
   continue: '可以继续掷，也可以收手把临时进度落定',
 };
 
@@ -2847,7 +2847,7 @@ async function csAct(action, extra) {
 
 function csSignature(r) {
   return JSON.stringify([
-    r.phase, r.turn, r.stage, r.dice, r.pairs, r.active,
+    r.phase, r.turn, r.stage, r.dice, r.moves, r.active,
     r.players.map((p) => [p.claimed, p.progress, p.left]),
     r.winner, r.log.length,
   ]);
@@ -3026,13 +3026,13 @@ function renderCsPlay(state) {
   const pairsEl = document.getElementById('cs-pairs');
   pairsEl.innerHTML = '';
   if (state.stage === 'rolled') {
-    state.pairs.forEach((sums) => {
+    state.moves.forEach((sums) => {
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'btn btn-ghost btn-sm cs-pair';
-      btn.textContent = `${sums[0]} + ${sums[1]}`;
+      btn.textContent = sums.length === 2 ? `${sums[0]} + ${sums[1]}` : `只走 ${sums[0]}`;
       btn.disabled = !state.is_turn;
-      btn.addEventListener('click', () => csAct('pair', { sums: sums }));
+      btn.addEventListener('click', () => csAct('move', { sums: sums }));
       pairsEl.appendChild(btn);
     });
   }

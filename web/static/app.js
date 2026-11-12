@@ -2695,7 +2695,7 @@ const csToast = document.getElementById('cs-toast');
 
 const CS_RULES = [
   '每回合掷 4 颗骰子，两两相加可得到 3 种配对，每种配对是两个列号和。',
-  '选一种配对落子：可以让两列各前进一格，也可以只让其中一列前进；两个和相同时只前进一格。',
+  '选一种配对落子：两列都能走时必须两列一起前进；只有另一列已被占下或临时标记不够时，才能只走剩下的一列。两个和相同时只前进一格。',
   '本回合最多同时使用 3 枚临时标记：走到新列会占用一枚，已有标记的列只向前移动。',
   '落子后可以继续掷，也可以随时「收手」，把本回合的临时进度落定为永久进度。',
   '所有配对都走不了任何一列（列已被占下或临时标记不够）时爆掉，本回合临时进度全部作废并换人。',
@@ -2707,7 +2707,7 @@ document.getElementById('cs-lobby-rules').innerHTML = csRuleItems;
 
 const CS_STAGE_HINTS = {
   idle: '掷 4 颗骰子，再把骰子两两配对落子',
-  rolled: '选一种落子：两列一起走，或只走其中一列',
+  rolled: '选择一种落子（能走两列时必须两列都走）',
   continue: '可以继续掷，也可以收手把临时进度落定',
 };
 
@@ -2848,8 +2848,9 @@ async function csAct(action, extra) {
 function csSignature(r) {
   return JSON.stringify([
     r.phase, r.turn, r.stage, r.dice, r.moves, r.active,
-    r.players.map((p) => [p.claimed, p.progress, p.left]),
+    r.players.map((p) => [p.claimed, p.progress, p.left, p.given_up]),
     r.winner, r.log.length,
+    (r.rematch_votes || []).join(','), r.next_code,
   ]);
 }
 
@@ -2879,6 +2880,7 @@ async function pollCsRoom() {
   if (status === 401) { clearInterval(csRoomTimer); csPanel.classList.add('hidden'); showLogin(); return; }
   if (status === 404) { csMsg('房间已结束喵'); backToCsLobby(); return; }
   if (status !== 200 || !data.ok) return;
+  if (data.room.next_code) { enterCsRoom(data.room.next_code); return; }
   const s = csSignature(data.room);
   if (s !== csSig) {
     csSig = s;
@@ -2946,6 +2948,7 @@ function buildCsRoomDom() {
     </div>
 
     <div class="actions">
+      <button id="cs-giveup" class="btn btn-ghost btn-sm">放弃本局</button>
       <button id="cs-leave" class="btn btn-ghost btn-sm">离开房间</button>
       <button id="cs-back-lobby" class="btn btn-ghost btn-sm">返回大厅</button>
     </div>`;
@@ -2953,6 +2956,11 @@ function buildCsRoomDom() {
   document.getElementById('cs-start').addEventListener('click', () => csAct('start'));
   document.getElementById('cs-cancel').addEventListener('click', cancelCsRoom);
   document.getElementById('cs-leave').addEventListener('click', leaveCsRoom);
+  document.getElementById('cs-giveup').addEventListener('click', () => {
+    if (window.confirm('确定放弃本局吗？放弃后不再轮到你行动，已占下的列仍然保留喵')) {
+      csAct('giveup');
+    }
+  });
   document.getElementById('cs-back-lobby').addEventListener('click', backToCsLobby);
   document.getElementById('btn-cs-roll').addEventListener('click', () => csAct('roll'));
   document.getElementById('btn-cs-stop').addEventListener('click', () => csAct('stop'));
@@ -2980,8 +2988,11 @@ function renderCsRoom(state) {
   fkToggle('cs-result', isOver);
 
   const spectator = !state.is_player;
+  const me = state.my_index >= 0 ? state.players[state.my_index] : null;
   document.getElementById('cs-spectate-badge').classList.toggle('hidden', !spectator);
   document.getElementById('cs-leave').classList.toggle('hidden', spectator);
+  document.getElementById('cs-giveup').classList.toggle('hidden',
+    !isPlay || spectator || (me && me.given_up));
   if (isWaiting) {
     document.getElementById('cs-count').textContent = state.players.length;
     document.getElementById('cs-start').classList.toggle('hidden', spectator || state.my_index !== 0);
@@ -3004,7 +3015,7 @@ function renderCsPlayers(state) {
       + (i === state.turn && state.phase === 'playing' ? ' active' : '')
       + (i === state.my_index ? ' you' : '');
     div.innerHTML = `<div class="pname">${esc(p.name)}${i === state.my_index ? '（你）' : ''}`
-      + `${p.left ? '（已离开）' : ''}</div>`
+      + `${p.left ? '（已离开）' : (p.given_up ? '（已放弃）' : '')}</div>`
       + `<div class="ptotal">${p.columns}/${state.win_columns} 列</div>`;
     wrap.appendChild(div);
   });
@@ -3012,10 +3023,17 @@ function renderCsPlayers(state) {
 
 function renderCsPlay(state) {
   const p = state.players[state.turn] || {};
+  const me = state.my_index >= 0 ? state.players[state.my_index] : null;
   const turnEl = document.getElementById('cs-turn');
-  turnEl.textContent = state.is_turn ? '轮到你行动' : `${p.name} 正在行动……`;
-  turnEl.classList.toggle('waiting', !state.is_turn);
-  document.getElementById('cs-hint').textContent = CS_STAGE_HINTS[state.stage] || '';
+  if (me && me.given_up) {
+    turnEl.textContent = '你已放弃本局，等待其他玩家结束';
+    turnEl.classList.add('waiting');
+    document.getElementById('cs-hint').textContent = '';
+  } else {
+    turnEl.textContent = state.is_turn ? '轮到你行动' : `${p.name} 正在行动……`;
+    turnEl.classList.toggle('waiting', !state.is_turn);
+    document.getElementById('cs-hint').textContent = CS_STAGE_HINTS[state.stage] || '';
+  }
 
   const diceEl = document.getElementById('cs-dice');
   diceEl.innerHTML = '';
@@ -3078,22 +3096,43 @@ function renderCsBoard(state) {
     const active = i === state.turn && state.phase === 'playing';
     return `<span class="cs-chip${active ? ' cs-active' : ''}">`
       + `<span class="cs-dot cs-p${i}"></span>${esc(p.name)}`
-      + ` · ${p.columns}/${state.win_columns} 列${p.left ? ' · 已离开' : ''}</span>`;
+      + ` · ${p.columns}/${state.win_columns} 列`
+      + `${p.left ? ' · 已离开' : (p.given_up ? ' · 已放弃' : '')}</span>`;
   }).join('');
 }
 
 function renderCsResult(state) {
   const lines = state.result_lines || [];
   const box = document.getElementById('cs-result');
+  const need = state.rematch_need || 0;
+  const voted = (state.rematch_votes || []).length;
+  let btn = '';
+  if (state.is_player && state.i_voted) {
+    btn = `<button class="btn btn-primary btn-sm" type="button" disabled>已同意，等待其他玩家（${voted}/${need}）</button>`;
+  } else if (state.is_player) {
+    btn = `<button class="btn btn-primary btn-sm cs-rematch" type="button">再来一局（${voted}/${need}）</button>`;
+  }
   box.innerHTML =
     '<div class="panel-title">对局结束</div>'
     + lines.map((l) => `<div class="line">${esc(l)}</div>`).join('')
-    + rematchButton('cs', state.is_player);
-  bindRematch(box, 'cs', rematchCs);
+    + btn;
+  const b = box.querySelector('.cs-rematch');
+  if (b) b.addEventListener('click', rematchCs);
 }
 
-function rematchCs() {
-  return rematchGame('/api/cantstop/rematch', csCode, csMsg, enterCsRoom);
+async function rematchCs() {
+  if (!csCode) return;
+  const { status, data } = await api('/api/cantstop/rematch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code: csCode }),
+  });
+  if (status === 200 && data.ok) {
+    if (data.code) enterCsRoom(data.code);
+    else pollCsRoom();       // 已记录同意，刷新进度后等待其他人
+    return;
+  }
+  csMsg(data.msg || '再来一局失败喵');
 }
 
 function renderCsLog(state) {

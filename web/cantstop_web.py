@@ -40,6 +40,8 @@ class Room:
         self.active = {}              # 本回合临时标记：{列和: 已走到的格}
         self.winner = None
         self.result_lines = []
+        self.rematch_votes = set()    # 已同意再来一局的玩家 QQ
+        self.next_code = None         # 全员同意后的新房间号
         self.log = []
         self.created_at = time.time()
         self.updated_at = time.time()
@@ -48,7 +50,12 @@ class Room:
 
     @staticmethod
     def _new_player(qq: int, name: str) -> dict:
-        return {"qq": qq, "name": name, "progress": {}, "claimed": [], "left": False}
+        return {"qq": qq, "name": name, "progress": {}, "claimed": [], "left": False,
+                "given_up": False}
+
+    @staticmethod
+    def _active_player(p) -> bool:
+        return not p["left"] and not p["given_up"]
 
     def _touch(self) -> None:
         self.updated_at = time.time()
@@ -104,7 +111,7 @@ class Room:
         return active
 
     def _moves(self) -> list:
-        """当前骰子的所有可用落子：单列 [x] 或双列 [x, y]"""
+        """当前骰子的所有可用落子：能走两列就必须走两列，只有一列可走时才单列"""
         moves = []
         seen = set()
 
@@ -116,17 +123,21 @@ class Room:
             moves.append(sorted(order))
 
         for a, b in self._pairings(self.dice):
-            # 只走一列也允许，所以每个能单独走的列都单独列出来
-            for total in ((a,) if a == b else (a, b)):
-                if self._simulate([total]) is not None:
-                    add([total])
             if a == b:
+                if self._simulate([a]) is not None:
+                    add([a])
                 continue
             order = [a, b]
             if self._simulate(order) is None:
                 order = [b, a]
             if self._simulate(order) is not None:
-                add(order)
+                add(order)      # 两列都能走时必须两列都走
+                continue
+            # 另一列走不了（已被占下/标记不够）时才允许只走一列
+            if self._simulate([a]) is not None:
+                add([a])
+            if self._simulate([b]) is not None:
+                add([b])
         moves.sort(key=lambda m: (len(m), m))
         return moves
 
@@ -267,7 +278,7 @@ class Room:
         n = len(self.players)
         for _ in range(n):
             self.turn = (self.turn + 1) % n
-            if not self.players[self.turn]["left"]:
+            if self._active_player(self.players[self.turn]):
                 break
         self.stage = "idle"
         self.dice = []
@@ -295,9 +306,33 @@ class Room:
         self._log(f"{p['name']} 离开了对局")
         if self.turn == idx:
             self.active = {}
-        remaining = [q for q in self.players if not q["left"]]
+        remaining = [q for q in self.players if self._active_player(q)]
         if len(remaining) <= 1:
             self._finalize(remaining[0] if remaining else None, "其他玩家都已离开")
+        elif self.turn == idx:
+            self._next_turn()
+        self._touch()
+        return None
+
+    def giveup(self, qq: int):
+        """中途放弃本局：不再参与轮转，留在房间里观战与参与再来一局投票"""
+        if self.phase != "playing":
+            return "现在没有进行中的对局喵"
+        idx = self._idx(qq)
+        if idx < 0:
+            return "你没有参与这局游戏喵"
+        p = self.players[idx]
+        if p["left"]:
+            return "你已经离开本局了喵"
+        if p["given_up"]:
+            return "你已经放弃过了喵"
+        p["given_up"] = True
+        self._log(f"{p['name']} 放弃了本局")
+        if self.turn == idx:
+            self.active = {}
+        remaining = [q for q in self.players if self._active_player(q)]
+        if len(remaining) <= 1:
+            self._finalize(remaining[0] if remaining else None, "其他玩家都已放弃")
         elif self.turn == idx:
             self._next_turn()
         self._touch()
@@ -313,7 +348,12 @@ class Room:
         head = f"🏆 {winner['name']} 获胜（{reason}）" if winner else "🏆 本局结束"
         self.result_lines = [head]
         for p in self.players:
-            tag = "（已离开）" if p["left"] else ""
+            if p["left"]:
+                tag = "（已离开）"
+            elif p["given_up"]:
+                tag = "（已放弃）"
+            else:
+                tag = ""
             self.result_lines.append(
                 f"{p['name']}{tag}：{len(p['claimed'])}/{WIN_COLUMNS} 列")
         for line in self.result_lines:
@@ -330,6 +370,7 @@ class Room:
                 "qq": p["qq"],
                 "name": p["name"],
                 "left": p["left"],
+                "given_up": p["given_up"],
                 "claimed": sorted(p["claimed"]),
                 "progress": {str(k): v for k, v in p["progress"].items()},
                 "columns": len(p["claimed"]),
@@ -352,6 +393,10 @@ class Room:
             "win_columns": WIN_COLUMNS,
             "winner": self.winner,
             "result_lines": self.result_lines,
+            "rematch_votes": sorted(self.rematch_votes),
+            "rematch_need": len([p for p in self.players if not p["left"]]),
+            "i_voted": qq in self.rematch_votes,
+            "next_code": self.next_code,
             "log": self.log[-40:],
         }
 
@@ -453,20 +498,36 @@ def cancel_room(code: str, qq: int):
 
 
 def rematch(code: str, qq: int):
-    """已结束的对局按原班人马重开一局，返回 (新房号, 错误文案)"""
+    """已结束的对局需全员同意才重开一局，返回 (新房号, 错误文案)。
+
+    同意人数不足时返回 (None, None)，客户端继续轮询等待；全员同意后旧房间
+    会记下新房间号，其他客户端轮询到时自动进入新房间。
+    """
     with _ROOMS_LOCK:
         _reap_locked()
         room = _ROOMS.get(code)
         if room is None or room.phase != "finished":
             return None, "只有已结束的对局才能再来一局喵"
-        if room._idx(qq) < 0:
+        mine = room._idx(qq)
+        if mine < 0:
             return None, "你不是本局玩家喵"
+        if room.players[mine]["left"]:
+            return None, "你已经离开本局了喵"
+        if room.next_code:
+            return room.next_code, None
         exist = _in_other_room_locked(qq)
         if exist:
             return exist, None
         alive = [p for p in room.players if not p["left"]]
         if len(alive) < MIN_PLAYERS:
             return None, f"至少 {MIN_PLAYERS} 人才能再来一局喵"
+        if qq not in room.rematch_votes:
+            room.rematch_votes.add(qq)
+            room._log(f"{room.players[mine]['name']} 同意再来一局"
+                      f"（{len(room.rematch_votes)}/{len(alive)}）")
+            room._touch()
+        if len(room.rematch_votes) < len(alive):
+            return None, None
         order = sorted(alive, key=lambda p: 0 if p["qq"] == qq else 1)
         new_code = _new_code()
         new_room = Room(new_code, order[0]["qq"], order[0]["name"])
@@ -474,6 +535,9 @@ def rematch(code: str, qq: int):
         for p in order[1:]:
             new_room.join(p["qq"], p["name"])
         new_room.start(new_room.players[0]["qq"])
+        room.next_code = new_code
+        room._log(f"全员同意，新对局 {new_code} 开始")
+        room._touch()
         return new_code, None
 
 
@@ -499,6 +563,8 @@ def act(code: str, qq: int, action: str, payload: dict):
             err = room.move(qq, (payload or {}).get("sums") or [])
         elif action == "stop":
             err = room.stop(qq)
+        elif action == "giveup":
+            err = room.giveup(qq)
         elif action == "leave":
             err = room.leave(qq)
         else:

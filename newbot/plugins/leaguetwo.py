@@ -26,7 +26,9 @@ LEAGUE_DIR = os.path.join(_BASE_DIR, "assets", "leaguetwo")
 API_BASE = "https://cdn.r-mj.com/api/data.php"
 COMPETITIONS = {220: "超级", 221: "主级", 222: "次级"}
 TIMEOUT = 20
-START_POINT_DEFAULT = 100000
+SCORE_UNIT = 10000                       # 10000 点 = 1 分（保留小数）
+RANK_POINTS = {1: 7, 2: 4, 3: 2, 4: 1}   # 单场顺位点
+INTERVAL_BONUS = 1                       # 每个区间净得分最高的队伍
 
 HELP_TEXT = (
     "立直联赛成绩指令（rmnl）\n"
@@ -94,7 +96,6 @@ def compute_standings(cid: int):
     name = admin.get("c_name") or f"cid={cid}"
 
     seat_count = 3 if str(admin.get("r_type")) in ("2", "5") else 4
-    start = int(admin.get("c_s_po") or START_POINT_DEFAULT)
 
     teams = _api("team", cid) or {}
     classes = _api("class", cid) or []
@@ -105,46 +106,102 @@ def compute_standings(cid: int):
             cls[str(item["rid"])] = item
 
     logs = _fetch_multi_log(cid, max_round)
-    stats = {}
+
+    # 每个 rid 是一组对阵，10 行 = 5 个区间（先鋒/次鋒/中堅/副將/大將）× 每区间 2 场
+    roster = [x for x in (admin.get("t_type") or "").splitlines() if x.strip()]
+    interval_count = max(1, len(roster) // 2) if roster else 5
+
+    games = []
+    rid_round = {}
     for rid, rows in logs.items():
         if not rows:
             continue
         cls_item = cls.get(str(rid))
         if not cls_item:
             continue
-        last = max(rows, key=lambda row: int(row.get("rowi") or 0))
+        rows = sorted(rows, key=lambda row: int(row.get("rowi") or 0))
+        interval_size = max(1, len(rows) // interval_count)
+        for row in rows:
+            round_no = int(row.get("round") or cls_item.get("round") or 0)
+            rid_round[str(rid)] = round_no
+            rowi = int(row.get("rowi") or 0)
+            interval = rowi // interval_size
 
-        points = []
-        for i in range(1, seat_count + 1):
-            try:
-                points.append(int(last.get(f"num{i}")))
-            except (TypeError, ValueError):
-                points.append(None)
+            # pint 为该场单局得失点，num 是组内累计点数（不能直接拿来算单场）
+            nets = []
+            for i in range(1, seat_count + 1):
+                try:
+                    nets.append(int(row.get(f"pint{i}")))
+                except (TypeError, ValueError):
+                    nets.append(None)
 
-        # 组内按最终点数降序决定名次
-        ranked = sorted(
-            ((i + 1, pts) for i, pts in enumerate(points) if pts is not None),
-            key=lambda item: item[1],
-            reverse=True,
-        )
-        pos_map = {index: pos for pos, (index, _) in enumerate(ranked, 1)}
-        round_no = int(last.get("round") or cls_item.get("round") or 0)
-
-        for i in range(1, seat_count + 1):
-            tid = str(cls_item.get(f"tid{i}") or "")
-            pts = points[i - 1]
-            if not tid or pts is None:
-                continue
-            tname = (teams.get(tid) or {}).get("t_name") or f"队伍{tid}"
-            rec = stats.setdefault(
-                tid, {"tid": tid, "tname": tname, "total": 0, "rounds": {}}
+            # 每场按单局得失点降序决定名次
+            ranked = sorted(
+                ((i + 1, net) for i, net in enumerate(nets) if net is not None),
+                key=lambda item: item[1],
+                reverse=True,
             )
-            rec["total"] += pts - start
-            rec["rounds"][round_no] = {
-                "net": pts - start,
-                "pos": pos_map.get(i, 0),
-                "pts": pts,
-            }
+            pos_map = {index: pos for pos, (index, _) in enumerate(ranked, 1)}
+
+            for i in range(1, seat_count + 1):
+                tid = str(cls_item.get(f"tid{i}") or "")
+                net = nets[i - 1]
+                if not tid or net is None:
+                    continue
+                tname = (teams.get(tid) or {}).get("t_name") or f"队伍{tid}"
+                games.append({
+                    "tid": tid, "tname": tname, "rid": str(rid),
+                    "round": round_no, "interval": interval,
+                    "net": net, "pos": pos_map.get(i, 0),
+                })
+
+    # 每个区间内按队伍累计净得分比较，最高的队伍 +1（并列都加）
+    interval_net = {}
+    for game in games:
+        key = (game["rid"], game["interval"], game["tid"])
+        interval_net[key] = interval_net.get(key, 0) + game["net"]
+    interval_best = {}
+    for (rid, interval, _), net in interval_net.items():
+        key = (rid, interval)
+        if key not in interval_best or net > interval_best[key]:
+            interval_best[key] = net
+    round_bonus = {}
+    for (rid, interval, tid), net in interval_net.items():
+        if net != interval_best[(rid, interval)]:
+            continue
+        key = (tid, rid_round.get(rid, 0))
+        round_bonus[key] = round_bonus.get(key, 0) + INTERVAL_BONUS
+
+    stats = {}
+    for game in games:
+        rec = stats.setdefault(
+            game["tid"],
+            {"tid": game["tid"], "tname": game["tname"], "total": 0.0, "rounds": {}},
+        )
+        # 每场：净得点 / 10000 + 顺位点 7/4/2/1；该场负分则记 0 分
+        if game["net"] < 0:
+            game_pt = 0.0
+        else:
+            game_pt = game["net"] / SCORE_UNIT + RANK_POINTS.get(game["pos"], 0)
+        round_rec = rec["rounds"].setdefault(
+            game["round"], {"net": 0, "pt": 0.0, "bonus": 0})
+        round_rec["net"] += game["net"]
+        round_rec["pt"] += game_pt
+        rec["total"] += game_pt
+
+    # 加上各区间第一名奖励
+    for (tid, round_no), bonus in round_bonus.items():
+        rec = stats.get(tid)
+        if not rec:
+            continue
+        round_rec = rec["rounds"].setdefault(
+            round_no, {"net": 0, "pt": 0.0, "bonus": 0})
+        round_rec["bonus"] += bonus
+        round_rec["pt"] += bonus
+        rec["total"] += bonus
+
+    for rec in stats.values():
+        rec["total"] = round(rec["total"], 2)
 
     rows = sorted(stats.values(), key=lambda rec: (-rec["total"], rec["tname"]))
     rank = 0
@@ -327,11 +384,14 @@ def render_standings(name: str, rounds, rows, path: str) -> str:
 
     table_rows = []
     for rec in rows:
-        line = [rec["rank"], rec["tname"], _signed(rec["total"])]
+        line = [rec["rank"], rec["tname"], f"{rec['total']:.2f}"]
         for round_no in rounds:
             item = rec["rounds"].get(round_no)
             if item:
-                line.extend([_signed(item["net"]), f"#{item['pos']} {item['pts']}"])
+                detail = f"净{_signed(item['net'])}"
+                if item["bonus"]:
+                    detail += f" 区间+{item['bonus']}"
+                line.extend([f"{item['pt']:.2f}", detail])
             else:
                 line.extend(["", ""])
         table_rows.append(line)

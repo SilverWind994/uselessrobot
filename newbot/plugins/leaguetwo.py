@@ -31,9 +31,10 @@ START_POINT_DEFAULT = 100000
 HELP_TEXT = (
     "立直联赛成绩指令（rmnl）\n"
     "立直联赛 超级 / 主级 / 次级 —— 查看对应级别的队伍排行\n"
-    "立直联赛 队员 <队伍ID或队名> —— 查看该队队员排行\n"
+    "立直联赛 队员 [超级|主级|次级] <队伍ID或队名> —— 查看该队队员排行\n"
+    "队伍名支持模糊匹配，匹配到多个时会列出候选供复制\n"
     "示例: 立直联赛 主级\n"
-    "示例: rmnl 队员 千里山\n"
+    "示例: rmnl 队员 主级 千里山\n"
     "旧指令 slt / l1t / l2t / l2p 仍可使用"
 )
 
@@ -158,20 +159,44 @@ def compute_standings(cid: int):
     return name, rounds, rows
 
 
-def find_team(keyword: str):
-    """按 222→221→220 查找队伍，支持 tid 或队名关键字。"""
+_LEVEL_WORDS = {
+    "超级": 220, "slt": 220, "220": 220,
+    "主级": 221, "l1t": 221, "221": 221,
+    "次级": 222, "l2t": 222, "222": 222,
+}
+
+
+def split_team_query(args: str):
+    """解析「[级别] 队伍关键字」，返回 (级别cid 或 None, 关键字)。"""
+    parts = (args or "").strip().split(None, 1)
+    if not parts:
+        return None, ""
+    cid = _LEVEL_WORDS.get(parts[0].lower())
+    if cid is not None:
+        return cid, parts[1].strip() if len(parts) > 1 else ""
+    return None, (args or "").strip()
+
+
+def find_teams(keyword: str, cid=None):
+    """在所有级别中按队名关键字或 tid 查找，返回 [(cid, tid, tname), ...]。
+
+    有精确匹配（完整队名或队伍ID）时只返回精确匹配，避免复制队名后仍被模糊命中。
+    """
     keyword = (keyword or "").strip()
     if not keyword:
-        return None
-    for cid in (222, 221, 220):
-        teams = _api("team", cid) or {}
+        return []
+    order = (cid,) if cid else (220, 221, 222)
+    found = []
+    for level in order:
+        teams = _api("team", level) or {}
         for tid, team in teams.items():
             if not isinstance(team, dict):
                 continue
             tname = team.get("t_name") or str(tid)
             if str(tid) == keyword or keyword in tname:
-                return cid, str(tid), tname
-    return None
+                found.append((level, str(tid), tname))
+    exact = [item for item in found if item[1] == keyword or item[2] == keyword]
+    return exact or found
 
 
 def compute_players(cid: int, tid: str):
@@ -364,7 +389,8 @@ class LeagueTwoPlugin:
             self._team_standings(ctx, 222)
         elif sub in ("队员", "队员排行") or sub_lower in ("player", "p"):
             if not rest:
-                self._sender.reply(ctx, "用法: 立直联赛 队员 <队伍ID或队名>")
+                self._sender.reply(
+                    ctx, "用法: 立直联赛 队员 [超级|主级|次级] <队伍ID或队名>")
                 return
             self._player_standings(ctx, rest)
         else:
@@ -382,7 +408,8 @@ class LeagueTwoPlugin:
     def cmd_player(self, ctx: CommandContext) -> None:
         keyword = ctx.get_args()
         if not keyword:
-            self._sender.reply(ctx, "用法: l2p <队伍ID或队名>")
+            self._sender.reply(
+                ctx, "用法: l2p [超级|主级|次级] <队伍ID或队名>")
             return
         self._player_standings(ctx, keyword)
 
@@ -405,18 +432,30 @@ class LeagueTwoPlugin:
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _player_standings(self, ctx: CommandContext, keyword: str) -> None:
+    def _player_standings(self, ctx: CommandContext, args: str) -> None:
         target = Target.from_data(ctx.raw_data)
+        cid, keyword = split_team_query(args)
+        if not keyword:
+            self._sender.reply(ctx, "请提供队伍ID或队名")
+            return
         self._sender.reply(ctx, "正在获取队员成绩…")
 
         def work():
             try:
-                found = find_team(keyword)
+                found = find_teams(keyword, cid)
                 if not found:
                     self._sender.send_text(target, f"没有找到队伍：{keyword}")
                     return
-                cid, tid, _ = found
-                team_name, rows = compute_players(cid, tid)
+                if len(found) > 1:
+                    lines = ["找到多个队伍，请复制完整队名或队伍ID重新查询："]
+                    for level, tid, tname in found:
+                        lines.append(
+                            f"{COMPETITIONS.get(level, level)} {tname} (ID: {tid})")
+                    lines.append("示例: 立直联赛 队员 <队伍ID>")
+                    self._sender.send_text(target, "\n".join(lines))
+                    return
+                cid_found, tid, _ = found[0]
+                team_name, rows = compute_players(cid_found, tid)
                 if not rows:
                     self._sender.send_text(target, "该队伍暂无队员成绩数据")
                     return

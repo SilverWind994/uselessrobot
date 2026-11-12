@@ -374,7 +374,13 @@ def render_standings(name: str, rounds, rows, path: str) -> str:
         line = [rec["rank"], rec["tname"], f"{rec['total']:.2f}"]
         for round_no in rounds:
             item = rec["rounds"].get(round_no)
-            line.append(item["final"] if item else "")
+            if not item:
+                line.append("")
+                continue
+            cell = str(item["final"])
+            if item["bonus"]:
+                cell += f" 区间+{item['bonus']}"
+            line.append(cell)
         table_rows.append(line)
 
     return render_table(f"{name} 队伍排行", headers, table_rows, path)

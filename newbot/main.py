@@ -25,6 +25,7 @@ from plugins.tournament import TournamentPlugin
 from plugins.cat_stock import CatStockPlugin
 from plugins.red_packet import RedPacketPlugin
 from plugins.bilibili_live import BilibiliLivePlugin
+from plugins.leaguetwo import LeagueTwoPlugin
 
 # AI 自动回复读取的群聊上下文条数
 GROUP_CHAT_CONTEXT_LEN = 20
@@ -106,6 +107,10 @@ class Bot:
         # B 站开播 / 下播提醒（私聊通知固定 QQ）
         self._bili_live = BilibiliLivePlugin(self._sender)
         self._bili_live.register(self._router)
+
+        # 立直联赛成绩（大凤林赛事数据）
+        self._leaguetwo = LeagueTwoPlugin(self._sender)
+        self._leaguetwo.register(self._router)
 
         # 何切阿瓦隆问答插件
         self._avalon = AvalonQuizPlugin(self._sender)

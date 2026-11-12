@@ -16,6 +16,7 @@ _RUNTIME_IMAGE_DIRS = [
     "tournament",         # 锦标赛：bracket_*.png
     "avalon",             # 何切阿瓦隆：question_*.png
     "cat_expedition/data/cache",  # 猫猫图鉴卡片缓存
+    "leaguetwo",          # 立直联赛：team_/player_*.png
 ]
 
 # 这些扩展名的文件才会被清理（避免误删 state.json 等）

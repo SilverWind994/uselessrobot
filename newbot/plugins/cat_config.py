@@ -91,8 +91,40 @@ class CatConfig:
     CAT_TERRAIN_TYPES = ["平原", "山地", "森林", "水域", "沼泽", "沙漠", "雪原", "火山", "洞窟", "遗迹", "天空", "深海",
                          "龙巢", "神殿", "古战场", "深渊裂隙", "水晶矿脉", "诅咒之地", "妖精之森"]
 
-    # 研究猫猫上限（初始值，可通过游戏内成长提升，实际值存在玩家存档）
-    CAT_INITIAL_RESEARCH_LIMIT = 3
+    # ==================== 遗物研究（全服共享） ====================
+    CAT_RELIC_RESEARCH_PATH = os.path.join(CAT_EXPEDITION_DIR, "relics.json")
+    CAT_RELIC_IMG_DIR = os.path.join(CAT_EXPEDITION_DIR, "relics")
+
+    # 研究力 = 基础值 + 该国猫猫稀有度折算（普通2/稀有3/史诗4/传说5）
+    CAT_RELIC_BASE_SCORE = 10
+    CAT_RELIC_RARITY_SCORE = {"normal": 2, "rare": 3, "epic": 4, "legend": 5}
+    # 成功率 = 研究力 ÷ 除数；进度进入当阶段最后 10% 时除数改为 10000
+    CAT_RELIC_DIVISOR = 1000
+    CAT_RELIC_FINAL_DIVISOR = 10000
+    CAT_RELIC_CRIT_CHANCE = 0.01      # 研究成功时的暴击概率
+    CAT_RELIC_CRIT_GAIN = 5           # 暴击额外进度
+    # 每个国家四件遗物，依次累计到以下进度随机解锁一件
+    CAT_RELIC_REQUIREMENTS = (100, 200, 400, 800)
+
+    # 遗物效果参数
+    CAT_RELIC_CODEX_REFUND_CHANCE = 0.01    # 光典誓言之匣：每次抽卡返还鱼干
+    CAT_RELIC_LENS_EYE_CHANCE = 0.01        # 月辉聚光镜：抽卡后额外获得 1 猫眼石
+    CAT_RELIC_SHIELD_CHANCE = 0.0001        # 曦座日轮圣盾：远征后不消耗当日次数
+    CAT_RELIC_SWORD_BONUS = 0.01            # 圣辉誓约长剑：远征战力额外 +1%
+
+    # 国家代码 -> 该国遗物（目前只开放圣辉教国）
+    CAT_RELICS = {
+        "au": [
+            {"id": "au_codex", "name": "光典誓言之匣", "icon": "光典誓言之匣",
+             "effect": "每次抽卡时 1% 概率返还该次抽卡的鱼干"},
+            {"id": "au_sword", "name": "圣辉誓约长剑", "icon": "圣辉誓约长剑",
+             "effect": "远征战力计算完毕后额外增加 1%"},
+            {"id": "au_shield", "name": "曦座日轮圣盾", "icon": "曦座日轮圣盾",
+             "effect": "万分之一概率远征后不消耗当日远征次数"},
+            {"id": "au_lens", "name": "月辉聚光镜", "icon": "月辉聚光镜",
+             "effect": "抽卡后 1% 概率额外获得 1 猫眼石"},
+        ],
+    }
 
     # ==================== 远征Boss系统 ====================
     CAT_EXPEDITION_DATA = os.path.join(CAT_EXPEDITION_DIR, "expedition.json")  # 全局远征状态

@@ -3549,8 +3549,8 @@ async function loadTeam() {
   const info = t.info;
   const rows = [
     ['喵喵', info.cats], ['满星', info.max_star], ['基础战力', info.base_power],
-    ['鱼干', info.fish], ['猫眼石', info.eye_stones], ['遗物', info.relics],
-    ['研究上限', info.research_limit], ['累计签到', info.signin_total],
+    ['鱼干', info.fish], ['猫眼石', info.eye_stones],
+    ['累计签到', info.signin_total],
     ['连续签到', info.signin_streak], ['累计抽喵', info.summon_count],
     ['远征次数', info.expedition_total], ['远征总伤害', info.expedition_damage],
   ];

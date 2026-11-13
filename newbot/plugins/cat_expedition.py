@@ -256,12 +256,12 @@ class CatExpeditionPlugin:
                 "signin_total": 0,
                 "summon_count": 0,
                 "deploy_team": [],
-                "research_limit": CatConfig.CAT_INITIAL_RESEARCH_LIMIT,
                 "collection": [],
                 "web_pwd_salt": "",   # 网页登录密码的盐与哈希（仅存哈希，不可回显）
                 "web_pwd_hash": "",
                 "signin_hidden_granted": 0,  # 累计签到已发放的隐秘喵喵只数
-                "insurance": None     # 喵保险保单：{tier, remaining}，None 表示没有
+                "insurance": None,    # 喵保险保单：{tier, remaining}，None 表示没有
+                "relic_research_date": None   # 遗物研究：上次研究的日期（每人每天一次）
             }
             self._save_players(players)
         return players[str(qq)]
@@ -364,9 +364,14 @@ class CatExpeditionPlugin:
             description="猫猫远征队·查看当前Boss信息"
         )
         router.register(
-            ["科研", "喵科研", "research", ".research"],
-            self.cmd_research,
-            description="猫猫远征队·科研"
+            ["遗物", "relic", "relics"],
+            self.cmd_relic,
+            description="猫猫远征队·查看各国遗物研究进度与解锁情况"
+        )
+        router.register(
+            ["研究遗物", "遗物研究", "relicresearch"],
+            self.cmd_relic_research,
+            description="猫猫远征队·消耗今日研究机会研究某国遗物"
         )
         router.register(
             ["喵图鉴", "catpedia", ".catpedia"],
@@ -558,7 +563,7 @@ class CatExpeditionPlugin:
             )
             return
 
-        results, cost, lucky, insurance = self._summon_batch_core(
+        results, cost, lucky, insurance, relic_events = self._summon_batch_core(
             player, count, pool_key, ctx.user_id)
         self._update_player(ctx.user_id, player)
 
@@ -569,6 +574,7 @@ class CatExpeditionPlugin:
         lines = [header]
         lines.extend(self._summon_result_lines(results))
         lines.extend(self._insurance_lines(insurance))
+        lines.extend(relic_events)
         lines.append(f"\n当前余额：{player['fish']} 鱼干 | 猫眼石：{player['eye_stones']}")
         self._sender.reply(ctx, "\n".join(lines))
 
@@ -596,7 +602,7 @@ class CatExpeditionPlugin:
     def _summon_batch_core(self, player: dict, count: int,
                            pool_key: Optional[str] = None, qq=None):
         """执行一次抽卡扣费与结算（就地修改 player），
-        返回 (results, total_cost, lucky, insurance_event)。调用方需自行保证鱼干足够。"""
+        返回 (results, total_cost, lucky, insurance, relic_events)。调用方需自行保证鱼干足够。"""
         total_cost = count * CatConfig.CAT_SUMMON_COST
         # 幸运：单抽有概率直接变成十连，仍只按 1 抽扣费
         lucky = (count == 1
@@ -605,15 +611,43 @@ class CatExpeditionPlugin:
         results = self._do_summon(player, draw_count, pool_key, qq)
         # 每次抽卡获得猫眼石（幸运十连只按实际付费抽数计）
         gained_eye = count * CatConfig.CAT_EYE_STONE_PER_SUMMON
+
+        # 遗物效果按付费抽数逐次判定（欧气十连不额外判定）
+        relic_events = []
+        refund_fish = 0
+        if self._relic_unlocked("au_codex"):
+            hits = sum(1 for _ in range(count)
+                       if random.random() < CatConfig.CAT_RELIC_CODEX_REFUND_CHANCE)
+            if hits:
+                refund_fish = hits * CatConfig.CAT_SUMMON_COST
+                relic_events.append(
+                    f"📜 光典誓言之匣发动 ×{hits}：返还 {refund_fish} 鱼干")
+        bonus_eye = 0
+        if self._relic_unlocked("au_lens"):
+            hits = sum(1 for _ in range(count)
+                       if random.random() < CatConfig.CAT_RELIC_LENS_EYE_CHANCE)
+            if hits:
+                bonus_eye = hits
+                relic_events.append(
+                    f"🔮 月辉聚光镜发动 ×{hits}：额外获得 {hits} 猫眼石")
+
         if qq is None:
             player["fish"] -= total_cost
-            player["eye_stones"] = player.get("eye_stones", 0) + gained_eye
+            player["fish"] += refund_fish
+            player["eye_stones"] = (player.get("eye_stones", 0)
+                                    + gained_eye + bonus_eye)
         else:
             self._change_currency(qq, player, "fish", -total_cost, "抽喵消耗")
+            if refund_fish:
+                self._change_currency(qq, player, "fish", refund_fish,
+                                      "光典誓言之匣返还鱼干")
             self._change_currency(qq, player, "eye_stones", gained_eye, "抽喵附赠猫眼石")
+            if bonus_eye:
+                self._change_currency(qq, player, "eye_stones", bonus_eye,
+                                      "月辉聚光镜额外猫眼石")
         player["summon_count"] = player.get("summon_count", 0) + count
         insurance = self._insurance_consume(player, count, results, lucky, qq)
-        return results, total_cost, lucky, insurance
+        return results, total_cost, lucky, insurance, relic_events
 
     # ==================== 喵保险 ====================
 
@@ -1036,8 +1070,6 @@ class CatExpeditionPlugin:
             f"⚔️ 基础战力：{self._team_base_power(player)}",
             f"🐟 鱼干：{player.get('fish', 0)}",
             f"💎 猫眼石：{player.get('eye_stones', 0)}",
-            f"🏺 遗物：{player.get('relics', 0)}",
-            f"🔬 研究猫猫上限：{player.get('research_limit', CatConfig.CAT_INITIAL_RESEARCH_LIMIT)}",
             f"📅 累计签到：{player.get('signin_total', 0)} 天"
             f"（连续 {player.get('signin_streak', 0)} 天）",
             f"🎴 累计抽喵：{player.get('summon_count', 0)} 次",
@@ -1167,6 +1199,12 @@ class CatExpeditionPlugin:
 
         total_power = int(base_total * (1 + total_bonus_ratio))
 
+        # 遗物·圣辉誓约长剑：战力结算完毕后额外 +1%
+        sword_bonus = 0
+        if self._relic_unlocked("au_sword"):
+            sword_bonus = max(1, int(total_power * CatConfig.CAT_RELIC_SWORD_BONUS))
+            total_power += sword_bonus
+
         if total_power <= 0:
             return ["你还没有喵喵喵～"]
 
@@ -1188,8 +1226,13 @@ class CatExpeditionPlugin:
             "damage": damage
         })
 
+        # 遗物·曦座日轮圣盾：万分之一概率本次远征不消耗当日次数
+        shield_saved = (self._relic_unlocked("au_shield")
+                        and random.random() < CatConfig.CAT_RELIC_SHIELD_CHANCE)
+
         # 更新玩家记录
-        player["last_expedition"] = today
+        if not shield_saved:
+            player["last_expedition"] = today
         player["expedition_total"] = player.get("expedition_total", 0) + 1
         player["expedition_damage"] = player.get("expedition_damage", 0) + damage
 
@@ -1198,32 +1241,38 @@ class CatExpeditionPlugin:
 
         # 判断是否通关
         if exp["boss_hp"] <= 0:
-            return self._handle_stage_clear(ctx, exp, stage_cfg, act_cfg)
-
-        hp_percent = exp["boss_hp"] / stage_cfg["boss_hp"] * 100
-        if hp_percent > 25:
-            # 血量>25%：显示详细伤害明细
-            lines = [
-                f"【远征】{act_cfg.get('name', '???')} 第{exp['stage']}关",
-                f"天气：{weather} | 地形：{terrain}",
-                f"基础战力：{base_total}",
-                "特性加成明细：",
-            ]
-            if detail_lines:
-                lines.extend(detail_lines)
+            lines = self._handle_stage_clear(ctx, exp, stage_cfg, act_cfg)
+        else:
+            hp_percent = exp["boss_hp"] / stage_cfg["boss_hp"] * 100
+            if hp_percent > 25:
+                # 血量>25%：显示详细伤害明细
+                lines = [
+                    f"【远征】{act_cfg.get('name', '???')} 第{exp['stage']}关",
+                    f"天气：{weather} | 地形：{terrain}",
+                    f"基础战力：{base_total}",
+                    "特性加成明细：",
+                ]
+                if detail_lines:
+                    lines.extend(detail_lines)
+                else:
+                    lines.append("  无匹配天气/地形的猫猫")
+                lines.append(f"总战力：{base_total}×{1+total_bonus_ratio:.2f}={total_power}，随机倍率：{ratio:.2f}")
+                if sword_bonus:
+                    lines.append(f"遗物加成：圣辉誓约长剑 +{sword_bonus} 战力")
+                crit_text = f"（⚡暴击 ×{CatConfig.CAT_EXPEDITION_CRIT_MULT}）" if is_crit else ""
+                lines.append(f"本次伤害：{damage}{crit_text}")
+                lines.append(f"Boss剩余血量：{exp['boss_hp']}/{stage_cfg['boss_hp']}（{hp_percent:.1f}%）")
             else:
-                lines.append("  无匹配天气/地形的猫猫")
-            lines.append(f"总战力：{base_total}×{1+total_bonus_ratio:.2f}={total_power}，随机倍率：{ratio:.2f}")
-            crit_text = f"（⚡暴击 ×{CatConfig.CAT_EXPEDITION_CRIT_MULT}）" if is_crit else ""
-            lines.append(f"本次伤害：{damage}{crit_text}")
-            lines.append(f"Boss剩余血量：{exp['boss_hp']}/{stage_cfg['boss_hp']}（{hp_percent:.1f}%）")
-            return lines
-        # 血量≤25%：只显示"???"，不说伤害
-        return [
-            f"【远征】{act_cfg.get('name', '???')} 第{exp['stage']}关",
-            f"天气：{weather} | 地形：{terrain}",
-            "Boss剩余血量：???",
-        ]
+                # 血量≤25%：只显示"???"，不说伤害
+                lines = [
+                    f"【远征】{act_cfg.get('name', '???')} 第{exp['stage']}关",
+                    f"天气：{weather} | 地形：{terrain}",
+                    "Boss剩余血量：???",
+                ]
+
+        if shield_saved:
+            lines.append("🛡️ 曦座日轮圣盾闪耀：本次远征没有消耗今日次数！")
+        return lines
 
     # ==================== 喵扫荡 ====================
 
@@ -1249,13 +1298,15 @@ class CatExpeditionPlugin:
         rarity_counts = {"legend": 0, "epic": 0, "rare": 0, "normal": 0}
         highlights = []
         insurance_notes = []
+        relic_notes = []
         MAX_SWEEP_DRAWS = 500   # 安全上限，防止极端返还导致长时间循环
         while player["fish"] >= cost and total_draws < MAX_SWEEP_DRAWS:
-            results, spent, lucky, insurance = self._summon_batch_core(
+            results, spent, lucky, insurance, relic_events = self._summon_batch_core(
                 player, 1, None, ctx.user_id)
             total_draws += 1
             total_got += len(results)
             total_spent += spent
+            relic_notes.extend(relic_events)
             if lucky:
                 lucky_times += 1
             if insurance and insurance.get("status") in ("paid", "failed"):
@@ -1310,6 +1361,10 @@ class CatExpeditionPlugin:
         if insurance_notes:
             lines.append("—— 喵保险 ——")
             lines.extend(insurance_notes)
+
+        if relic_notes:
+            lines.append("—— 遗物 ——")
+            lines.extend(relic_notes)
 
         # 抽卡结果立即落盘：远征可能因「今天已经远征过了」提前返回而不落盘
         self._update_player(ctx.user_id, player)
@@ -1576,9 +1631,280 @@ class CatExpeditionPlugin:
         data = _load_json(CatConfig.CAT_EXPEDITION_ACTS_PATH)
         return data.get(str(act), {})
 
-    def cmd_research(self, ctx: CommandContext) -> None:
-        """科研（占位）"""
-        self._sender.reply(ctx, "远征队还在准备中，敬请期待喵～ (=^･ω･^=)")
+    # ==================== 遗物研究（全服共享） ====================
+
+    @staticmethod
+    def _relic_usage() -> str:
+        return ("用法：遗物 —— 查看各国遗物解锁情况\n"
+                "遗物 <国家> —— 查看该国四件遗物与进度\n"
+                "研究遗物 <国家> —— 消耗今日研究机会（每人每天一次）\n"
+                "示例：遗物 圣辉教国 / 研究遗物 圣辉")
+
+    def _load_relics(self) -> dict:
+        """加载全服遗物研究进度"""
+        return _load_json(CatConfig.CAT_RELIC_RESEARCH_PATH)
+
+    def _save_relics(self, data: dict) -> None:
+        """保存全服遗物研究进度"""
+        _save_json(CatConfig.CAT_RELIC_RESEARCH_PATH, data)
+
+    @staticmethod
+    def _relic_country_state(data: dict, code: str) -> dict:
+        """取某国的研究进度，缺省时补默认字段（不落盘，由调用方保存）"""
+        state = data.setdefault("countries", {}).setdefault(
+            code, {"progress": 0, "unlocked": []})
+        state.setdefault("progress", 0)
+        state.setdefault("unlocked", [])
+        return state
+
+    def _relic_unlocked(self, relic_id: str) -> bool:
+        """该遗物是否已被全服解锁"""
+        data = self._load_relics()
+        for code in CatConfig.CAT_RELICS:
+            if relic_id in self._relic_country_state(data, code)["unlocked"]:
+                return True
+        return False
+
+    def _unlocked_relic_total(self):
+        """全服已解锁遗物数 / 遗物总数"""
+        data = self._load_relics()
+        unlocked = sum(len(self._relic_country_state(data, code)["unlocked"])
+                       for code in CatConfig.CAT_RELICS)
+        total = sum(len(items) for items in CatConfig.CAT_RELICS.values())
+        return unlocked, total
+
+    def _resolve_relic_country(self, text: str) -> Optional[str]:
+        """把国家代码 / 全名 / 名字片段解析成国家代码"""
+        key = (text or "").strip().lower()
+        if not key:
+            return None
+        if key in self._countries:
+            return key
+        for code, name in self._countries.items():
+            if key == name.lower():
+                return code
+        for code, name in self._countries.items():
+            if key in name.lower():
+                return code
+        return None
+
+    def _relic_cat_score(self, player: dict, code: str):
+        """玩家在该国的猫按稀有度折算研究力，返回 (总分, 各稀有度只数)"""
+        counts = {r: 0 for r in CatConfig.CAT_RELIC_RARITY_SCORE}
+        for owned in player.get("collection", []):
+            cat = self._find_pool_cat(owned.get("id", "")) or {}
+            if cat.get("country") != code:
+                continue
+            rarity = cat.get("rarity")
+            if rarity in counts:
+                counts[rarity] += 1
+        score = sum(counts[r] * CatConfig.CAT_RELIC_RARITY_SCORE[r] for r in counts)
+        return score, counts
+
+    def cmd_relic(self, ctx: CommandContext) -> None:
+        """遗物：总览；遗物 <国家>：查看该国进度；遗物 研究 <国家>：研究"""
+        arg = ctx.get_args().strip()
+        if arg.startswith("研究"):
+            self._relic_research_cmd(ctx, arg[2:].strip())
+            return
+        if not arg:
+            self._reply_relic_overview(ctx)
+            return
+        code = self._resolve_relic_country(arg)
+        if not code:
+            self._sender.reply(ctx, f"没找到国家「{arg}」。\n{self._relic_usage()}")
+            return
+        self._reply_relic_country(ctx, code)
+
+    def cmd_relic_research(self, ctx: CommandContext) -> None:
+        """研究遗物 <国家>：消耗当天唯一一次研究机会"""
+        self._relic_research_cmd(ctx, ctx.get_args().strip())
+
+    def _reply_relic_overview(self, ctx: CommandContext) -> None:
+        """各国遗物解锁总览"""
+        data = self._load_relics()
+        lines = ["【全服遗物】研究进度全服共享"]
+        for code, relics in CatConfig.CAT_RELICS.items():
+            name = self._countries.get(code, code)
+            state = self._relic_country_state(data, code)
+            unlocked = len(state["unlocked"])
+            if unlocked >= len(relics):
+                lines.append(f"{name}：遗物已全部解锁（{unlocked}/{len(relics)}）")
+            else:
+                need = CatConfig.CAT_RELIC_REQUIREMENTS[unlocked]
+                lines.append(f"{name}：{state['progress']}/{need} 进度"
+                             f"（已解锁 {unlocked}/{len(relics)}）")
+        closed = [self._countries.get(c, c) for c in self._countries
+                  if c not in CatConfig.CAT_RELICS]
+        if closed:
+            lines.append(f"暂未开放遗物的国家：{'、'.join(closed)}")
+        lines.append(self._relic_usage())
+        self._sender.reply(ctx, "\n".join(lines))
+
+    def _reply_relic_country(self, ctx: CommandContext, code: str) -> None:
+        """某国四件遗物的名称、需求、效果与解锁状态"""
+        relics = CatConfig.CAT_RELICS.get(code)
+        name = self._countries.get(code, code)
+        if not relics:
+            self._sender.reply(ctx, f"{name}暂时还没有遗物喵～\n{self._relic_usage()}")
+            return
+        state = self._relic_country_state(self._load_relics(), code)
+        unlocked = state["unlocked"]
+        lines = [f"【{name} · 遗物】研究进度 {state['progress']}"
+                 f"｜已解锁 {len(unlocked)}/{len(relics)}"]
+        for index, relic in enumerate(relics):
+            mark = "✅" if relic["id"] in unlocked else "🔒"
+            need = CatConfig.CAT_RELIC_REQUIREMENTS[index]
+            lines.append(f"{mark} {relic['name']}（第{index + 1}件，需 {need} 进度）\n"
+                         f"　{relic['effect']}")
+        lines.append("达到需求会随机解锁一件尚未获得的遗物")
+        lines.append(self._relic_usage())
+        self._sender.reply(ctx, "\n".join(lines))
+        try:
+            path = self._render_relic_panel(code, state)
+        except Exception:
+            return
+        if path:
+            self._sender.send_image(Target.from_data(ctx.raw_data), path)
+
+    def _relic_research_cmd(self, ctx: CommandContext, arg: str) -> None:
+        """解析国家并执行一次研究"""
+        if not arg:
+            self._sender.reply(ctx, "要研究哪个国家的遗物喵？\n" + self._relic_usage())
+            return
+        code = self._resolve_relic_country(arg)
+        if not code:
+            self._sender.reply(ctx, f"没找到国家「{arg}」。\n{self._relic_usage()}")
+            return
+        player = self._get_player(ctx.user_id)
+        self._sender.reply(ctx, "\n".join(self._relic_research_core(ctx.user_id, player, code)))
+
+    def _relic_research_core(self, qq: int, player: dict, code: str) -> List[str]:
+        """研究一次：成功率按该国猫猫稀有度折算，成功进度 +1，1% 暴击 +5"""
+        relics = CatConfig.CAT_RELICS.get(code)
+        name = self._countries.get(code, code)
+        if not relics:
+            return [f"{name}暂时还没有遗物喵～"]
+        data = self._load_relics()
+        state = self._relic_country_state(data, code)
+        if len(state["unlocked"]) >= len(relics):
+            return [f"{name}的遗物已经全部解锁喵～"]
+
+        today = date.today().isoformat()
+        if player.get("relic_research_date") == today:
+            return ["今天的研究机会已经用过了，明天再来喵～"]
+
+        target = CatConfig.CAT_RELIC_REQUIREMENTS[len(state["unlocked"])]
+        progress = int(state["progress"])
+        score, counts = self._relic_cat_score(player, code)
+        total_score = score + CatConfig.CAT_RELIC_BASE_SCORE
+        # 进度进入当前需求的最后 10% 时，除数从 1000 提高到 10000
+        final_stage = target - progress <= target * 0.1
+        divisor = (CatConfig.CAT_RELIC_FINAL_DIVISOR if final_stage
+                   else CatConfig.CAT_RELIC_DIVISOR)
+        chance = total_score / divisor
+
+        # 当天机会无论成败都会消耗
+        player["relic_research_date"] = today
+
+        breakdown = " ".join(
+            f"{CatConfig.CAT_RARITY_NAMES[r]}×{counts[r]}"
+            for r in ("normal", "rare", "epic", "legend") if counts[r])
+        lines = [
+            f"【遗物研究】{name}",
+            f"研究力：{CatConfig.CAT_RELIC_BASE_SCORE} + {score}"
+            + (f"（{breakdown}）" if breakdown else ""),
+            f"成功率：{chance * 100:.2f}%" + ("（最后 10% 阶段）" if final_stage else ""),
+            f"当前进度：{progress}/{target}",
+        ]
+
+        if random.random() >= chance:
+            lines.append("研究失败，这次没有进展喵～")
+            self._update_player(qq, player)
+            self._save_relics(data)
+            return lines
+
+        crit = random.random() < CatConfig.CAT_RELIC_CRIT_CHANCE
+        gain = CatConfig.CAT_RELIC_CRIT_GAIN if crit else 1
+        progress += gain
+        state["progress"] = progress
+        lines.append(f"研究成功！进度 +{gain}" + ("（💥 暴击）" if crit else ""))
+
+        # 到达需求随机解锁一件未获得的遗物，溢出的进度留给下一件
+        while len(state["unlocked"]) < len(relics):
+            need = CatConfig.CAT_RELIC_REQUIREMENTS[len(state["unlocked"])]
+            if progress < need:
+                break
+            locked = [r for r in relics if r["id"] not in state["unlocked"]]
+            if not locked:
+                break
+            relic = random.choice(locked)
+            state["unlocked"].append(relic["id"])
+            lines.append(f"🎉 解锁遗物：{relic['name']}\n　效果：{relic['effect']}")
+
+        if len(state["unlocked"]) < len(relics):
+            need = CatConfig.CAT_RELIC_REQUIREMENTS[len(state["unlocked"])]
+            lines.append(f"当前进度：{progress}/{need}")
+        else:
+            lines.append(f"当前进度：{progress}（该国遗物已全部解锁）")
+
+        self._update_player(qq, player)
+        self._save_relics(data)
+        return lines
+
+    def _render_relic_panel(self, code: str, state: dict):
+        """把某国四件遗物画成 2×2 面板，未解锁的图标压暗"""
+        relics = CatConfig.CAT_RELICS.get(code) or []
+        if not relics:
+            return None
+        width, height = 900, 830
+        margin, gap, header = 30, 20, 150
+        cell_w = (width - margin * 2 - gap) // 2
+        cell_h = 320
+        canvas = Image.new("RGBA", (width, height), (253, 249, 242, 255))
+        draw = ImageDraw.Draw(canvas)
+        draw.rectangle((6, 6, width - 7, height - 7), outline=(190, 165, 130), width=4)
+        name = self._countries.get(code, code)
+        self._center_text(draw, (0, 20, width, 92),
+                          f"{name} · 遗物", self._font(52), CAT_TEXT_RGB)
+        self._center_text(
+            draw, (0, 94, width, 138),
+            f"全服研究进度 {state.get('progress', 0)}｜已解锁 "
+            f"{len(state.get('unlocked', []))}/{len(relics)}",
+            self._font(30), (130, 110, 85))
+        unlocked = set(state.get("unlocked", []))
+        for index, relic in enumerate(relics):
+            row, col = divmod(index, 2)
+            x0 = margin + col * (cell_w + gap)
+            y0 = header + row * (cell_h + gap)
+            draw.rounded_rectangle((x0, y0, x0 + cell_w, y0 + cell_h), radius=18,
+                                   fill=(255, 255, 255, 255),
+                                   outline=(210, 190, 160), width=2)
+            icon_box = (x0 + 20, y0 + 16, x0 + cell_w - 20, y0 + 196)
+            icon = self._find_img(CatConfig.CAT_RELIC_IMG_DIR,
+                                  relic.get("icon") or relic["name"])
+            if icon:
+                self._paste_fit(canvas, icon, icon_box)
+                if relic["id"] not in unlocked:
+                    shade = Image.new("RGBA", (icon_box[2] - icon_box[0],
+                                               icon_box[3] - icon_box[1]),
+                                      (0, 0, 0, 150))
+                    canvas.alpha_composite(shade, (icon_box[0], icon_box[1]))
+            self._center_text(draw, (x0 + 10, y0 + 202, x0 + cell_w - 10, y0 + 244),
+                              relic["name"], self._font(34), CAT_TEXT_RGB)
+            if relic["id"] in unlocked:
+                status, color = "已解锁", (60, 130, 70)
+            else:
+                status = f"未解锁（第{index + 1}件需 {CatConfig.CAT_RELIC_REQUIREMENTS[index]}）"
+                color = (150, 110, 90)
+            self._center_text(draw, (x0 + 10, y0 + 246, x0 + cell_w - 10, y0 + 278),
+                              status, self._font(22), color)
+            self._draw_intro(draw, (x0 + 16, y0 + 280, x0 + cell_w - 16, y0 + cell_h - 10),
+                             relic["effect"], self._font(20), (110, 95, 80))
+        os.makedirs(CatConfig.CAT_CARD_CACHE_DIR, exist_ok=True)
+        path = os.path.join(CatConfig.CAT_CARD_CACHE_DIR, f"relic_{code}.png")
+        canvas.convert("RGB").save(path)
+        return path
 
     # ==================== 赠送 ====================
 

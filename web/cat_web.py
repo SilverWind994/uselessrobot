@@ -191,7 +191,6 @@ def cat_collection(qq: int) -> dict:
             "fish": player.get("fish", 0),
             "eye_stones": player.get("eye_stones", 0),
             "relics": player.get("relics", 0),
-            "research_limit": player.get("research_limit", CatConfig.CAT_INITIAL_RESEARCH_LIMIT),
             "signin_total": player.get("signin_total", 0),
             "signin_streak": player.get("signin_streak", 0),
             "summon_count": player.get("summon_count", 0),
@@ -348,7 +347,8 @@ def summon(qq: int, count, pool: str):
     if player.get("fish", 0) < total_cost:
         return f"鱼干不够啦！需要 {total_cost}，还差 {total_cost - player.get('fish', 0)} 鱼干 🐟", None
 
-    results, cost, lucky, insurance = _plugin._summon_batch_core(player, count, pool_key)
+    results, cost, lucky, insurance, relic_events = _plugin._summon_batch_core(
+        player, count, pool_key)
     _plugin._update_player(qq, player)
 
     return None, {
@@ -360,6 +360,7 @@ def summon(qq: int, count, pool: str):
         "summon_count": player.get("summon_count", 0),
         "insurance": _plugin.insurance_status(player),
         "insurance_event": _insurance_event_payload(insurance),
+        "relic_events": relic_events,
     }
 
 

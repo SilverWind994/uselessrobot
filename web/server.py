@@ -102,7 +102,6 @@ def _player_card(qq: int, player: dict) -> dict:
         "cats": len(player.get("collection", [])),
         "summon_count": player.get("summon_count", 0),
         "signin_total": player.get("signin_total", 0),
-        "research_limit": player.get("research_limit", 0),
         # 尚未设置密码时，默认密码就是 QQ 号，登录后需强制改密
         "must_change_pwd": not player.get("web_pwd_hash"),
         # 管理员才会看到「管理」导航页

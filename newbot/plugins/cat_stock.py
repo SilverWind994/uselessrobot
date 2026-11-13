@@ -6454,10 +6454,11 @@ class CatStockPlugin:
         bonds = market.get("bonds") or {}
 
         def account_wealth():
-            """统计持仓账户的财富，返回账户表、多空持仓与四项合计"""
+            """统计持仓账户的财富，返回账户表、资金流水、多空持仓与四项合计"""
             long_wealth: Dict[str, float] = {}
             short_wealth: Dict[str, float] = {}
             accounts_map: Dict[str, float] = {}
+            flows_map: Dict[str, int] = {}
             totals = [0.0, 0.0, 0.0, 0.0]  # 现金 / 持股 / 国债 / 空头权益
             holding_active = 0
             for key, st in players.items():
@@ -6510,26 +6511,42 @@ class CatStockPlugin:
                 totals[2] += bond_value
                 totals[3] += short_equity
                 accounts_map[str(key)] = cash + stock_value + bond_value + short_equity
-            return accounts_map, long_wealth, short_wealth, totals, holding_active
+                flows_map[str(key)] = int(st.get("deposit_catnip", 0) or 0) - int(
+                    st.get("withdraw_catnip", 0) or 0)
+            return accounts_map, flows_map, long_wealth, short_wealth, totals, holding_active
 
-        accounts, long_pos, short_pos, totals, active = account_wealth()
+        accounts, flows, long_pos, short_pos, totals, active = account_wealth()
         cash_total, stock_total, bond_total, short_total = totals
 
         wealth = cash_total + stock_total + bond_total + short_total
         per_capita = wealth / active if active else float(CAT_STOCK_INITIAL_CATNIP)
         now_ts = time.time()
         # 只比较这一小时前后都在场的持仓账户，避免有人进场或清仓离场时总额跳变
+        prev_economy = market.get("economy") or {}
         prev_accounts: Dict[str, float] = {}
-        for key, value in ((market.get("economy") or {}).get("accounts") or {}).items():
+        for key, value in (prev_economy.get("accounts") or {}).items():
             try:
                 prev_accounts[str(key)] = float(value)
+            except (TypeError, ValueError):
+                continue
+        prev_flows: Dict[str, int] = {}
+        for key, value in (prev_economy.get("flows") or {}).items():
+            try:
+                prev_flows[str(key)] = int(value)
             except (TypeError, ValueError):
                 continue
         shared = [k for k in accounts if k in prev_accounts]
         base_wealth = sum(prev_accounts[k] for k in shared)
         now_wealth = sum(accounts[k] for k in shared)
-        hour_gain = now_wealth - base_wealth
-        hourly_change = now_wealth / base_wealth - 1 if base_wealth > 1.0 else 0.0
+        # 充值、提现、转账都是外部资金进出，计算收益时先剔除，避免虚增本小时收益
+        flow_delta = 0
+        for k in shared:
+            if k not in prev_flows:
+                continue
+            flow_delta += flows.get(k, 0) - prev_flows[k]
+        hour_gain = now_wealth - base_wealth - flow_delta
+        hourly_change = ((now_wealth - flow_delta) / base_wealth - 1
+                         if base_wealth > 1.0 else 0.0)
 
         # 冷热判定看当日累计：只比较今天有开盘基准的账户
         today = now.strftime("%Y-%m-%d")
@@ -6554,8 +6571,15 @@ class CatStockPlugin:
             excluded = 0.0
             if isinstance(offset, dict) and offset.get("day") == today:
                 excluded = float(offset.get("value") or 0)
+            # 当日充值/提现/转账同样属于外部资金进出，不计入涨跌
+            dep_now = int((st or {}).get("deposit_catnip", 0) or 0)
+            wd_now = int((st or {}).get("withdraw_catnip", 0) or 0)
+            dep_base = day.get("deposit")
+            wd_base = day.get("withdraw")
+            dep_base = dep_now if dep_base is None else int(dep_base)
+            wd_base = wd_now if wd_base is None else int(wd_base)
             day_base += base
-            day_now += value - excluded
+            day_now += value - excluded - (dep_now - dep_base) + (wd_now - wd_base)
             shared_day += 1
         # 还没有当日开盘基准时（新存档、首次运行），退回按一小时的变化观察
         daily_change = day_now / day_base - 1 if day_base > 1.0 else hourly_change
@@ -6608,7 +6632,7 @@ class CatStockPlugin:
         details.sort(key=lambda d: abs(d["net"]), reverse=True)
 
         # 以调整后的价格重算账户财富，下一次比对不会把本轮调价当成新的涨跌
-        accounts, _, _, totals, active = account_wealth()
+        accounts, flows, _, _, totals, active = account_wealth()
         cash_total, stock_total, bond_total, short_total = totals
         wealth = cash_total + stock_total + bond_total + short_total
         per_capita = wealth / active if active else float(CAT_STOCK_INITIAL_CATNIP)
@@ -6626,7 +6650,7 @@ class CatStockPlugin:
             "bond_total": int(round(bond_total)), "short_total": int(round(short_total)),
             "drag": round(drag, 4), "support": round(support, 4),
             "adjusted": adjusted,
-            "details": details, "accounts": accounts, "at": now_ts,
+            "details": details, "accounts": accounts, "flows": flows, "at": now_ts,
         }
         market["economy"] = economy
         return economy

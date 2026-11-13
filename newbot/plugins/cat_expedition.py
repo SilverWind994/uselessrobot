@@ -349,7 +349,7 @@ class CatExpeditionPlugin:
         router.register(
             ["喵扫荡", "扫荡", "catsweep", ".catsweep"],
             self.cmd_sweep,
-            description="猫猫远征队·一键扫荡（签到+抽干鱼干+远征）"
+            description="猫猫远征队·一键扫荡（签到+抽干鱼干+远征+遗物研究）"
         )
 
         router.register(
@@ -1277,7 +1277,7 @@ class CatExpeditionPlugin:
     # ==================== 喵扫荡 ====================
 
     def cmd_sweep(self, ctx: CommandContext) -> None:
-        """一键扫荡：签到 → 循环抽全卡池直到鱼干不足 → 远征，合并为一条消息"""
+        """一键扫荡：签到 → 循环抽全卡池直到鱼干不足 → 远征 → 遗物研究，合并为一条消息"""
         player = self._get_player(ctx.user_id)
         name = ctx.user_name or f"玩家{ctx.user_id}"
         lines = [f"【喵扫荡】{name} 一键日常"]
@@ -1372,6 +1372,11 @@ class CatExpeditionPlugin:
         # —— 3. 远征 ——
         lines.append("—— 远征 ——")
         lines.extend(self._expedition_core(ctx, player))
+
+        # —— 4. 遗物研究（默认研究圣辉教国）——
+        lines.append("—— 遗物研究 ——")
+        player = self._peek_player(ctx.user_id) or player
+        lines.extend(self._relic_research_core(ctx.user_id, player, "au"))
 
         # 通关奖励可能已另行落盘，余额以重新读取为准
         final = self._peek_player(ctx.user_id) or player
@@ -1780,7 +1785,7 @@ class CatExpeditionPlugin:
         self._sender.reply(ctx, "\n".join(self._relic_research_core(ctx.user_id, player, code)))
 
     def _relic_research_core(self, qq: int, player: dict, code: str) -> List[str]:
-        """研究一次：成功率按该国猫猫稀有度折算，成功进度 +1，1% 暴击 +5"""
+        """研究一次：成功率按该国猫猫稀有度折算，成功进度 +1，并可触发尤里卡直接完成"""
         relics = CatConfig.CAT_RELICS.get(code)
         name = self._countries.get(code, code)
         if not relics:
@@ -1798,11 +1803,10 @@ class CatExpeditionPlugin:
         progress = int(state["progress"])
         score, counts = self._relic_cat_score(player, code)
         total_score = score + CatConfig.CAT_RELIC_BASE_SCORE
-        # 进度进入当前需求的最后 10% 时，除数从 1000 提高到 10000
-        final_stage = target - progress <= target * 0.1
-        divisor = (CatConfig.CAT_RELIC_FINAL_DIVISOR if final_stage
-                   else CatConfig.CAT_RELIC_DIVISOR)
-        chance = total_score / divisor
+        # 剩余进度 ≤ 100 时进入最终阶段：成功率改为「该国猫猫折算 ÷ 10000」
+        final_stage = target - progress <= CatConfig.CAT_RELIC_FINAL_REMAIN
+        chance = (score / CatConfig.CAT_RELIC_FINAL_DIVISOR if final_stage
+                  else total_score / CatConfig.CAT_RELIC_DIVISOR)
 
         # 当天机会无论成败都会消耗
         player["relic_research_date"] = today
@@ -1810,11 +1814,14 @@ class CatExpeditionPlugin:
         breakdown = " ".join(
             f"{CatConfig.CAT_RARITY_NAMES[r]}×{counts[r]}"
             for r in ("normal", "rare", "epic", "legend") if counts[r])
+        if final_stage:
+            score_text = f"研究力：{score}"
+        else:
+            score_text = f"研究力：{CatConfig.CAT_RELIC_BASE_SCORE} + {score}"
         lines = [
             f"【遗物研究】{name}",
-            f"研究力：{CatConfig.CAT_RELIC_BASE_SCORE} + {score}"
-            + (f"（{breakdown}）" if breakdown else ""),
-            f"成功率：{chance * 100:.2f}%" + ("（最后 10% 阶段）" if final_stage else ""),
+            score_text + (f"（{breakdown}）" if breakdown else ""),
+            f"成功率：{chance * 100:.2f}%" + ("（最终阶段 ÷10000）" if final_stage else ""),
             f"当前进度：{progress}/{target}",
         ]
 
@@ -1824,13 +1831,17 @@ class CatExpeditionPlugin:
             self._save_relics(data)
             return lines
 
-        crit = random.random() < CatConfig.CAT_RELIC_CRIT_CHANCE
-        gain = CatConfig.CAT_RELIC_CRIT_GAIN if crit else 1
-        progress += gain
+        progress += 1
+        lines.append("研究成功！进度 +1")
+
+        # 成功后再按 ÷10000 判定一次：成功触发尤里卡，直接完成本次研究
+        if random.random() < score / CatConfig.CAT_RELIC_FINAL_DIVISOR:
+            progress = max(progress, target)
+            lines.append("⚡ 尤里卡！灵感迸发，直接完成本次研究")
         state["progress"] = progress
-        lines.append(f"研究成功！进度 +{gain}" + ("（💥 暴击）" if crit else ""))
 
         # 到达需求随机解锁一件未获得的遗物，溢出的进度留给下一件
+        unlocked_any = False
         while len(state["unlocked"]) < len(relics):
             need = CatConfig.CAT_RELIC_REQUIREMENTS[len(state["unlocked"])]
             if progress < need:
@@ -1840,7 +1851,12 @@ class CatExpeditionPlugin:
                 break
             relic = random.choice(locked)
             state["unlocked"].append(relic["id"])
+            unlocked_any = True
             lines.append(f"🎉 解锁遗物：{relic['name']}\n　效果：{relic['effect']}")
+
+        if unlocked_any:
+            player["fish"] = player.get("fish", 0) + CatConfig.CAT_RELIC_COMPLETE_FISH
+            lines.append(f"🐟 研究完成奖励：{CatConfig.CAT_RELIC_COMPLETE_FISH} 鱼干")
 
         if len(state["unlocked"]) < len(relics):
             need = CatConfig.CAT_RELIC_REQUIREMENTS[len(state["unlocked"])]

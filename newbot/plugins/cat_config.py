@@ -98,11 +98,11 @@ class CatConfig:
     # 研究力 = 基础值 + 该国猫猫稀有度折算（普通2/稀有3/史诗4/传说5）
     CAT_RELIC_BASE_SCORE = 10
     CAT_RELIC_RARITY_SCORE = {"normal": 2, "rare": 3, "epic": 4, "legend": 5}
-    # 成功率 = 研究力 ÷ 除数；进度进入当阶段最后 10% 时除数改为 10000
+    # 成功率 = 研究力 ÷ 1000；剩余进度 ≤ 100 时改为「该国猫猫折算 ÷ 10000」
     CAT_RELIC_DIVISOR = 1000
     CAT_RELIC_FINAL_DIVISOR = 10000
-    CAT_RELIC_CRIT_CHANCE = 0.01      # 研究成功时的暴击概率
-    CAT_RELIC_CRIT_GAIN = 5           # 暴击额外进度
+    CAT_RELIC_FINAL_REMAIN = 100      # 进入最终阶段的剩余进度
+    CAT_RELIC_COMPLETE_FISH = 10000   # 每完成一次研究（解锁遗物）奖励完成者
     # 每个国家四件遗物，依次累计到以下进度随机解锁一件
     CAT_RELIC_REQUIREMENTS = (100, 200, 400, 800)
 

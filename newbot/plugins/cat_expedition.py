@@ -369,7 +369,7 @@ class CatExpeditionPlugin:
             description="猫猫远征队·查看各国遗物研究进度与解锁情况"
         )
         router.register(
-            ["研究遗物", "遗物研究", "relicresearch"],
+            ["喵研究", "研究喵", "relicresearch"],
             self.cmd_relic_research,
             description="猫猫远征队·消耗今日研究机会研究某国遗物"
         )
@@ -1642,8 +1642,8 @@ class CatExpeditionPlugin:
     def _relic_usage() -> str:
         return ("用法：遗物 —— 查看各国遗物解锁情况\n"
                 "遗物 <国家> —— 查看该国四件遗物与进度\n"
-                "研究遗物 <国家> —— 消耗今日研究机会（每人每天一次）\n"
-                "示例：遗物 圣辉教国 / 研究遗物 圣辉")
+                "喵研究 <国家> —— 消耗今日研究机会（每人每天一次）\n"
+                "示例：遗物 圣辉教国 / 喵研究 圣辉")
 
     def _load_relics(self) -> dict:
         """加载全服遗物研究进度"""
@@ -1722,7 +1722,7 @@ class CatExpeditionPlugin:
         self._reply_relic_country(ctx, code)
 
     def cmd_relic_research(self, ctx: CommandContext) -> None:
-        """研究遗物 <国家>：消耗当天唯一一次研究机会"""
+        """喵研究 <国家>：消耗当天唯一一次研究机会"""
         self._relic_research_cmd(ctx, ctx.get_args().strip())
 
     def _reply_relic_overview(self, ctx: CommandContext) -> None:

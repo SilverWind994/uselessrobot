@@ -98,13 +98,16 @@ class CatConfig:
     # 研究力 = 基础值 + 该国猫猫稀有度折算（普通2/稀有3/史诗4/传说5）
     CAT_RELIC_BASE_SCORE = 10
     CAT_RELIC_RARITY_SCORE = {"normal": 2, "rare": 3, "epic": 4, "legend": 5}
-    # 成功率 = 研究力 ÷ 1000；剩余进度 ≤ 100 时改为「该国猫猫折算 ÷ 10000」
+    # 成功率 = (基础值 + 该国猫猫折算) ÷ 1000（无论是否进入斩杀线）
     CAT_RELIC_DIVISOR = 1000
-    CAT_RELIC_FINAL_DIVISOR = 10000
-    CAT_RELIC_FINAL_REMAIN = 100      # 进入最终阶段的剩余进度
-    CAT_RELIC_COMPLETE_FISH = 10000   # 每完成一次研究（解锁遗物）奖励完成者
-    # 每个国家四件遗物，依次累计到以下进度随机解锁一件
-    CAT_RELIC_REQUIREMENTS = (200, 400, 600, 800)
+    # 尤里卡概率 = 该国猫猫折算 ÷ 10000；斩杀线前 +10 进度（最多到斩杀线），斩杀线后直接完成
+    CAT_RELIC_EUREKA_DIVISOR = 10000
+    CAT_RELIC_EUREKA_GAIN = 10        # 斩杀线前的尤里卡进度
+    CAT_RELIC_FINAL_REMAIN = 100      # 斩杀线：距离完成还剩 100 进度
+    CAT_RELIC_COMPLETE_FISH = 10000   # 完成者奖励
+    CAT_RELIC_OTHER_FISH = 2000       # 其他玩家奖励
+    # 每件遗物各自需要的进度；解锁后从 0 重新累计
+    CAT_RELIC_REQUIREMENTS = (200, 300, 400, 500)
 
     # 遗物效果参数
     CAT_RELIC_CODEX_REFUND_CHANCE = 0.01    # 光典誓言之匣：每次抽卡返还鱼干

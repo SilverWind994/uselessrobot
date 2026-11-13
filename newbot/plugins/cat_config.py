@@ -104,7 +104,7 @@ class CatConfig:
     CAT_RELIC_FINAL_REMAIN = 100      # 进入最终阶段的剩余进度
     CAT_RELIC_COMPLETE_FISH = 10000   # 每完成一次研究（解锁遗物）奖励完成者
     # 每个国家四件遗物，依次累计到以下进度随机解锁一件
-    CAT_RELIC_REQUIREMENTS = (100, 200, 400, 800)
+    CAT_RELIC_REQUIREMENTS = (200, 400, 600, 800)
 
     # 遗物效果参数
     CAT_RELIC_CODEX_REFUND_CHANCE = 0.01    # 光典誓言之匣：每次抽卡返还鱼干

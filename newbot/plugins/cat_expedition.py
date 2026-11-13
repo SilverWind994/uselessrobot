@@ -1755,13 +1755,19 @@ class CatExpeditionPlugin:
             return
         state = self._relic_country_state(self._load_relics(), code)
         unlocked = state["unlocked"]
+        by_id = {r["id"]: r for r in relics}
+        remaining = len(relics) - len(unlocked)
         lines = [f"【{name} · 遗物】研究进度 {state['progress']}"
                  f"｜已解锁 {len(unlocked)}/{len(relics)}"]
-        for index, relic in enumerate(relics):
-            mark = "✅" if relic["id"] in unlocked else "🔒"
-            need = CatConfig.CAT_RELIC_REQUIREMENTS[index]
-            lines.append(f"{mark} {relic['name']}（第{index + 1}件，需 {need} 进度）\n"
-                         f"　{relic['effect']}")
+        # 只展示已经研究出来的遗物（按随机解锁顺序），未解锁不暴露任何信息
+        for relic_id in unlocked:
+            relic = by_id.get(relic_id)
+            if relic:
+                lines.append(f"✅ {relic['name']}\n　{relic['effect']}")
+        if remaining > 0:
+            need = CatConfig.CAT_RELIC_REQUIREMENTS[len(unlocked)]
+            lines.append(f"🔒 还有 {remaining} 件遗物尚未研究出来"
+                         f"（下一件需累计 {need} 进度）")
         lines.append("达到需求会随机解锁一件尚未获得的遗物")
         lines.append(self._relic_usage())
         self._sender.reply(ctx, "\n".join(lines))
@@ -1869,7 +1875,7 @@ class CatExpeditionPlugin:
         return lines
 
     def _render_relic_panel(self, code: str, state: dict):
-        """把某国四件遗物画成 2×2 面板，未解锁的图标压暗"""
+        """把某国遗物画成 2×2 面板：已解锁按解锁顺序展示，未解锁只画未知占位"""
         relics = CatConfig.CAT_RELICS.get(code) or []
         if not relics:
             return None
@@ -1888,11 +1894,26 @@ class CatExpeditionPlugin:
             f"全服研究进度 {state.get('progress', 0)}｜已解锁 "
             f"{len(state.get('unlocked', []))}/{len(relics)}",
             self._font(30), (130, 110, 85))
-        unlocked = set(state.get("unlocked", []))
-        for index, relic in enumerate(relics):
+        by_id = {r["id"]: r for r in relics}
+        unlocked_ids = state.get("unlocked", [])
+        # 已解锁按解锁顺序（随机）在前，其余只留未知占位，不暴露图标/名称/效果
+        cells = [by_id[rid] for rid in unlocked_ids if rid in by_id]
+        cells.extend([None] * (len(relics) - len(cells)))
+        for index, relic in enumerate(cells):
             row, col = divmod(index, 2)
             x0 = margin + col * (cell_w + gap)
             y0 = header + row * (cell_h + gap)
+            if relic is None:
+                draw.rounded_rectangle((x0, y0, x0 + cell_w, y0 + cell_h), radius=18,
+                                       fill=(242, 237, 230, 255),
+                                       outline=(210, 190, 160), width=2)
+                self._center_text(draw, (x0 + 20, y0 + 70, x0 + cell_w - 20, y0 + 170),
+                                  "？？？", self._font(64), (160, 150, 140))
+                self._center_text(draw, (x0 + 10, y0 + 202, x0 + cell_w - 10, y0 + 244),
+                                  "未解锁", self._font(34), (150, 110, 90))
+                self._center_text(draw, (x0 + 10, y0 + 246, x0 + cell_w - 10, y0 + 278),
+                                  "研究进度达到后随机解锁", self._font(22), (150, 110, 90))
+                continue
             draw.rounded_rectangle((x0, y0, x0 + cell_w, y0 + cell_h), radius=18,
                                    fill=(255, 255, 255, 255),
                                    outline=(210, 190, 160), width=2)
@@ -1901,20 +1922,10 @@ class CatExpeditionPlugin:
                                   relic.get("icon") or relic["name"])
             if icon:
                 self._paste_fit(canvas, icon, icon_box)
-                if relic["id"] not in unlocked:
-                    shade = Image.new("RGBA", (icon_box[2] - icon_box[0],
-                                               icon_box[3] - icon_box[1]),
-                                      (0, 0, 0, 150))
-                    canvas.alpha_composite(shade, (icon_box[0], icon_box[1]))
             self._center_text(draw, (x0 + 10, y0 + 202, x0 + cell_w - 10, y0 + 244),
                               relic["name"], self._font(34), CAT_TEXT_RGB)
-            if relic["id"] in unlocked:
-                status, color = "已解锁", (60, 130, 70)
-            else:
-                status = f"未解锁（第{index + 1}件需 {CatConfig.CAT_RELIC_REQUIREMENTS[index]}）"
-                color = (150, 110, 90)
             self._center_text(draw, (x0 + 10, y0 + 246, x0 + cell_w - 10, y0 + 278),
-                              status, self._font(22), color)
+                              "已解锁", self._font(22), (60, 130, 70))
             self._draw_intro(draw, (x0 + 16, y0 + 280, x0 + cell_w - 16, y0 + cell_h - 10),
                              relic["effect"], self._font(20), (110, 95, 80))
         os.makedirs(CatConfig.CAT_CARD_CACHE_DIR, exist_ok=True)

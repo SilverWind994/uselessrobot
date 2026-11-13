@@ -2798,7 +2798,8 @@ class CatStockPlugin:
             pending = [dict(o) for o in (st.get("pending_orders") or [])]
             today = datetime.now().strftime("%Y-%m-%d")
             day_asset = st.get("day_asset")
-            if not isinstance(day_asset, dict) or day_asset.get("day") != today:
+            if (not isinstance(day_asset, dict) or day_asset.get("day") != today
+                    or "deposit" not in day_asset or "withdraw" not in day_asset):
                 day_asset = {"day": today,
                              "value": round(self._assets_of(
                                  st, market["companies"], market.get("bonds") or {}), 0),
@@ -5571,7 +5572,8 @@ class CatStockPlugin:
             raw_pending = [dict(o) for o in (st.get("pending_orders") or [])]
             today = datetime.now().strftime("%Y-%m-%d")
             day_asset = st.get("day_asset")
-            if not isinstance(day_asset, dict) or day_asset.get("day") != today:
+            if (not isinstance(day_asset, dict) or day_asset.get("day") != today
+                    or "deposit" not in day_asset or "withdraw" not in day_asset):
                 day_asset = {"day": today,
                              "value": round(self._assets_of(st, companies, bonds), 0),
                              "deposit": int(st.get("deposit_catnip", 0) or 0),
@@ -6563,6 +6565,9 @@ class CatStockPlugin:
             day = (st or {}).get("day_asset") or {}
             if not isinstance(day, dict) or day.get("day") != today:
                 continue
+            # 旧存档的当日基准没记流水快照，无法区分外部资金进出，不参与当日比对
+            if "deposit" not in day or "withdraw" not in day:
+                continue
             base = float(day.get("value") or 0)
             if base <= 0:
                 continue
@@ -6574,10 +6579,8 @@ class CatStockPlugin:
             # 当日充值/提现/转账同样属于外部资金进出，不计入涨跌
             dep_now = int((st or {}).get("deposit_catnip", 0) or 0)
             wd_now = int((st or {}).get("withdraw_catnip", 0) or 0)
-            dep_base = day.get("deposit")
-            wd_base = day.get("withdraw")
-            dep_base = dep_now if dep_base is None else int(dep_base)
-            wd_base = wd_now if wd_base is None else int(wd_base)
+            dep_base = int(day.get("deposit") or 0)
+            wd_base = int(day.get("withdraw") or 0)
             day_base += base
             day_now += value - excluded - (dep_now - dep_base) + (wd_now - wd_base)
             shared_day += 1

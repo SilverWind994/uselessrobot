@@ -323,6 +323,7 @@ def compute_players(level: str, pid: str):
     """返回 (队名, 队员统计行列表)。
 
     队员成绩按每个半庄的得失点统计；出场局数不同，因此按「每局平均得失点」排名。
+    队伍名单里没出场的队员也会列出，局数为 0，排在最后。
     """
     bundle = load_bundle(level)
     participants = bundle["participants"]
@@ -335,6 +336,14 @@ def compute_players(level: str, pid: str):
 
     stage_by_id = {s["id"]: s for s in (stages or []) if isinstance(s, dict)}
     stats = {}
+    # 先按队伍名单占位，没出场的队员也列出来（局数 0，排在最后）
+    for member in team.get("members") or []:
+        if member.get("removed"):
+            continue
+        nickname = member.get("nickname") or "未知"
+        stats.setdefault(
+            nickname, {"name": nickname, "total": 0, "games": 0,
+                       "cnt1": 0, "cnt2": 0, "cnt3": 0, "cnt4": 0})
 
     for match in matches:
         games = sorted((match.get("games") or []), key=lambda g: g.get("number") or 0)
@@ -366,6 +375,7 @@ def compute_players(level: str, pid: str):
             rec[f"cnt{min(max(rank, 1), 4)}"] += 1
 
     rows = sorted(stats.values(), key=lambda rec: (
+        rec["games"] == 0,
         -(rec["total"] / rec["games"] if rec["games"] else 0),
         -rec["total"], rec["name"]))
     return team.get("name") or pid, rows

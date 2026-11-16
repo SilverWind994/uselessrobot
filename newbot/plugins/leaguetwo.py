@@ -45,6 +45,7 @@ HELP_TEXT = (
     "立直联赛成绩指令（rmnl）\n"
     "立直联赛 超级 / 主级 / 次级 —— 查看对应级别的队伍排行\n"
     "立直联赛 队员 [超级|主级|次级] <队伍名> —— 查看该队队员排行\n"
+    "队员排行按每局平均得失点排序（出场局数不同也能横向比较）\n"
     "队伍名支持模糊匹配，匹配到多个时会列出候选供复制\n"
     "数据来源：arena.pesiu.org\n"
     "示例: 立直联赛 主级\n"
@@ -319,7 +320,10 @@ def compute_standings(level: str):
 
 
 def compute_players(level: str, pid: str):
-    """返回 (队名, 队员统计行列表)。队员成绩按每个半庄的得失点统计。"""
+    """返回 (队名, 队员统计行列表)。
+
+    队员成绩按每个半庄的得失点统计；出场局数不同，因此按「每局平均得失点」排名。
+    """
     bundle = load_bundle(level)
     participants = bundle["participants"]
     stages = bundle["stages"]
@@ -342,23 +346,28 @@ def compute_players(level: str, pid: str):
                     for p in (games[0].get("players") or [])}
         for game in games:
             scored = [p for p in (game.get("players") or []) if p.get("score") is not None]
+            # 本局得失点：用于个人统计的顺位（接力赛的累计分排名无法反映单局发挥）
+            deltas = {}
             for player in scored:
-                current = player["score"]
-                delta = current - previous.get(player.get("participantId"), start_points)
-                previous[player.get("participantId")] = current
-                if player.get("participantId") != pid:
-                    continue
-                nickname = (player.get("snapshot") or {}).get("nickname") or "未知"
-                rec = stats.setdefault(
-                    nickname, {"name": nickname, "total": 0,
-                               "cnt1": 0, "cnt2": 0, "cnt3": 0, "cnt4": 0})
-                rec["total"] += delta
-                rank = player.get("rank")
-                if not rank:
-                    rank = 1 + sum(1 for q in scored if q["score"] > current)
-                rec[f"cnt{min(max(rank, 1), 4)}"] += 1
+                key = player.get("participantId")
+                deltas[key] = player["score"] - previous.get(key, start_points)
+            previous.update({p.get("participantId"): p["score"] for p in scored})
+            if pid not in deltas:
+                continue
+            delta = deltas[pid]
+            player = next(p for p in scored if p.get("participantId") == pid)
+            nickname = (player.get("snapshot") or {}).get("nickname") or "未知"
+            rec = stats.setdefault(
+                nickname, {"name": nickname, "total": 0, "games": 0,
+                           "cnt1": 0, "cnt2": 0, "cnt3": 0, "cnt4": 0})
+            rec["total"] += delta
+            rec["games"] += 1
+            rank = 1 + sum(1 for value in deltas.values() if value > delta)
+            rec[f"cnt{min(max(rank, 1), 4)}"] += 1
 
-    rows = sorted(stats.values(), key=lambda rec: (-rec["total"], rec["name"]))
+    rows = sorted(stats.values(), key=lambda rec: (
+        -(rec["total"] / rec["games"] if rec["games"] else 0),
+        -rec["total"], rec["name"]))
     return team.get("name") or pid, rows
 
 
@@ -509,13 +518,18 @@ def render_standings(name: str, rounds, rows, path: str) -> str:
 
 
 def render_players(team_name: str, rows, path: str) -> str:
-    headers = ["队员", "总分", "1位次数", "2位次数", "3位次数", "4位次数"]
-    table_rows = [
-        [rec["name"], _signed(rec["total"]), rec["cnt1"], rec["cnt2"],
-         rec["cnt3"], rec["cnt4"]]
-        for rec in rows
-    ]
-    return render_table(f"{team_name} 队员统计", headers, table_rows, path)
+    headers = ["排名", "队员", "得分", "局数", "平均", "1位", "2位", "3位", "4位"]
+    table_rows = []
+    for index, rec in enumerate(rows, 1):
+        games = rec.get("games") or 0
+        average = rec["total"] / games if games else 0
+        table_rows.append([
+            index, rec["name"], _signed(rec["total"]), games,
+            (f"{average:+.1f}" if average else "0"),
+            rec["cnt1"], rec["cnt2"], rec["cnt3"], rec["cnt4"],
+        ])
+    return render_table(
+        f"{team_name} 队员统计（按每局平均得分排名）", headers, table_rows, path)
 
 
 # ==================== 插件 ====================

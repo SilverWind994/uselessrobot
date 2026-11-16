@@ -108,7 +108,7 @@ class Bot:
         self._bili_live = BilibiliLivePlugin(self._sender)
         self._bili_live.register(self._router)
 
-        # 立直联赛成绩（大凤林赛事数据）
+        # 立直联赛成绩（arena.pesiu.org 赛事数据）
         self._leaguetwo = LeagueTwoPlugin(self._sender)
         self._leaguetwo.register(self._router)
 

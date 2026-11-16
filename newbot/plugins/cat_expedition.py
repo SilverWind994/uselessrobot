@@ -1820,7 +1820,7 @@ class CatExpeditionPlugin:
 
         breakdown = " ".join(
             f"{CatConfig.CAT_RARITY_NAMES[r]}×{counts[r]}"
-            for r in ("normal", "rare", "epic", "legend") if counts[r])
+            for r in ("normal", "rare", "epic", "legend", "hidden") if counts[r])
         lines = [
             f"【遗物研究】{name}",
             f"研究力：{CatConfig.CAT_RELIC_BASE_SCORE} + {score}"

@@ -95,9 +95,9 @@ class CatConfig:
     CAT_RELIC_RESEARCH_PATH = os.path.join(CAT_EXPEDITION_DIR, "relics.json")
     CAT_RELIC_IMG_DIR = os.path.join(CAT_EXPEDITION_DIR, "relics")
 
-    # 研究力 = 基础值 + 该国猫猫稀有度折算（普通2/稀有3/史诗4/传说5）
+    # 研究力 = 基础值 + 该国猫猫稀有度折算（普通2/稀有3/史诗4/传说5/隐秘8）
     CAT_RELIC_BASE_SCORE = 10
-    CAT_RELIC_RARITY_SCORE = {"normal": 2, "rare": 3, "epic": 4, "legend": 5}
+    CAT_RELIC_RARITY_SCORE = {"normal": 2, "rare": 3, "epic": 4, "legend": 5, "hidden": 8}
     # 成功率 = (基础值 + 该国猫猫折算) ÷ 1000（无论是否进入斩杀线）
     CAT_RELIC_DIVISOR = 1000
     # 尤里卡概率 = 该国猫猫折算 ÷ 10000；斩杀线前 +10 进度（最多到斩杀线），斩杀线后直接完成

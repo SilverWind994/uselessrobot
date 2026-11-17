@@ -112,7 +112,7 @@ class CatConfig:
     # 遗物效果参数
     CAT_RELIC_CODEX_REFUND_CHANCE = 0.01    # 光典誓言之匣：每次抽卡返还鱼干
     CAT_RELIC_LENS_EYE_CHANCE = 0.01        # 月辉聚光镜：抽卡后额外获得 1 猫眼石
-    CAT_RELIC_SHIELD_CHANCE = 0.0001        # 曦座日轮圣盾：远征后不消耗当日次数
+    CAT_RELIC_SHIELD_CHANCE = 0.01          # 曦座日轮圣盾：远征后不消耗当日次数
     CAT_RELIC_SWORD_BONUS = 0.01            # 圣辉誓约长剑：远征战力额外 +1%
 
     # 国家代码 -> 该国遗物（目前只开放圣辉教国）
@@ -123,7 +123,7 @@ class CatConfig:
             {"id": "au_sword", "name": "圣辉誓约长剑", "icon": "圣辉誓约长剑",
              "effect": "远征战力计算完毕后额外增加 1%"},
             {"id": "au_shield", "name": "曦座日轮圣盾", "icon": "曦座日轮圣盾",
-             "effect": "万分之一概率远征后不消耗当日远征次数"},
+             "effect": "1% 概率远征后不消耗当日远征次数"},
             {"id": "au_lens", "name": "月辉聚光镜", "icon": "月辉聚光镜",
              "effect": "抽卡后 1% 概率额外获得 1 猫眼石"},
         ],

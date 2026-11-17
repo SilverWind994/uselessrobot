@@ -1226,7 +1226,7 @@ class CatExpeditionPlugin:
             "damage": damage
         })
 
-        # 遗物·曦座日轮圣盾：万分之一概率本次远征不消耗当日次数
+        # 遗物·曦座日轮圣盾：1% 概率本次远征不消耗当日次数
         shield_saved = (self._relic_unlocked("au_shield")
                         and random.random() < CatConfig.CAT_RELIC_SHIELD_CHANCE)
 

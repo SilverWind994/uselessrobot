@@ -73,6 +73,34 @@ def _die_view(die: dict) -> dict:
     }
 
 
+def _suggest_lock(hand) -> tuple:
+    """网页端默认预选：整手都能计分就全选，否则有 500 分以上方案时选最高分。
+
+    开司骰必须始终选中。返回 (下标列表, 分数)，没有建议时分数为 None。
+    """
+    if not hand:
+        return [], None
+    total = len(hand)
+    kaiji = [i for i, die in enumerate(hand) if die.get("kind") == DICE_KAIJI]
+    full = _score_dice(hand)
+    if full is not None:
+        return list(range(total)), full
+    best = None
+    for mask in range(1, 1 << total):
+        idxs = [i for i in range(total) if mask & (1 << i)]
+        if any(i not in idxs for i in kaiji):
+            continue
+        score = _score_dice([hand[i] for i in idxs])
+        if score is None:
+            continue
+        # 分数优先，同分时多选几颗（少留骰子重掷）
+        if best is None or (score, len(idxs)) > (best[0], len(best[1])):
+            best = (score, idxs)
+    if best is None or best[0] < 500:
+        return kaiji, None
+    return best[1], best[0]
+
+
 class Room:
     """一局 Farkle 的完整状态。所有公开方法返回错误文案（None 表示成功）。"""
 
@@ -97,6 +125,7 @@ class Room:
         self.settle_lines = []
         self.log = []
         self.chat = []
+        self.bust_seq = 0           # 爆骰次数，网页端靠它的变化弹出提示
         self.created_at = time.time()
         self.updated_at = time.time()
 
@@ -258,6 +287,7 @@ class Room:
                 if pick is not None and self.bot_dumb and _bot_mistake():
                     pick = _dumb_lock(self.hand, pick)
                 if pick is None:    # 兜底：无任何可计分组合时按爆骰处理
+                    self.bust_seq += 1
                     self._log(f"{p['name']} 掷出 {_faces_text(self.hand)}，无法计分——爆骰！"
                               "本回合没有得分")
                     self.turn = (self.turn + 1) % PLAYER_NUM
@@ -299,6 +329,7 @@ class Room:
                 self._apply_jackpot(p, faces)
                 break
             if bust:
+                self.bust_seq += 1
                 self._log(f"{p['name']} 掷出 {faces}，爆骰！本回合没有得分")
                 self.turn = (self.turn + 1) % PLAYER_NUM
                 continue
@@ -335,6 +366,7 @@ class Room:
             return None
         if bust:
             lost = self.turn_score
+            self.bust_seq += 1
             self._log(f"{p['name']} 掷出 {faces}，爆骰！"
                       + (f"本回合 {lost} 分全部作废" if lost else "本回合没有得分"))
             self.turn = (self.turn + 1) % PLAYER_NUM
@@ -485,6 +517,9 @@ class Room:
 
     def view(self, qq: int) -> dict:
         mine = self._idx(qq)
+        suggest, suggest_score = ([], None)
+        if self.phase == "keep":
+            suggest, suggest_score = _suggest_lock(self.hand)
         return {
             "code": self.code,
             "phase": self.phase,
@@ -507,10 +542,13 @@ class Room:
             "hand": [_die_view(d) for d in self.hand],
             "locked": [_die_view(d) for d in self.locked],
             "turn_score": self.turn_score,
+            "suggest": suggest,
+            "suggest_score": suggest_score,
             "can_bank": (self.phase == "decide"
                          and not any(d.get("kind") == DICE_GAMBLER for d in self.hand)),
             "winner": self.winner,
             "settle_lines": self.settle_lines,
+            "bust_seq": self.bust_seq,
             "log": self.log[-30:],
             "chat": self.chat[-30:],
         }

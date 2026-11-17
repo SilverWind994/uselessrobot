@@ -147,6 +147,8 @@ let fkSelected = new Set();
 let fkLobbyTimer = null;
 let fkRoomTimer = null;
 let fkToastTimer = null;
+let fkBustSeq = null;
+let fkBustTimer = null;
 
 function esc(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => (
@@ -440,8 +442,40 @@ function fkSignature(r) {
     r.players.map((p) => p.total),
     r.hand.map((d) => d.kind + ':' + d.value),
     r.locked.map((d) => d.kind + ':' + d.value),
-    r.turn_score, r.winner, r.log.length,
+    r.turn_score, r.winner, r.log.length, r.bust_seq,
   ]);
+}
+
+// 开司骰每次掷出都必须计分，网页端始终帮玩家选中
+function fkKaijiIndices(state) {
+  const out = [];
+  (state.hand || []).forEach((d, i) => { if (d.kind === 'kaiji') out.push(i); });
+  return out;
+}
+
+// 三张及以上同点却只选了一部分时提示确认，避免少点一下白白少分
+function fkPartialTripleWarn() {
+  const state = fkState;
+  if (!state || state.phase !== 'keep') return '';
+  const counts = {};
+  const picked = {};
+  (state.hand || []).forEach((d, i) => {
+    if (d.wild) return;      // 恶魔骰的万能面不按点数统计
+    const v = d.value;
+    if (!v) return;
+    counts[v] = (counts[v] || 0) + 1;
+    if (fkSelected.has(i)) picked[v] = (picked[v] || 0) + 1;
+  });
+  const warns = [];
+  Object.keys(counts).forEach((v) => {
+    const total = counts[v];
+    const sel = picked[v] || 0;
+    if (total >= 3 && sel > 0 && sel < total) {
+      warns.push(`${v} 有 ${total} 颗，只选了 ${sel} 颗`);
+    }
+  });
+  if (!warns.length) return '';
+  return `${warns.join('；')}。\n三张及以上同点一起锁定分数更高，确定要这样锁吗？`;
 }
 
 async function enterRoom(code) {
@@ -452,6 +486,7 @@ async function enterRoom(code) {
   fkSig = null;
   fkHandSig = null;
   fkSelected = new Set();
+  fkBustSeq = null;
   fkLobby.classList.add('hidden');
   fkRoom.classList.remove('hidden');
   showChat('fk');
@@ -483,6 +518,8 @@ async function pollRoom() {
 
 function buildRoomDom() {
   fkRoom.innerHTML = `
+    <div id="fk-bust-alert" class="fk-bust-alert hidden"></div>
+
     <div class="card fk-head">
       <div class="fk-head-top">
         <div class="fk-title">Farkle · 目标 <span id="fk-target-show"></span> 分<span id="fk-stones-show"></span></div>
@@ -549,6 +586,8 @@ function buildRoomDom() {
   document.getElementById('fk-accept').addEventListener('click', () => fkAct('accept'));
   document.getElementById('fk-lock').addEventListener('click', () => {
     if (!fkSelected.size) { fkMsg('先点选要锁定的骰子喵'); return; }
+    const warn = fkPartialTripleWarn();
+    if (warn && !window.confirm(warn)) return;
     fkAct('lock', { indices: Array.from(fkSelected) });
   });
   document.getElementById('fk-roll').addEventListener('click', () => fkAct('roll'));
@@ -569,7 +608,16 @@ function renderRoom(state) {
   if (waitCode) waitCode.textContent = state.code;
 
   const handSig = state.hand.map((d) => d.kind + ':' + d.value).join(',');
-  if (handSig !== fkHandSig) { fkHandSig = handSig; fkSelected = new Set(); }
+  // 带上轮次与阶段：换人或进入锁定阶段时即使骰面相同也要重新预选
+  const presetKey = state.turn + '|' + state.phase + '|' + handSig;
+  if (presetKey !== fkHandSig) {
+    fkHandSig = presetKey;
+    // 只在本人的锁定阶段预选：开司骰永久选中，其余用服务端推荐（全选 / 500 分以上最高分）
+    const preset = state.phase === 'keep' && state.is_turn;
+    fkSelected = preset
+      ? new Set([...(state.suggest || []), ...fkKaijiIndices(state)])
+      : new Set();
+  }
 
   renderPlayers(state);
 
@@ -598,6 +646,7 @@ function renderRoom(state) {
   if (isOver && fkLastPhase !== 'finished') loadDumbWeek();
   fkLastPhase = state.phase;
   renderLog(state);
+  notifyBust(state);
 }
 
 function renderPlayers(state) {
@@ -674,9 +723,11 @@ function renderTable(state) {
   const handWrap = document.getElementById('fk-hand');
   handWrap.innerHTML = '';
   state.hand.forEach((d, i) => {
+    if (canSelect && d.kind === 'kaiji') fkSelected.add(i);
     const el = dieEl(d, { selectable: canSelect, selected: fkSelected.has(i) });
     if (canSelect) {
       el.addEventListener('click', () => {
+        if (d.kind === 'kaiji') { fkSelected.add(i); renderRoom(fkState); return; }
         if (fkSelected.has(i)) fkSelected.delete(i);
         else fkSelected.add(i);
         renderRoom(fkState);
@@ -698,7 +749,10 @@ function renderTable(state) {
   rollBtn.disabled = !myTurn;
   bankBtn.disabled = !myTurn || !canBank;
   document.getElementById('fk-table-hint').textContent = myTurn
-    ? (isKeep ? '选中后点「锁定选中」'
+    ? (isKeep
+      ? (state.suggest_score != null
+        ? '已按最优组合预选，可直接「锁定选中」，也可手动增减'
+        : '选中后点「锁定选中」')
       : (isDecide && !canBank ? '赌怪骰还在桌上，必须先锁定它才能入账'
         : '掷有爆骰风险，入账则收下本回合分'))
     : '等待对方行动……';
@@ -723,9 +777,36 @@ function renderLog(state) {
   state.log.forEach((l) => {
     const d = document.createElement('div');
     d.textContent = l;
+    if (l.includes('爆骰')) d.className = 'bust';
     box.appendChild(d);
   });
   box.scrollTop = box.scrollHeight;
+}
+
+// 爆骰后立刻换手重掷，新骰子一出来上一把就看不见了，单独弹提示
+function notifyBust(state) {
+  const seq = state.bust_seq || 0;
+  if (fkBustSeq == null || seq <= fkBustSeq) {
+    fkBustSeq = seq;
+    return;
+  }
+  fkBustSeq = seq;
+  // 取最近一条爆骰记录作为提示内容
+  let text = '本回合分数作废';
+  const log = state.log || [];
+  for (let i = log.length - 1; i >= 0; i--) {
+    if (log[i].includes('爆骰')) { text = log[i]; break; }
+  }
+  const box = document.getElementById('fk-bust-alert');
+  if (!box) return;
+  box.textContent = '💥 ' + text;
+  box.classList.remove('hidden');
+  // 重置动画，连续爆骰时也能重新弹出
+  box.style.animation = 'none';
+  void box.offsetWidth;
+  box.style.animation = '';
+  clearTimeout(fkBustTimer);
+  fkBustTimer = setTimeout(() => box.classList.add('hidden'), 4000);
 }
 
 document.getElementById('btn-farkle').addEventListener('click', enterFarkle);

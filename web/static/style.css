@@ -262,6 +262,20 @@ code { background: #120f0d; border: 1px solid var(--line); border-radius: 6px; p
 .log { max-height: 220px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
 .log div { color: var(--text-dim); }
 .log div:last-child { color: var(--text); }
+.log div.bust { color: var(--danger); font-weight: 700; }
+
+/* 爆骰提示：爆骰后会立刻换手重掷，单独弹一条醒目的提示 */
+.fk-bust-alert {
+  position: fixed; left: 50%; top: 90px; transform: translateX(-50%);
+  z-index: 60; max-width: 86vw; padding: 12px 22px; border-radius: 12px;
+  background: var(--danger); color: #fff; font-size: 16px; font-weight: 700;
+  text-align: center; box-shadow: 0 8px 28px rgba(0, 0, 0, .5);
+  pointer-events: none; animation: fk-bust-pop .3s ease-out;
+}
+@keyframes fk-bust-pop {
+  from { opacity: 0; transform: translate(-50%, -14px) scale(.92); }
+  to { opacity: 1; transform: translate(-50%, 0) scale(1); }
+}
 
 /* ---------- 房间发言（悬浮窗，可拖动、可收起） ---------- */
 .chat-card {

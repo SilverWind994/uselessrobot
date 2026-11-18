@@ -577,7 +577,10 @@ class CatExpeditionPlugin:
         if lucky:
             header = f"✨ 欧气爆发！一抽变十连！\n{header}"
         lines = [header]
-        lines.extend(self._summon_result_lines(results))
+        if len(results) > 20:
+            lines.extend(self._summon_summary_lines(results))
+        else:
+            lines.extend(self._summon_result_lines(results))
         lines.extend(self._insurance_lines(insurance))
         lines.extend(relic_events)
         lines.append(f"\n当前余额：{player['fish']} 鱼干 | 猫眼石：{player['eye_stones']}")
@@ -602,6 +605,52 @@ class CatExpeditionPlugin:
             if r.get("job_up"):
                 line += f" ✨ 转职为 {r['job']}！"
             lines.append(line)
+        return lines
+
+    @staticmethod
+    def _summon_summary_lines(results: List[dict]) -> List[str]:
+        """抽卡超过 20 只时只输出汇总，避免逐只文本过长发不出去"""
+        order = ("hidden", "legend", "epic", "rare", "normal")
+        rarity_counts = {r: 0 for r in CatConfig.CAT_RARITY_NAMES}
+        new_counts = {r: 0 for r in CatConfig.CAT_RARITY_NAMES}
+        refund_count = 0
+        refund_total = 0
+        star_up = 0
+        job_up = 0
+        for r in results:
+            rarity = r.get("rarity")
+            if rarity in rarity_counts:
+                rarity_counts[rarity] += 1
+            if not r.get("is_dup") and not r.get("refunded"):
+                if rarity in new_counts:
+                    new_counts[rarity] += 1
+            if r.get("refunded"):
+                refund_count += 1
+                refund_total += int(r.get("refund_amt") or 0)
+            if r.get("star_up"):
+                star_up += 1
+            if r.get("job_up"):
+                job_up += 1
+
+        lines = []
+        got = "、".join(f"{CatConfig.CAT_RARITY_NAMES[r]}×{rarity_counts[r]}"
+                       for r in order if rarity_counts[r])
+        if got:
+            lines.append(f"获得：{got}")
+        new_total = sum(new_counts.values())
+        if new_total:
+            detail = "、".join(f"{CatConfig.CAT_RARITY_NAMES[r]} {new_counts[r]}"
+                              for r in order if new_counts[r])
+            lines.append(f"新获得 {new_total} 只（{detail}）")
+        if star_up or job_up:
+            parts = []
+            if star_up:
+                parts.append(f"升星 {star_up} 次")
+            if job_up:
+                parts.append(f"转职 {job_up} 次")
+            lines.append(" ｜ ".join(parts))
+        if refund_count:
+            lines.append(f"满星返还 {refund_count} 只，共 {refund_total} 鱼干")
         return lines
 
     def _summon_batch_core(self, player: dict, count: int,

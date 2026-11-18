@@ -78,10 +78,10 @@ CAT_STOCK_BOND_MIN_SHARES = 100      # 单笔最少买卖多少张国债
 CAT_STOCK_BOND_INFLUENCE_SHARES = 10000  # 持有多少张国债可以影响国家发展方针
 CAT_STOCK_BOND_NOISE = 0.003         # 国债每整点基础波动（远小于股票）
 CAT_STOCK_BOND_POLICY_MAX_LEN = 100  # 国家发展方针文本最大长度
-CAT_STOCK_DAILY_UP = 0.01            # 全市场加权总涨跌的当日上沿
-CAT_STOCK_DAILY_DOWN = 0.03          # 全市场加权总涨跌的当日下沿
-CAT_STOCK_WEEKLY_UP = 0.05           # 全市场加权总涨跌的当周上沿
-CAT_STOCK_WEEKLY_DOWN = 0.15         # 全市场加权总涨跌的当周下沿
+CAT_STOCK_DAILY_UP = 0.02            # 全市场加权总涨跌的当日上沿
+CAT_STOCK_DAILY_DOWN = 0.02          # 全市场加权总涨跌的当日下沿
+CAT_STOCK_WEEKLY_UP = 0.10           # 全市场加权总涨跌的当周上沿（当日上沿的 5 倍）
+CAT_STOCK_WEEKLY_DOWN = 0.10         # 全市场加权总涨跌的当周下沿（当日下沿的 5 倍）
 CAT_STOCK_STOCK_DAILY_CAP = 0.10     # 单只股票当日相对昨收的涨跌停幅度（±10%）
 CAT_STOCK_HOURLY_CAP = 0.02          # 单只股票每小时相对上一整点的最大波动（±2%）
 CAT_STOCK_SMALL_HOLDING_MAX = 100    # 非重点持股公司的持股上限
@@ -121,8 +121,8 @@ CAT_STOCK_COMPANY_BIAS = 0.03        # 掌管者扶持/打压单个企业时每�
 CAT_STOCK_SETTLE_COEF = 0.10         # 持仓浮盈超过起点后，每整点回收的力度
 CAT_STOCK_SETTLE_MAX = 0.012         # 每整点回收浮盈的上限
 CAT_STOCK_SETTLE_GAP = 0.03          # 浮盈达到该比例后才开始回收
-CAT_STOCK_ECON_DAY_HOT = 0.01        # 持仓账户当日财富上涨 1% 视为过热
-CAT_STOCK_ECON_DAY_COLD = 0.03       # 当日财富下跌 3% 视为过冷
+CAT_STOCK_ECON_DAY_HOT = 0.02        # 持仓账户当日财富上涨 2% 视为过热
+CAT_STOCK_ECON_DAY_COLD = 0.02        # 当日财富下跌 2% 视为过冷
 CAT_STOCK_ECON_LOG_PATH = os.path.join(STOCK_DIR, "econ_reports.jsonl")
 CAT_STOCK_ECON_LOG_DAYS = 3           # 冷热观测消息记录只保留最近三天
 CAT_STOCK_ECON_DRAG_MAX = 0.008      # 过热时每整点对多头仓位施加的最大收紧力度
@@ -6055,7 +6055,7 @@ class CatStockPlugin:
                 comp.setdefault("prev_close", comp["price"])
             for bond in (market.get("bonds") or {}).values():
                 bond.setdefault("prev_close", bond["price"])
-            # 每周一开盘重设周线基准，一周最多走出 ±15%
+            # 每周一开盘重设周线基准，一周最多走出 ±10%
             week_key = now.strftime("%G-%V")
             if market.get("week") != week_key:
                 for comp in companies.values():
@@ -6145,7 +6145,7 @@ class CatStockPlugin:
             # 3.4) 全体参与者财富冷热：过热时收紧流动性，过冷时托底
             economy = self._economy_check(market, players, price_before, now)
 
-            # 3.5) 指数级软限价：全市场加权总涨跌当日 -3% ~ +1%、当周 -15% ~ +5%
+            # 3.5) 指数级软限价：全市场加权总涨跌当日 -2% ~ +2%、当周 -10% ~ +10%
             #      当日涨跌互相抵消，隔日重新计算；经营崩坏仍可由交易所直接摘牌
             self._apply_price_limits(companies, price_before)
 
@@ -6338,7 +6338,7 @@ class CatStockPlugin:
         return now_value / base_value - 1
 
     def _apply_price_limits(self, companies: dict, price_before: dict) -> None:
-        """指数级软限价：全市场加权总涨跌单日限制在 -3% ~ +1%、单周 -15% ~ +5%；
+        """指数级软限价：全市场加权总涨跌单日限制在 -2% ~ +2%、单周 -10% ~ +10%；
            个股另有涨跌停：相对上一整点最多 ±2%，相对昨收最多 ±10%"""
         alive = {}
         for code, comp in companies.items():
@@ -6450,7 +6450,7 @@ class CatStockPlugin:
         财富 = 现金 + 持股 + 国债 + 空头权益（保证金 + 浮盈），
         空头权益为负时同样计入，做空赚钱不会被人均统计忽略。
         只比较两个小时都在场的账户，有人进场或清仓离场不会造成假信号。
-        当日上涨 1% 算过热，当日下跌 3% 算过冷，当轮立即调整。
+        当日上涨 2% 算过热，当日下跌 2% 算过冷，当轮立即调整。
         收紧只压多头占优的股票，空头占优的股票反而托一把，避免一刀切下跌。"""
         companies = market.get("companies") or {}
         bonds = market.get("bonds") or {}
@@ -7426,7 +7426,7 @@ class CatStockPlugin:
             "如果上面有玩家资金动向，请至少有一条新闻写出资金面带来的具体后果"
             "（抢筹、跟风、空头狙击、逼空或大户撤退），但不要机械地按持仓数字编涨跌。"
             "涨跌可以有戏剧性，但必须有因果依据；"
-            "交易所只盯全市场按市值加权的总涨跌（单日 -3% ~ +1%、单周 -15% ~ +5%），"
+            "交易所只盯全市场按市值加权的总涨跌（单日 -2% ~ +2%、单周 -10% ~ +10%），"
             "个股本身可以大涨大跌，只要大盘不越界；越界时全体一起回调，"
             "所以可以写出大起大落，但不要所有股票同涨同跌。"
             "同行业的企业会互相争抢客源，请时不时写一写同行竞争"

@@ -135,6 +135,7 @@ CAT_STOCK_ERA_CAPITAL_DAYS = 14      # 玩家买入额只统计最近 14 天，�
 CAT_STOCK_ERA_CAPITAL_PER_POINT = 2000  # 累计 2000 猫薄荷买入推进 1 点时代走向
 CAT_STOCK_ERA_CAPITAL_POINT_MAX = 2  # 单个走向每整点最多因资金推进 2 点
 CAT_STOCK_ERA_COLLAPSE_RATE = 0.5    # 亡国时该国企业持仓的清算比例
+CAT_STOCK_ERA_LEGACY_RATE = 0.7      # 时代更迭时未延续企业按末价的比例折成猫薄荷（选错方向要有损失）
 CAT_STOCK_ERA_COUNTRY_MIN = 3        # 至少保留多少个尚存国家
 CAT_STOCK_ERA_WAR_CHANCE = 0.08      # 战事升级为亡国的概率
 CAT_STOCK_SHORT_MARGIN = 0.1         # 开空所需保证金比例
@@ -1124,6 +1125,7 @@ class CatStockPlugin:
             "bad_ticks": 0,
             "momentum": 0.0,
             "history": [],
+            "era_company": True,
         }
 
     def _era_pool(self, index: int, countries: Optional[dict] = None,
@@ -1687,20 +1689,29 @@ class CatStockPlugin:
             if tag and (tag in sectors or tag in tags):
                 survivor_codes.append(code)
 
+        survivor_set = set(survivor_codes)
         for st in players.values():
             total = float(st.get("catnip", 0) or 0)
             kept: dict = {}
             for code, lots in (st.get("holdings") or {}).items():
-                if code in survivor_codes and code in companies:
+                if code in survivor_set and code in companies:
                     kept[code] = lots
                     continue
                 comp = companies.get(code)
                 if comp:
-                    total += self._shares_of(lots) * float(comp.get("price", 0))
+                    # 时代企业退场按折扣清算；与时代无关的企业按原价清算
+                    rate = self._era_legacy_rate(comp)
+                    total += self._shares_of(lots) * float(comp.get("price", 0)) * rate
             for short in st.get("shorts") or []:
-                comp = companies.get(short.get("code"))
-                px = float(comp.get("price", short.get("entry", 0))) if comp \
-                    else float(short.get("entry", 0))
+                code = short.get("code")
+                comp = companies.get(code)
+                if comp and code not in survivor_set:
+                    # 退场企业的空单按同样的清算价了结
+                    px = float(comp.get("price", short.get("entry", 0))) \
+                        * self._era_legacy_rate(comp)
+                else:
+                    px = float(comp.get("price", short.get("entry", 0))) if comp \
+                        else float(short.get("entry", 0))
                 total += (float(short.get("margin", 0) or 0)
                           + (float(short.get("entry", 0)) - px) * int(short.get("shares", 0) or 0))
             st["catnip"] = int(round(total))
@@ -1771,6 +1782,20 @@ class CatStockPlugin:
             new_era["cycle"] = int(old.get("cycle", 0) or 0) + 1
         market["era"] = new_era
 
+        # 时代更迭造成的持仓折算/暴涨不计入当日冷热与今日盈亏：
+        # 与涨停基准一样，给所有人重记一次当日资产起点
+        today = datetime.now().strftime("%Y-%m-%d")
+        bonds = market.get("bonds") or {}
+        for st in players.values():
+            st["day_asset"] = {
+                "day": today,
+                "value": round(self._assets_of(st, companies, bonds), 0),
+                "deposit": int(st.get("deposit_catnip", 0) or 0),
+                "withdraw": int(st.get("withdraw_catnip", 0) or 0),
+            }
+            # 旧的一次性重估补偿也随新基准一起作废，避免误判过冷
+            st.pop("econ_offset", None)
+
         data = self._era_base(next_index)
         kept_line = ""
         if survivors:
@@ -1781,10 +1806,20 @@ class CatStockPlugin:
         news = [{
             "title": f"纪元更迭：{path.get('name', '旧时代落幕')}——世界翻到「{data['name']}」",
             "detail": (f"{path.get('desc', '')}。其余旧时代企业尽数落幕，"
-                       f"持仓已按旧时代末价折成猫薄荷{kept_line}；{data.get('theme', '')}"),
+                       f"时代企业的持仓按末价的 {CAT_STOCK_ERA_LEGACY_RATE:.0%} 折成猫薄荷，"
+                       f"与时代无关的企业按原价清算{kept_line}；{data.get('theme', '')}"),
         }]
         news.extend(fate_news)
         return news
+
+    @staticmethod
+    def _era_legacy_rate(comp: dict) -> float:
+        """退场企业的清算比例：时代企业打折，与时代无关的企业按原价"""
+        flag = comp.get("era_company")
+        if flag is None:
+            # 旧存档没有显式标记：带时代标签的视为时代企业
+            flag = "tags" in comp
+        return CAT_STOCK_ERA_LEGACY_RATE if flag else 1.0
 
     def _path_aligned(self, companies: dict, path: dict) -> List[str]:
         """与某条历史走向相关的企业代码：行业或标签命中走向"""
@@ -6901,6 +6936,7 @@ class CatStockPlugin:
             "price": price,
             "prev_close": price,
             "bad_ticks": 0,
+            "era_company": bool(item.get("era_company", True)),
         }
         return {"title": f"新上市：{item['name']}（{item['code']}）挂牌交易",
                 "detail": f"来自 {self._country_name(item['country'])}，{reason}；"
@@ -7091,6 +7127,7 @@ class CatStockPlugin:
                           f"眼下经营{'、'.join(sectors)}。"),
                 "board": self._board_for(code, era_index),
                 "base": base, "price": price, "prev_close": price, "bad_ticks": 0,
+                "era_company": False,
             }
             existing_names.add(name)
             news.append({

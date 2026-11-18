@@ -790,23 +790,27 @@ function notifyBust(state) {
     fkBustSeq = seq;
     return;
   }
+  const missed = seq - fkBustSeq;
   fkBustSeq = seq;
-  // 取最近一条爆骰记录作为提示内容
-  let text = '本回合分数作废';
+  // 两次轮询之间可能连续爆骰（例如机器人接连爆），把这几条全部显示出来
+  const busts = [];
   const log = state.log || [];
-  for (let i = log.length - 1; i >= 0; i--) {
-    if (log[i].includes('爆骰')) { text = log[i]; break; }
+  for (let i = log.length - 1; i >= 0 && busts.length < missed; i--) {
+    if (log[i].includes('爆骰')) busts.unshift(log[i]);
   }
+  if (!busts.length) busts.push('本回合分数作废');
   const box = document.getElementById('fk-bust-alert');
   if (!box) return;
-  box.textContent = '💥 ' + text;
+  box.textContent = busts.map((l) => '💥 ' + l).join('\n');
   box.classList.remove('hidden');
   // 重置动画，连续爆骰时也能重新弹出
   box.style.animation = 'none';
   void box.offsetWidth;
   box.style.animation = '';
   clearTimeout(fkBustTimer);
-  fkBustTimer = setTimeout(() => box.classList.add('hidden'), 4000);
+  // 多条爆骰时多停留一会儿，保证每条都看得清
+  fkBustTimer = setTimeout(() => box.classList.add('hidden'),
+    4000 + 1500 * (busts.length - 1));
 }
 
 document.getElementById('btn-farkle').addEventListener('click', enterFarkle);

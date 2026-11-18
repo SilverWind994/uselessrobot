@@ -270,7 +270,7 @@ code { background: #120f0d; border: 1px solid var(--line); border-radius: 6px; p
   z-index: 60; max-width: 86vw; padding: 12px 22px; border-radius: 12px;
   background: var(--danger); color: #fff; font-size: 16px; font-weight: 700;
   text-align: center; box-shadow: 0 8px 28px rgba(0, 0, 0, .5);
-  pointer-events: none; animation: fk-bust-pop .3s ease-out;
+  pointer-events: none; white-space: pre-line; animation: fk-bust-pop .3s ease-out;
 }
 @keyframes fk-bust-pop {
   from { opacity: 0; transform: translate(-50%, -14px) scale(.92); }

@@ -74,8 +74,9 @@ def _die_view(die: dict) -> dict:
 
 
 def _suggest_lock(hand) -> tuple:
-    """网页端默认预选：整手都能计分就全选，否则有 500 分以上方案时选最高分。
+    """网页端默认预选：整手都能计分就全选；否则有 400 分以上方案时选最高分。
 
+    如果只有唯一一种可计分选法，无论分数多少都直接预选。
     开司骰必须始终选中。返回 (下标列表, 分数)，没有建议时分数为 None。
     """
     if not hand:
@@ -86,6 +87,7 @@ def _suggest_lock(hand) -> tuple:
     if full is not None:
         return list(range(total)), full
     best = None
+    options = []
     for mask in range(1, 1 << total):
         idxs = [i for i in range(total) if mask & (1 << i)]
         if any(i not in idxs for i in kaiji):
@@ -93,12 +95,16 @@ def _suggest_lock(hand) -> tuple:
         score = _score_dice([hand[i] for i in idxs])
         if score is None:
             continue
+        options.append(idxs)
         # 分数优先，同分时多选几颗（少留骰子重掷）
         if best is None or (score, len(idxs)) > (best[0], len(best[1])):
             best = (score, idxs)
-    if best is None or best[0] < 500:
+    if best is None:
         return kaiji, None
-    return best[1], best[0]
+    # 唯一选法直接帮忙选；否则只预选 400 分以上的高分解
+    if len(options) == 1 or best[0] >= 400:
+        return best[1], best[0]
+    return kaiji, None
 
 
 class Room:

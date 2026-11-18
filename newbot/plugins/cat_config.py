@@ -17,6 +17,7 @@ class CatConfig:
     CAT_IMG_CATS_DIR = os.path.join(CAT_EXPEDITION_DIR, "cats")     # 猫名.png 专属立绘，缺则用最终职业肖像
     CAT_IMG_JOBS_DIR = os.path.join(CAT_EXPEDITION_DIR, "jobs")     # 职业图标
     CAT_IMG_ORIGINS_DIR = os.path.join(CAT_EXPEDITION_DIR, "origins")  # 国家旗帜
+    CAT_AVATAR_DIR = os.path.join(CAT_EXPEDITION_DIR, "avatars")      # 玩家上传的网页头像
     CAT_CARD_TEMPLATE = os.path.join(CAT_EXPEDITION_DIR, "data", "队员表格.png")
     CAT_CARD_CACHE_DIR = os.path.join(CAT_EXPEDITION_DIR, "data", "cache")  # 合成图缓存
     CAT_MAP_PATH = os.path.join(CAT_EXPEDITION_DIR, "data", "地图.png")     # 世界地图

@@ -45,6 +45,7 @@ function showHome(player) {
   homePanel.classList.remove('hidden');
   document.getElementById('player-name').textContent = player.nick || `玩家${player.qq}`;
   document.getElementById('player-qq').textContent = `QQ ${player.qq}`;
+  document.getElementById('player-avatar-wrap').innerHTML = avatarHtml(player, 'avatar-lg');
   document.getElementById('stat-fish').textContent = player.fish;
   document.getElementById('stat-stone').textContent = player.eye_stones;
   document.getElementById('stat-cats').textContent = player.cats;
@@ -155,6 +156,18 @@ let fkShowingBust = false;
 function esc(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => (
     { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function avatarHtml(row, cls) {
+  // 圆形头像：有上传图片就用图片，没有则用昵称首字回退
+  const name = (row && (row.name || row.nick)) || '';
+  const avatar = row && row.avatar;
+  const extra = cls ? ` ${cls}` : '';
+  if (avatar) {
+    return `<span class="avatar${extra}"><img src="${esc(avatar)}" alt="" loading="lazy"></span>`;
+  }
+  const ch = Array.from(String(name).trim())[0] || '喵';
+  return `<span class="avatar avatar-fallback${extra}">${esc(ch)}</span>`;
 }
 
 function fkMsg(text, ok) {
@@ -345,6 +358,7 @@ async function loadBotRank() {
   const rows = data.rows.map((r, i) => `
     <div class="rank-row">
       <span class="rank-no">${i + 1}</span>
+      ${avatarHtml(r)}
       <span class="rank-name">${esc(r.name)}</span>
       <span class="rank-val">${r.wins} 胜 ${r.losses} 负</span>
       <span class="rank-reward">胜率 ${(r.rate * 100).toFixed(1)}% · 净 ${r.net > 0 ? '+' : ''}${r.net}</span>
@@ -365,6 +379,7 @@ async function loadDumbWeek() {
   const rows = data.rows.map((r) => `
     <div class="rank-row">
       <span class="rank-no">${r.rank}</span>
+      ${avatarHtml(r)}
       <span class="rank-name">${esc(r.name)}</span>
       <span class="rank-val">${r.wins} 胜 ${r.losses} 负（${r.games} 局）· 胜率 ${(r.rate * 100).toFixed(1)}%</span>
       <span class="rank-reward">奖励 ${r.reward} 鱼干</span>
@@ -372,6 +387,7 @@ async function loadDumbWeek() {
   const restRows = (data.rest || []).map((r) => `
     <div class="rank-row">
       <span class="rank-no">—</span>
+      ${avatarHtml(r)}
       <span class="rank-name">${esc(r.name)}</span>
       <span class="rank-val">${r.wins} 胜 ${r.losses} 负（${r.games} 局）· 胜率 ${(r.rate * 100).toFixed(1)}%</span>
       <span class="rank-reward">不满 ${data.min_games} 局，不领奖</span>
@@ -618,7 +634,7 @@ function renderRoom(state) {
   const presetKey = state.turn + '|' + state.phase + '|' + handSig;
   if (presetKey !== fkHandSig) {
     fkHandSig = presetKey;
-    // 只在本人的锁定阶段预选：开司骰永久选中，其余用服务端推荐（全选 / 500 分以上最高分）
+    // 只在本人的锁定阶段预选：开司骰永久选中，其余用服务端推荐（全选 / 400 分以上最高分 / 唯一选法）
     const preset = state.phase === 'keep' && state.is_turn;
     fkSelected = preset
       ? new Set([...(state.suggest || []), ...fkKaijiIndices(state)])
@@ -3443,6 +3459,7 @@ function renderExpedition(s) {
     expRank.innerHTML = s.ranking.map((r, i) => `
       <div class="rank-row">
         <span class="rank-no">${i + 1}</span>
+        ${avatarHtml(r)}
         <span class="rank-name">${esc(r.name)}</span>
         <span class="rank-val">${r.damage}</span>
       </div>`).join('');
@@ -3887,6 +3904,7 @@ async function loadWeekly() {
   const rows = data.ranks.map((r) => `
     <div class="rank-row">
       <span class="rank-no">${r.rank}</span>
+      ${avatarHtml(r)}
       <span class="rank-name">${esc(r.name)}</span>
       <span class="rank-val">平均 ${r.score} 分（${r.played}/${data.max_games} 局）</span>
       <span class="rank-reward">奖励 ${r.reward} 鱼干</span>
@@ -3894,6 +3912,7 @@ async function loadWeekly() {
   const restRows = (data.rest || []).map((r) => `
     <div class="rank-row">
       <span class="rank-no">—</span>
+      ${avatarHtml(r)}
       <span class="rank-name">${esc(r.name)}</span>
       <span class="rank-val">平均 ${r.score} 分（${r.played}/${data.max_games} 局）</span>
       <span class="rank-reward">不满 ${data.max_games} 局，不领奖</span>
@@ -3911,6 +3930,20 @@ document.getElementById('btn-weekly-refresh').addEventListener('click', loadWeek
 const profileInfo = document.getElementById('profile-info');
 const nickInput = document.getElementById('nick-input');
 const nickMsg = document.getElementById('nick-msg');
+const avatarFile = document.getElementById('avatar-file');
+const avatarPreview = document.getElementById('profile-avatar-preview');
+const avatarMsg = document.getElementById('avatar-msg');
+const btnAvatarPick = document.getElementById('btn-avatar-pick');
+const btnAvatarUpload = document.getElementById('btn-avatar-upload');
+
+let profileAvatar = '';      // 已保存的头像地址
+let avatarDataUrl = '';      // 选好但还没上传的图片
+
+function renderProfileAvatar() {
+  // 优先展示刚选中的预览，其次才是已保存的头像
+  avatarPreview.innerHTML = avatarHtml(
+    { name: nickInput.value || '喵', avatar: avatarDataUrl || profileAvatar }, 'avatar-xl');
+}
 
 async function loadProfile() {
   const { status, data } = await api('/api/me');
@@ -3925,7 +3958,69 @@ async function loadProfile() {
   profileInfo.innerHTML = rows.map(([label, val]) => `
     <div class="stat"><div class="stat-num">${esc(val)}</div><div class="stat-label">${label}</div></div>`).join('');
   nickInput.value = p.nick || '';
+  profileAvatar = p.avatar || '';
+  avatarDataUrl = '';
+  avatarMsg.textContent = '';
+  avatarMsg.classList.remove('ok');
+  btnAvatarUpload.disabled = true;
+  renderProfileAvatar();
 }
+
+btnAvatarPick.addEventListener('click', () => {
+  avatarFile.value = '';
+  avatarFile.click();
+});
+
+avatarFile.addEventListener('change', () => {
+  const file = avatarFile.files && avatarFile.files[0];
+  if (!file) return;
+  avatarMsg.classList.remove('ok');
+  if (!/^image\//.test(file.type)) {
+    avatarMsg.textContent = '只能选择图片文件喵';
+    return;
+  }
+  if (file.size > 4 * 1024 * 1024) {
+    avatarMsg.textContent = '图片太大喵（最多 4MB）';
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = () => {
+    avatarDataUrl = String(reader.result || '');
+    btnAvatarUpload.disabled = !avatarDataUrl;
+    avatarMsg.textContent = '预览已更新，点「上传头像」保存喵';
+    renderProfileAvatar();
+  };
+  reader.onerror = () => {
+    avatarMsg.textContent = '读取图片失败喵，请重新选择';
+  };
+  reader.readAsDataURL(file);
+});
+
+btnAvatarUpload.addEventListener('click', async () => {
+  if (!avatarDataUrl) return;
+  btnAvatarUpload.disabled = true;
+  avatarMsg.classList.remove('ok');
+  avatarMsg.textContent = '上传中…';
+  const { status, data } = await api('/api/profile/avatar', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ data: avatarDataUrl }),
+  });
+  if (status === 401) { homePanel.classList.add('hidden'); showLogin(); return; }
+  if (status !== 200 || !data.ok) {
+    avatarMsg.textContent = data.msg || '上传失败喵';
+    btnAvatarUpload.disabled = false;
+    return;
+  }
+  profileAvatar = data.avatar || '';
+  avatarDataUrl = '';
+  avatarMsg.textContent = data.msg || '头像已更新喵';
+  avatarMsg.classList.add('ok');
+  renderProfileAvatar();
+  // 顶部玩家卡同步换成新头像
+  document.getElementById('player-avatar-wrap').innerHTML =
+    avatarHtml({ name: nickInput.value, avatar: profileAvatar }, 'avatar-lg');
+});
 
 document.getElementById('nick-form').addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -4647,6 +4742,7 @@ function renderStock(data) {
   const rankRow = (r, i) => `
     <div class="rank-row">
       <span class="rank-no">${i}</span>
+      ${avatarHtml({ name: r.nick, avatar: r.avatar })}
       <span class="rank-name">${esc(r.nick)}</span>
       <span class="rank-val ${r.profit >= 0 ? 'stock-up' : 'stock-down'}">
         ${r.profit >= 0 ? '+' : ''}${stockMoney(r.profit)}（${r.pct >= 0 ? '+' : ''}${Number(r.pct).toFixed(1)}%）

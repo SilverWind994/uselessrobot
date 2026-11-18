@@ -139,8 +139,28 @@ select:focus { outline: none; border-color: var(--gold); }
 
 .player-card { margin-bottom: 24px; }
 .player-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.player-id { display: flex; align-items: center; gap: 12px; }
 .player-name { font-size: 20px; font-weight: 700; }
 .player-qq { color: var(--text-dim); font-size: 13px; }
+
+/* ---------- 圆形头像 ---------- */
+.avatar {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  overflow: hidden;
+  border: 2px solid var(--line);
+  background: #241d18;
+  color: var(--gold);
+  font-size: 13px; font-weight: 700;
+  user-select: none;
+}
+.avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.avatar-lg { width: 52px; height: 52px; font-size: 20px; }
+.avatar-xl { width: 88px; height: 88px; font-size: 32px; border-width: 3px; }
+.avatar-editor { display: flex; align-items: center; gap: 16px; margin-top: 14px; }
+.avatar-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 
 .stats { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-top: 18px; }
 .stat { background: #120f0d; border: 1px solid var(--line); border-radius: 10px; padding: 12px 8px; text-align: center; }

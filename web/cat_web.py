@@ -14,6 +14,7 @@ from plugins.cat_config import CatConfig
 from plugins.cat_expedition import CatExpeditionPlugin, CAT_RARITY_ORDER
 from core.message_sender import MessageSender
 from core.command_router import CommandContext
+import avatar_web
 
 
 class _QuietSender(MessageSender):
@@ -211,7 +212,8 @@ def _ranking(exp: dict) -> list:
         totals[qq] = totals.get(qq, 0) + entry.get("damage", 0)
         names[qq] = entry.get("name", qq)
     ranked = sorted(totals.items(), key=lambda kv: kv[1], reverse=True)
-    return [{"name": names.get(qq, qq), "damage": dmg} for qq, dmg in ranked]
+    return [{"qq": qq, "name": names.get(qq, qq), "damage": dmg,
+             "avatar": avatar_web.avatar_url(qq)} for qq, dmg in ranked]
 
 
 def expedition_state(qq: int):

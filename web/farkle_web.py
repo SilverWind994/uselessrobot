@@ -773,11 +773,11 @@ def dumb_week(qq: int) -> dict:
         "min_games": BOT_WEEKLY_MIN_GAMES,
         "mistake_p": BOT_DUMB_MISTAKE_P,
         "basis": "本周胜率",
-        "rows": [{"rank": rank, "name": r["name"], "wins": r["wins"],
+        "rows": [{"rank": rank, "qq": r["qq"], "name": r["name"], "wins": r["wins"],
                   "losses": r["losses"], "games": r["games"], "rate": r["rate"],
                   "reward": reward}
                  for (rank, reward), r in zip(tiers, full)],
-        "rest": [{"name": r["name"], "wins": r["wins"], "losses": r["losses"],
+        "rest": [{"qq": r["qq"], "name": r["name"], "wins": r["wins"], "losses": r["losses"],
                   "games": r["games"], "rate": r["rate"]} for r in rest[:10]],
         "mine": mine,
         "rewards": BOT_WEEKLY_REWARDS,

@@ -13,6 +13,7 @@ from plugins.cat_stock import CatStockPlugin, STOCK_DIR, CAT_STOCK_WORLD_ADMIN
 from plugins.ai_functions import AIFunctionsPlugin
 from core.message_sender import MessageSender, Target
 import cat_web
+import avatar_web
 
 
 class _CaptureSender(MessageSender):
@@ -54,7 +55,10 @@ def overview(qq: int) -> dict:
     """
     market = _plugin._load_market()
     data = _plugin.snapshot(qq, market=market)
-    data["ranking"] = _plugin.rank_players(market=market)
+    ranking = _plugin.rank_players(market=market)
+    for row in ranking:
+        row["avatar"] = avatar_web.avatar_url(row.get("qq"))
+    data["ranking"] = ranking
     return data
 
 

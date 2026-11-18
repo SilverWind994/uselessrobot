@@ -741,11 +741,11 @@ def _bot_stats_rows() -> list:
         bot_wins += losses
         bot_losses += wins
         bot_net -= net
-        rows.append({"name": rec.get("name") or uid, "wins": wins, "losses": losses,
+        rows.append({"qq": uid, "name": rec.get("name") or uid, "wins": wins, "losses": losses,
                      "games": games, "rate": wins / games, "net": net, "bot": False})
     if bot_wins + bot_losses > 0:
         games = bot_wins + bot_losses
-        rows.append({"name": BOT_NAME, "wins": bot_wins, "losses": bot_losses,
+        rows.append({"qq": "", "name": BOT_NAME, "wins": bot_wins, "losses": bot_losses,
                      "games": games, "rate": bot_wins / games, "net": bot_net,
                      "bot": True})
     rows.sort(key=lambda r: (-r["rate"], -r["games"], -r["wins"]))

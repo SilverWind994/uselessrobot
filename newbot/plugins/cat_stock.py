@@ -2944,6 +2944,7 @@ class CatStockPlugin:
             profit = assets - net_in
             player = cat_players.get(str(key)) or {}
             rows.append({
+                "qq": key,
                 "nick": player.get("nick") or "无名喵",
                 "assets": int(round(assets)),
                 "profit": int(round(profit)),

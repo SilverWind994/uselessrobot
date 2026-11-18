@@ -43,6 +43,7 @@ import mahjong_gold_web                                              # noqa: E40
 import tournament_web                                                # noqa: E402
 import ucml_web                                                      # noqa: E402
 import stock_web                                                     # noqa: E402
+import avatar_web                                                    # noqa: E402
 
 _STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 # 麻将牌面素材（mj0.png ~ mj37.png），供 17 步麻将网页版直接引用
@@ -65,6 +66,8 @@ app.mount("/catexp/expedition", StaticFiles(directory=cat_web.EXPEDITION_IMG_DIR
 app.mount("/catexp/data", StaticFiles(directory=cat_web.DATA_DIR), name="catexp-data")
 # 喵股市素材：第一世代随机世界地图
 app.mount("/stock-assets", StaticFiles(directory=stock_web.STOCK_DIR), name="stock-assets")
+# 玩家头像（{qq}.png），上传后各排行榜直接引用
+app.mount("/avatars", StaticFiles(directory=avatar_web.AVATAR_DIR), name="avatars")
 
 
 @app.middleware("http")
@@ -73,6 +76,7 @@ async def _no_cache_static(request, call_next):
     resp = await call_next(request)
     path = request.url.path
     if (path == "/" or path.startswith("/static")
+            or path.startswith("/avatars")
             or path.startswith("/api/cat/book") or path.startswith("/api/cat/card")):
         resp.headers["Cache-Control"] = "no-cache"
     return resp
@@ -106,6 +110,8 @@ def _player_card(qq: int, player: dict) -> dict:
         "must_change_pwd": not player.get("web_pwd_hash"),
         # 管理员才会看到「管理」导航页
         "is_admin": Config.is_admin(qq),
+        # 已上传头像的地址（没有则为空串，前端回退昵称首字）
+        "avatar": avatar_web.avatar_url(qq),
     }
 
 
@@ -204,6 +210,13 @@ def _auth_qq(cat_token: str):
     return parse_token(cat_token, _SECRET)
 
 
+def _with_avatars(rows: list) -> list:
+    """给排行榜行补上头像地址（行内需要有 qq 字段）"""
+    for row in rows or []:
+        row["avatar"] = avatar_web.avatar_url(row.get("qq"))
+    return rows
+
+
 def _nick_of(qq: int) -> str:
     player = _load_players().get(str(qq)) or {}
     return player.get("nick") or f"玩家{qq}"
@@ -255,7 +268,9 @@ def farkle_bot_rank(cat_token: str = Cookie(default="")) -> JSONResponse:
     qq = _auth_qq(cat_token)
     if qq is None:
         return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
-    return JSONResponse({"ok": True, **farkle_web.bot_rank(qq)})
+    data = farkle_web.bot_rank(qq)
+    _with_avatars(data.get("rows"))
+    return JSONResponse({"ok": True, **data})
 
 
 @app.get("/api/farkle/dumb_week")
@@ -264,7 +279,10 @@ def farkle_dumb_week(cat_token: str = Cookie(default="")) -> JSONResponse:
     qq = _auth_qq(cat_token)
     if qq is None:
         return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
-    return JSONResponse({"ok": True, **farkle_web.dumb_week(qq)})
+    data = farkle_web.dumb_week(qq)
+    _with_avatars(data.get("rows"))
+    _with_avatars(data.get("rest"))
+    return JSONResponse({"ok": True, **data})
 
 
 @app.get("/api/farkle/loadouts")
@@ -1118,16 +1136,20 @@ def yahtzee_weekly(cat_token: str = Cookie(default="")) -> JSONResponse:
     tiers = _rank_rewards([_entry_avg(info) for _, info in full], WEEKLY_REWARDS)
     ranks = [{
         "rank": rank,
+        "qq": qq,
+        "avatar": avatar_web.avatar_url(qq),
         "name": info["name"],
         "score": round(_entry_avg(info), 1),
         "played": len(_entry_scores(info)),
         "reward": reward,
-    } for (rank, reward), (_, info) in zip(tiers, full)]
+    } for (rank, reward), (qq, info) in zip(tiers, full)]
     rest_ranks = [{
+        "qq": qq,
+        "avatar": avatar_web.avatar_url(qq),
         "name": info["name"],
         "score": round(_entry_avg(info), 1),
         "played": len(_entry_scores(info)),
-    } for _, info in rest[:10]]
+    } for qq, info in rest[:10]]
     return JSONResponse({"ok": True, "week": weekly.get("week", ""),
                          "max_games": WEEKLY_MAX_SCORES,
                          "basis": f"本周前 {WEEKLY_MAX_SCORES} 局平均分",
@@ -1167,6 +1189,20 @@ def profile_rename(payload: dict, cat_token: str = Cookie(default="")) -> JSONRe
     player["nick"] = nick
     _save_players(players)
     return JSONResponse({"ok": True, "nick": nick, "msg": "改名成功喵"})
+
+
+@app.post("/api/profile/avatar")
+def profile_avatar(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
+    """上传头像：前端传 base64 图片，服务端裁成方形 PNG 保存"""
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+
+    err = avatar_web.save_avatar(qq, payload.get("data", ""))
+    if err:
+        return JSONResponse({"ok": False, "msg": err}, status_code=400)
+    return JSONResponse({"ok": True, "avatar": avatar_web.avatar_url(qq),
+                         "msg": "头像已更新喵"})
 
 
 @app.post("/api/gift")

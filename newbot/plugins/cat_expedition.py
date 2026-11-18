@@ -374,6 +374,11 @@ class CatExpeditionPlugin:
             description="猫猫远征队·消耗今日研究机会研究某国遗物"
         )
         router.register(
+            ["研究排行", "遗物排行", "relicrank", ".relicrank"],
+            self.cmd_relic_rank,
+            description="猫猫远征队·遗物研究排行（按项目分进度榜与高于期望榜）"
+        )
+        router.register(
             ["喵图鉴", "catpedia", ".catpedia"],
             self.cmd_catpedia,
             description="猫猫远征队·国家/喵喵图鉴与详情"
@@ -1643,7 +1648,8 @@ class CatExpeditionPlugin:
         return ("用法：遗物 —— 查看各国遗物解锁情况\n"
                 "遗物 <国家> —— 查看该国四件遗物与进度\n"
                 "喵研究 <国家> —— 消耗今日研究机会（每人每天一次）\n"
-                "示例：遗物 圣辉教国 / 喵研究 圣辉")
+                "研究排行 [国家] [第几件] —— 查看研究排行（默认当前项目）\n"
+                "示例：遗物 圣辉教国 / 喵研究 圣辉 / 研究排行 圣辉 2")
 
     def _load_relics(self) -> dict:
         """加载全服遗物研究进度"""
@@ -1709,6 +1715,12 @@ class CatExpeditionPlugin:
     def cmd_relic(self, ctx: CommandContext) -> None:
         """遗物：总览；遗物 <国家>：查看该国进度；遗物 研究 <国家>：研究"""
         arg = ctx.get_args().strip()
+        if arg.startswith("研究排行"):
+            self._relic_rank_cmd(ctx, arg[len("研究排行"):].strip())
+            return
+        if arg.startswith("排行"):
+            self._relic_rank_cmd(ctx, arg[len("排行"):].strip())
+            return
         if arg.startswith("研究"):
             self._relic_research_cmd(ctx, arg[2:].strip())
             return
@@ -1807,13 +1819,19 @@ class CatExpeditionPlugin:
             return ["今天的研究机会已经用过了，明天再来喵～"]
 
         target = CatConfig.CAT_RELIC_REQUIREMENTS[len(state["unlocked"])]
+        tier = len(state["unlocked"])
         progress = int(state["progress"])
+        start_progress = progress
         score, counts = self._relic_cat_score(player, code)
         total_score = score + CatConfig.CAT_RELIC_BASE_SCORE
         # 斩杀线：距离完成还剩 100 进度；成功率不受斩杀线影响
         kill_line = max(0, target - CatConfig.CAT_RELIC_FINAL_REMAIN)
         in_kill = progress >= kill_line
         chance = total_score / CatConfig.CAT_RELIC_DIVISOR
+        eureka_chance = score / CatConfig.CAT_RELIC_EUREKA_DIVISOR
+        # 期望进度按本次研究瞬间的概率计算；斩杀阶段按「距离研究成功」的实际剩余数计算
+        expected_gain = self._relic_expected_gain(
+            chance, eureka_chance, progress, target, kill_line)
 
         # 当天机会无论成败都会消耗
         player["relic_research_date"] = today
@@ -1831,6 +1849,8 @@ class CatExpeditionPlugin:
 
         if random.random() >= chance:
             lines.append("研究失败，这次没有进展喵～")
+            self._append_relic_log(qq, player, code, tier, chance, eureka_chance,
+                                   start_progress, target, 0, expected_gain, in_kill)
             self._update_player(qq, player)
             self._save_relics(data)
             return lines
@@ -1839,7 +1859,7 @@ class CatExpeditionPlugin:
         lines.append("研究成功！进度 +1")
 
         # 尤里卡任何阶段都能触发；斩杀线前最多推到斩杀线，斩杀线后直接完成研究
-        if random.random() < score / CatConfig.CAT_RELIC_EUREKA_DIVISOR:
+        if random.random() < eureka_chance:
             if progress >= kill_line:
                 progress = max(progress, target)
                 lines.append("⚡ 尤里卡！灵感迸发，直接完成本次研究")
@@ -1847,6 +1867,11 @@ class CatExpeditionPlugin:
                 gain = min(kill_line, progress + CatConfig.CAT_RELIC_EUREKA_GAIN) - progress
                 progress += gain
                 lines.append(f"⚡ 尤里卡！额外进度 +{gain}（最多到斩杀线 {kill_line}）")
+
+        # 实际进度按真实增量记（尤里卡被斩杀线削减就按削减后的数）；完成时只算到本项目需求
+        actual_gain = min(progress, target) - start_progress
+        self._append_relic_log(qq, player, code, tier, chance, eureka_chance,
+                               start_progress, target, actual_gain, expected_gain, in_kill)
 
         # 到达需求随机解锁一件未获得的遗物，溢出进度留给下一件
         unlocked_any = False
@@ -1878,6 +1903,190 @@ class CatExpeditionPlugin:
         self._update_player(qq, player)
         self._save_relics(data)
         return lines
+
+    @staticmethod
+    def _relic_expected_gain(chance: float, eureka_chance: float,
+                             progress: int, target: int, kill_line: int) -> float:
+        """一次研究的期望进度；斩杀阶段尤里卡直接完成，增量按实际剩余距离计算"""
+        chance = max(0.0, min(1.0, chance))
+        after = progress + 1
+        if after >= kill_line:
+            eureka_gain = max(0, target - after)
+        else:
+            eureka_gain = min(CatConfig.CAT_RELIC_EUREKA_GAIN, kill_line - after)
+        expected = chance * (1 + eureka_chance * eureka_gain)
+        return min(expected, float(max(0, target - progress)))
+
+    def _append_relic_log(self, qq, player: dict, code: str, tier: int,
+                          chance: float, eureka_chance: float,
+                          before: int, target: int,
+                          actual: float, expected: float, kill: bool) -> None:
+        """把一次研究追加到流水；写盘失败不影响研究本身"""
+        try:
+            os.makedirs(os.path.dirname(CatConfig.CAT_RELIC_LOG_PATH), exist_ok=True)
+            entry = {
+                "ts": int(time.time()),
+                "qq": int(qq),
+                "nick": (player.get("nick") or "").strip(),
+                "code": code,
+                "tier": int(tier),
+                "before": int(before),
+                "target": int(target),
+                "chance": round(float(chance), 6),
+                "eureka": round(float(eureka_chance), 6),
+                "actual": float(actual),
+                "expected": round(float(expected), 6),
+                "kill": bool(kill),
+            }
+            with open(CatConfig.CAT_RELIC_LOG_PATH, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        except (OSError, TypeError, ValueError):
+            pass
+
+    def _load_relic_logs(self) -> list:
+        """读取研究流水（JSONL），损坏行直接跳过"""
+        path = CatConfig.CAT_RELIC_LOG_PATH
+        if not os.path.exists(path):
+            return []
+        records = []
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        records.append(json.loads(line))
+                    except ValueError:
+                        continue
+        except OSError:
+            return []
+        return records
+
+    def cmd_relic_rank(self, ctx: CommandContext) -> None:
+        """研究排行 [国家] [第几件]：每个研究项目分开的进度榜与高于期望榜"""
+        self._relic_rank_cmd(ctx, ctx.get_args().strip())
+
+    def _relic_rank_cmd(self, ctx: CommandContext, arg: str) -> None:
+        """解析国家与序号并输出某个项目的排行"""
+        # 允许「圣辉 2」「圣辉 第2件」这类写法
+        match = re.search(r"(?:第\s*)?(\d+)\s*件?\s*$", arg)
+        tier = None
+        if match and arg[:match.start()].strip():
+            tier = int(match.group(1)) - 1
+            arg = arg[:match.start()].strip()
+        if not arg:
+            if tier is not None:
+                self._sender.reply(ctx, "要指定国家喵～\n" + self._relic_usage())
+                return
+            self._reply_relic_rank_overview(ctx)
+            return
+        code = self._resolve_relic_country(arg)
+        if not code:
+            self._sender.reply(ctx, f"没找到国家「{arg}」。\n{self._relic_usage()}")
+            return
+        relics = CatConfig.CAT_RELICS.get(code) or []
+        if not relics:
+            self._sender.reply(ctx, f"{self._countries.get(code, code)}暂时还没有遗物喵～")
+            return
+        state = self._relic_country_state(self._load_relics(), code)
+        if tier is None:
+            tier = min(len(state["unlocked"]), len(relics) - 1)
+        if tier < 0 or tier >= len(relics):
+            self._sender.reply(ctx, f"序号要在 1~{len(relics)} 之间喵～")
+            return
+        if tier > len(state["unlocked"]):
+            self._sender.reply(ctx, f"第{tier + 1}件还没开始研究，暂时没有记录喵～")
+            return
+        self._reply_relic_rank(ctx, code, tier)
+
+    def _reply_relic_rank_overview(self, ctx: CommandContext) -> None:
+        """列出各国已完成与当前研究项目，以及各自的记录量"""
+        logs = self._load_relic_logs()
+        data = self._load_relics()
+        lines = ["【遗物研究排行】每个研究项目分开统计"]
+        for code, relics in CatConfig.CAT_RELICS.items():
+            name = self._countries.get(code, code)
+            state = self._relic_country_state(data, code)
+            unlocked = state["unlocked"]
+            by_id = {r["id"]: r for r in relics}
+            lines.append(f"{name}：")
+            for tier in range(min(len(unlocked) + 1, len(relics))):
+                if tier < len(unlocked):
+                    relic = by_id.get(unlocked[tier]) or {}
+                    label = f"第{tier + 1}件·{relic.get('name', '???')}"
+                else:
+                    label = f"第{tier + 1}件·研究中"
+                entries = [e for e in logs
+                           if e.get("code") == code and e.get("tier") == tier]
+                if entries:
+                    people = {str(e.get("qq")) for e in entries if e.get("qq") is not None}
+                    lines.append(f"　{label}：{len(people)} 人 / {len(entries)} 次研究")
+                else:
+                    lines.append(f"　{label}：暂无记录")
+        lines.append("研究排行 <国家> <序号> —— 查看该项目进度榜与高于期望榜")
+        lines.append("记录从现在开始，之后每次研究都按研究瞬间的概率记账")
+        self._sender.reply(ctx, "\n".join(lines))
+
+    def _reply_relic_rank(self, ctx: CommandContext, code: str, tier: int) -> None:
+        """某个研究项目的两种榜单：实际进度、高于期望百分比"""
+        relics = CatConfig.CAT_RELICS.get(code) or []
+        name = self._countries.get(code, code)
+        state = self._relic_country_state(self._load_relics(), code)
+        unlocked = state["unlocked"]
+        by_id = {r["id"]: r for r in relics}
+        if tier < len(unlocked):
+            relic = by_id.get(unlocked[tier]) or {}
+            title = f"第{tier + 1}件（{relic.get('name', '???')}）"
+        else:
+            title = f"第{tier + 1}件（研究中）"
+        entries = [e for e in self._load_relic_logs()
+                   if e.get("code") == code and e.get("tier") == tier]
+        lines = [f"【遗物研究排行】{name} · {title}"]
+        if not entries:
+            lines.append("这个项目还没有研究记录喵～（从现在开始记录）")
+            self._sender.reply(ctx, "\n".join(lines))
+            return
+
+        players = self._load_players()
+        agg = {}
+        for entry in entries:
+            key = str(entry.get("qq"))
+            stat = agg.get(key)
+            if stat is None:
+                stat = agg[key] = {"nick": "", "actual": 0.0, "expected": 0.0, "count": 0}
+            nick = (players.get(key) or {}).get("nick") or entry.get("nick") or ""
+            if nick:
+                stat["nick"] = nick
+            stat["actual"] += float(entry.get("actual") or 0)
+            stat["expected"] += float(entry.get("expected") or 0)
+            stat["count"] += 1
+
+        def nick_of(key: str) -> str:
+            return agg[key]["nick"] or f"玩家{key}"
+
+        lines.append("—— 研究进度榜 ——")
+        for index, (key, stat) in enumerate(
+                sorted(agg.items(), key=lambda kv: (-kv[1]["actual"], kv[0]))[:10], 1):
+            lines.append(f"{index}. {nick_of(key)}：+{stat['actual']:.0f} 进度"
+                         f"（{stat['count']} 次）")
+
+        lines.append("—— 高于期望榜 ——")
+        percent_rows = []
+        for key, stat in agg.items():
+            if stat["expected"] <= 0:
+                continue
+            rate = (stat["actual"] - stat["expected"]) / stat["expected"] * 100
+            percent_rows.append((key, stat, rate))
+        percent_rows.sort(key=lambda row: (-row[2], row[0]))
+        if not percent_rows:
+            lines.append("暂无足够数据")
+        for index, (key, stat, rate) in enumerate(percent_rows[:10], 1):
+            lines.append(f"{index}. {nick_of(key)}：{rate:+.1f}%"
+                         f"（实际 {stat['actual']:.0f} / 期望 {stat['expected']:.1f}）")
+        lines.append("实际按每次研究的真实增量（尤里卡被削减也按实际）")
+        lines.append("斩杀阶段的期望与实际都按距离研究成功的数目计算")
+        self._sender.reply(ctx, "\n".join(lines))
 
     def _reward_relic_completion(self, qq: int, player: dict) -> None:
         """研究完成：完成者拿全额奖励，其他玩家拿参与奖励"""

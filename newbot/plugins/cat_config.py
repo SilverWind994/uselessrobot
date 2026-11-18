@@ -93,6 +93,7 @@ class CatConfig:
 
     # ==================== 遗物研究（全服共享） ====================
     CAT_RELIC_RESEARCH_PATH = os.path.join(CAT_EXPEDITION_DIR, "relics.json")
+    CAT_RELIC_LOG_PATH = os.path.join(CAT_EXPEDITION_DIR, "relic_research_log.jsonl")  # 每次研究的流水（排行用）
     CAT_RELIC_IMG_DIR = os.path.join(CAT_EXPEDITION_DIR, "relics")
 
     # 研究力 = 基础值 + 该国猫猫稀有度折算（普通2/稀有3/史诗4/传说5/隐秘8）

@@ -149,6 +149,8 @@ let fkRoomTimer = null;
 let fkToastTimer = null;
 let fkBustSeq = null;
 let fkBustTimer = null;
+let fkBustQueue = [];
+let fkShowingBust = false;
 
 function esc(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => (
@@ -487,6 +489,10 @@ async function enterRoom(code) {
   fkHandSig = null;
   fkSelected = new Set();
   fkBustSeq = null;
+  clearTimeout(fkBustTimer);
+  fkBustTimer = null;
+  fkBustQueue = [];
+  fkShowingBust = false;
   fkLobby.classList.add('hidden');
   fkRoom.classList.remove('hidden');
   showChat('fk');
@@ -792,25 +798,39 @@ function notifyBust(state) {
   }
   const missed = seq - fkBustSeq;
   fkBustSeq = seq;
-  // 两次轮询之间可能连续爆骰（例如机器人接连爆），把这几条全部显示出来
-  const busts = [];
+  // 两次轮询之间可能连续爆骰（例如机器人接手后立刻爆），逐条入队
+  const lines = [];
   const log = state.log || [];
-  for (let i = log.length - 1; i >= 0 && busts.length < missed; i--) {
-    if (log[i].includes('爆骰')) busts.unshift(log[i]);
+  for (let i = log.length - 1; i >= 0 && lines.length < missed; i--) {
+    if (log[i].includes('爆骰')) lines.unshift(log[i]);
   }
-  if (!busts.length) busts.push('本回合分数作废');
+  if (!lines.length) lines.push('本回合分数作废');
+  fkBustQueue.push(...lines);
+  // 机器人可能连续爆骰，队列最多留 4 条，保证自己的爆骰不会被挤掉
+  while (fkBustQueue.length > 4) fkBustQueue.shift();
+  showNextBust();
+}
+
+// 逐条显示爆骰提示：看完一条再弹下一条，避免机器人的爆骰瞬间盖掉玩家的
+function showNextBust() {
+  if (fkShowingBust) return;
   const box = document.getElementById('fk-bust-alert');
-  if (!box) return;
-  box.textContent = busts.map((l) => '💥 ' + l).join('\n');
+  if (!box) { fkBustQueue = []; return; }
+  const text = fkBustQueue.shift();
+  if (text == null) return;
+  fkShowingBust = true;
+  box.textContent = '💥 ' + text;
   box.classList.remove('hidden');
   // 重置动画，连续爆骰时也能重新弹出
   box.style.animation = 'none';
   void box.offsetWidth;
   box.style.animation = '';
   clearTimeout(fkBustTimer);
-  // 多条爆骰时多停留一会儿，保证每条都看得清
-  fkBustTimer = setTimeout(() => box.classList.add('hidden'),
-    4000 + 1500 * (busts.length - 1));
+  fkBustTimer = setTimeout(() => {
+    box.classList.add('hidden');
+    fkShowingBust = false;
+    if (fkBustQueue.length) fkBustTimer = setTimeout(showNextBust, 350);
+  }, 3200);
 }
 
 document.getElementById('btn-farkle').addEventListener('click', enterFarkle);

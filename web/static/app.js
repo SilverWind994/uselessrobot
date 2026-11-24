@@ -4551,6 +4551,8 @@ const stockBondBodyEl = document.getElementById('stock-bond-body');
 const stockBondSubEl = document.getElementById('stock-bond-sub');
 const stockHoldingsEl = document.getElementById('stock-holdings');
 const stockHoldSubEl = document.getElementById('stock-hold-sub');
+const stockHoldLimitEl = document.getElementById('stock-hold-limit');
+const stockHistoryEl = document.getElementById('stock-history');
 const stockRankSubEl = document.getElementById('stock-rank-sub');
 const stockRankBestEl = document.getElementById('stock-rank-best');
 const stockRankWorstEl = document.getElementById('stock-rank-worst');
@@ -4812,6 +4814,15 @@ function renderStock(data) {
     + `${Number(p.profit || 0) >= 0 ? '+' : ''}${stockMoney(Math.round(p.profit || 0))}｜今日 `
     + `${Number(p.day_pnl || 0) >= 0 ? '+' : ''}${stockMoney(Math.round(p.day_pnl || 0))}`;
 
+  const majorMax = p.major_companies_max || 2;
+  const smallMax = p.small_holding_max || 100;
+  const majorCount = p.major_count || 0;
+  stockHoldLimitEl.textContent =
+    `重点持股 ${majorCount}/${majorMax} 家（单只超过 ${smallMax} 股算重点）`
+    + (majorCount >= majorMax
+      ? `；名额已满，其他公司单只最多只能持有 ${smallMax} 股喵。`
+      : `；其余公司单只最多 ${smallMax} 股。`);
+
   if (!holdings.length) {
     stockHoldingsEl.innerHTML = '<p class="room-empty">当前空仓喵，先去大盘挑一只吧</p>';
   } else {
@@ -4829,7 +4840,7 @@ function renderStock(data) {
       return `
       <tr>
         <td><button class="stock-detail-btn" type="button" data-code="${esc(h.code)}" title="查看K线与买卖记录">${esc(h.code)}</button></td>
-        <td>${esc(h.name)}</td>
+        <td>${esc(h.name)}${h.major ? ' <span class="stock-major-tag">重点</span>' : ''}</td>
         <td>${h.shares}</td>
         <td>${h.sellable}</td>
         <td>${h.locked}</td>
@@ -4864,14 +4875,18 @@ function renderStock(data) {
   if (shorts.length) {
     const shortRows = shorts.map((s) => `
       <tr>
-        <td><button class="stock-detail-btn" type="button" data-code="${esc(s.code)}" title="查看K线与买卖记录">${esc(s.code)}</button></td>
+        <td><button class="stock-detail-btn" type="button" data-code="${esc(s.code)}" title="查看K线与买卖记录">${esc(s.code)}</button>
+          <div class="hint">${esc(s.opened || '—')}</div></td>
         <td>${esc(s.name)}</td>
         <td>${s.shares}</td>
         <td>${Number(s.entry).toFixed(1)}</td>
         <td>${Number(s.price).toFixed(1)}</td>
         <td>${stockPnlCell(s.pnl)}</td>
         <td>${s.coverable
-          ? `<button class="btn btn-ghost stock-cover-btn" type="button" data-code="${esc(s.code)}">平空</button>`
+          ? `<div class="stock-cover-row">
+              <input class="stock-cover-shares" type="number" min="1" step="1" max="${s.shares}" placeholder="${s.shares}">
+              <button class="btn btn-ghost btn-sm stock-cover-btn" type="button" data-code="${esc(s.code)}" data-id="${s.id}">平空</button>
+            </div>`
           : '次日可平'}</td>
       </tr>`).join('');
     stockHoldingsEl.innerHTML += `
@@ -4897,11 +4912,36 @@ function renderStock(data) {
           </thead>
           <tbody>${pending.map((o) => `
             <tr>
-              <td>${o.kind === 'buy' ? '买入' : '卖出'}</td>
+              <td>${o.kind === 'buy' ? '买入' : o.kind === 'cover' ? '平空' : '卖出'}</td>
               <td>${esc(o.code)}</td>
               <td>${esc(o.name)}</td>
-              <td>${o.shares}</td>
+              <td>${o.shares ? o.shares : '全部'}</td>
               <td>${esc(o.time || '—')}</td>
+            </tr>`).join('')}</tbody>
+        </table>
+      </div>`;
+  }
+
+  const history = p.history || [];
+  if (!history.length) {
+    stockHistoryEl.innerHTML = '<p class="room-empty">最近 30 天还没有交易记录喵</p>';
+  } else {
+    const kindLabel = { buy: '买入', sell: '卖出', short: '做空', cover: '平空' };
+    stockHistoryEl.innerHTML = `
+      <div class="stock-table-wrap">
+        <table class="stock-table">
+          <thead>
+            <tr><th>时间</th><th>方向</th><th>代码</th><th>名称</th><th>股数</th><th>成交价</th><th>盈亏</th></tr>
+          </thead>
+          <tbody>${history.map((h) => `
+            <tr>
+              <td>${esc(h.time || '—')}</td>
+              <td>${kindLabel[h.kind] || esc(h.kind)}</td>
+              <td>${esc(h.code)}</td>
+              <td>${esc(h.name)}</td>
+              <td>${h.shares}</td>
+              <td>${Number(h.price || 0).toFixed(1)}</td>
+              ${h.pnl == null ? '<td>—</td>' : stockPnlCell(h.pnl)}
             </tr>`).join('')}</tbody>
         </table>
       </div>`;
@@ -4988,7 +5028,14 @@ stockHoldingsEl.addEventListener('click', (e) => {
   }
   const coverBtn = e.target.closest('.stock-cover-btn');
   if (coverBtn) {
-    stockAction('/api/stock/cover', { code: coverBtn.dataset.code || '' }, '平空');
+    const cell = coverBtn.closest('td');
+    const input = cell ? cell.querySelector('.stock-cover-shares') : null;
+    const shares = input && input.value ? Number(input.value) : null;
+    stockAction('/api/stock/cover', {
+      code: coverBtn.dataset.code || '',
+      id: coverBtn.dataset.id || '',
+      shares,
+    }, '平空');
     return;
   }
   const shortBtn = e.target.closest('.stock-hold-short');

@@ -75,14 +75,14 @@ def short(qq: int, code, shares) -> str:
     return _run(_plugin._short, qq, [str(code or "").strip(), str(shares).strip()])
 
 
-def cover(qq: int, code=None, shares=None) -> str:
-    """平空：不填代码则全部了结"""
+def cover(qq: int, code=None, shares=None, lot_id=None) -> str:
+    """平空：传 lot_id 只平那一笔；不填则全部了结"""
     rest = []
-    if code:
-        rest.append(str(code).strip())
+    if code or lot_id not in (None, ""):
+        rest.append(str(code or "").strip())
         if shares not in (None, ""):
             rest.append(str(shares).strip())
-    return _run(_plugin._cover, qq, rest)
+    return _run(_plugin._cover, qq, rest, lot_id=lot_id)
 
 
 def change_sector(qq: int, code, sectors, replace=True) -> str:

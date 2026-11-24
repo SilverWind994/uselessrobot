@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>串子小车 · 网页端</title>
-  <link rel="stylesheet" href="/static/style.css?v=39">
+  <link rel="stylesheet" href="/static/style.css?v=41">
 </head>
 <body>
   <div class="bg-glow"></div>
@@ -387,7 +387,18 @@
               <div class="panel-sub" id="stock-hold-sub"></div>
             </div>
           </div>
+          <p class="hint" id="stock-hold-limit"></p>
           <div id="stock-holdings"></div>
+        </div>
+
+        <div class="card">
+          <div class="panel-head">
+            <div>
+              <div class="panel-title">交易记录</div>
+              <div class="panel-sub">最近 30 天的买卖、做空与平空</div>
+            </div>
+          </div>
+          <div id="stock-history"></div>
         </div>
 
         <div class="card">
@@ -427,7 +438,7 @@
               <tbody id="stock-market-body"></tbody>
             </table>
           </div>
-          <p class="hint">每行填入股数后直接点「买」或「卖」；买卖不收手续费，当天买入的股份要到第二天才能卖，休市期间不能交易。</p>
+          <p class="hint">每行填入股数后直接点「买」或「卖」；买卖不收手续费，当天买入的股份要到第二天才能卖。重点是：最多两家公司可以重仓，其余公司只允许留零散股份。</p>
         </div>
 
         <div class="card hidden" id="stock-admin-card">
@@ -1150,6 +1161,6 @@
 
   <footer class="foot">串子小车 · 网页端</footer>
 
-  <script src="/static/app.js?v=63"></script>
+  <script src="/static/app.js?v=67"></script>
 </body>
 </html>

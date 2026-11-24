@@ -1058,6 +1058,18 @@ code { background: #120f0d; border: 1px solid var(--line); border-radius: 6px; p
 .stock-short-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
 .stock-short-row input { width: 110px; }
 .stock-short-row .btn { width: auto; }
+.stock-major-tag {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 0 6px;
+  border-radius: 6px;
+  background: rgba(224, 186, 106, 0.18);
+  color: var(--gold);
+  font-size: 11px;
+  line-height: 16px;
+}
+.stock-cover-row { display: flex; gap: 6px; align-items: center; }
+.stock-cover-shares { width: 72px; }
 
 @media (max-width: 640px) {
   .stock-era-paths { gap: 8px; }

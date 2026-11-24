@@ -35,6 +35,9 @@ MARKET_PATH = os.path.join(STOCK_DIR, "market.json")
 STOCK_PLAYERS_PATH = os.path.join(STOCK_DIR, "players.json")
 AI_NEWS_LOG_PATH = os.path.join(STOCK_DIR, "ai_news.log")
 
+CAT_STOCK_HISTORY_DAYS = 30          # 个人交易记录保留天数
+CAT_STOCK_HISTORY_MAX = 600          # 个人交易记录最多保留条数
+
 # ==================== 经济数值 ====================
 CAT_STOCK_INITIAL_CATNIP = 1000      # 新玩家开户即领 1000 猫薄荷，方便先熟悉盘面
 CAT_STOCK_STONE_TO_CATNIP = 95       # 1 猫眼石 -> 95 猫薄荷
@@ -759,6 +762,17 @@ def _short_coverable(short: dict) -> bool:
     except (OSError, ValueError, OverflowError):
         return True
     return opened.date() < datetime.now().date()
+
+
+def _ensure_short_ids(st: dict) -> None:
+    """旧存档的空单没有 id，补上自增编号，供网页按单笔平空"""
+    shorts = st.get("shorts") or []
+    seq = int(st.get("short_seq", 0) or 0)
+    for short in shorts:
+        if not short.get("id"):
+            seq += 1
+            short["id"] = seq
+    st["short_seq"] = seq
 
 
 _WORLD_BEARISH = (
@@ -2302,8 +2316,39 @@ class CatStockPlugin:
     def _shares_of(self, lots: List[dict]) -> int:
         return sum(int(lot.get("shares", 0)) for lot in lots)
 
+    def _show_history(self, target: Target, qq: int, rest: List[str]) -> None:
+        """查看最近 30 天的交易记录"""
+        limit = 20
+        if rest:
+            try:
+                limit = max(1, min(50, int(rest[0])))
+            except (TypeError, ValueError):
+                self._sender.send_text(target, "条数要填数字喵")
+                return
+        with self._lock:
+            players = self._load_stock_players()
+            st = self._stock_player(qq, players)
+        cutoff = time.time() - CAT_STOCK_HISTORY_DAYS * 86400
+        items = [item for item in (st.get("history") or [])
+                 if float(item.get("ts", 0) or 0) >= cutoff]
+        if not items:
+            self._sender.send_text(target, f"最近 {CAT_STOCK_HISTORY_DAYS} 天还没有交易记录喵")
+            return
+        label = {"buy": "买入", "sell": "卖出", "short": "做空", "cover": "平空"}
+        shown = items[-limit:][::-1]
+        lines = [f"最近 {CAT_STOCK_HISTORY_DAYS} 天交易记录（共 {len(items)} 笔，"
+                 f"显示最近 {len(shown)} 笔）："]
+        for item in shown:
+            at = datetime.fromtimestamp(float(item.get("ts", 0))).strftime("%m-%d %H:%M")
+            kind = label.get(item.get("kind"), item.get("kind", ""))
+            extra = f"｜盈亏 {int(item['pnl']):+d}" if "pnl" in item else ""
+            lines.append(f"  {at} {kind} {item.get('code')} {item.get('name')} "
+                         f"{int(item.get('shares', 0) or 0)} 股"
+                         f"｜{self._fmt_price(float(item.get('price', 0) or 0))}{extra}")
+        self._sender.send_text(target, "\n".join(lines))
+
     def _log_trade(self, st: dict, code: str, side: str,
-                   shares: int, price: float) -> None:
+                   shares: int, price: float, name: str = "") -> None:
         """记录一笔成交，供个股详情里展示买卖时间与数量"""
         log = st.get("trade_log")
         if not isinstance(log, list):
@@ -2312,6 +2357,24 @@ class CatStockPlugin:
         log.append({"code": code, "side": side, "shares": int(shares),
                     "price": round(float(price), 2), "ts": time.time()})
         st["trade_log"] = log[-200:]
+        self._log_history(st, side, code, name, shares, price)
+
+    def _log_history(self, st: dict, kind: str, code: str, name: str,
+                     shares, price, pnl=None, note: str = "") -> None:
+        """写入统一交易历史：买卖、做空、平空共用，只保留最近 30 天"""
+        log = st.get("history")
+        if not isinstance(log, list):
+            log = []
+        cutoff = time.time() - CAT_STOCK_HISTORY_DAYS * 86400
+        log = [item for item in log if float(item.get("ts", 0) or 0) >= cutoff]
+        item = {"ts": time.time(), "kind": kind, "code": code, "name": name or code,
+                "shares": int(shares or 0), "price": round(float(price or 0), 2)}
+        if pnl is not None:
+            item["pnl"] = int(round(pnl))
+        if note:
+            item["note"] = note
+        log.append(item)
+        st["history"] = log[-CAT_STOCK_HISTORY_MAX:]
 
     # ==================== 命令入口 ====================
 
@@ -2336,6 +2399,8 @@ class CatStockPlugin:
             self._show_holdings(target, ctx.user_id)
         elif sub in ("排行", "榜单", "排名", "盈亏榜", "rank"):
             self._show_rank(target)
+        elif sub in ("记录", "历史", "交易记录", "history"):
+            self._show_history(target, ctx.user_id, rest)
         elif sub in ("国债", "债券", "bond"):
             self._bonds_unavailable(target)
         elif sub in ("买国债", "买入国债", "购国债", "buybond"):
@@ -2898,7 +2963,7 @@ class CatStockPlugin:
         lines.append("")
         if shorts:
             lines.append("空头仓位：")
-            for short in shorts:
+            for index, short in enumerate(shorts, 1):
                 code = short.get("code")
                 comp = market["companies"].get(code)
                 entry = float(short.get("entry", 0) or 0)
@@ -2907,21 +2972,24 @@ class CatStockPlugin:
                 pnl = (entry - price) * shares
                 name = (comp or {}).get("name") or code
                 cover_text = "可平空" if _short_coverable(short) else "次日可平空"
-                lines.append(f"  {code} {name}：{shares} 股｜{self._fmt_price(entry)} → "
+                lines.append(f"  #{index} {code} {name}：{shares} 股｜{self._fmt_price(entry)} → "
                              f"{self._fmt_price(price)}｜浮动 {pnl:+.0f}｜{cover_text}")
             lines.append("")
         if pending:
             lines.append(f"待开盘挂单（次日 {CAT_STOCK_OPEN_HOUR:02d}:00 按开盘价成交）：")
             for item in pending:
-                kind = "买入" if item.get("kind") == "buy" else "卖出"
+                kind = {"buy": "买入", "cover": "平空"}.get(item.get("kind"), "卖出")
+                shares = int(item.get("shares", 0) or 0)
+                amount = f"{shares} 股" if shares else "全部"
                 lines.append(f"  {item.get('code', '')} {item.get('name', '')} "
-                             f"{int(item.get('shares', 0) or 0)} 股{kind}")
+                             f"{amount}{kind}")
             lines.append("")
         assets = self._assets_of(st, market["companies"], market.get("bonds") or {})
         day_pnl = self._day_pnl_of(st, assets, day_asset)
         lines.append(f"总资产：{assets:.0f}｜今日盈亏：{day_pnl:+.0f}"
                      f"｜总市值：{total_value:.0f}｜总浮动：{total_pnl:+.0f}｜猫薄荷：{catnip}")
-        lines.append("（当天买入的股份要到第二天才能卖出，当天开的空单要到第二天才能平空）")
+        lines.append("（当天买入的股份要到第二天才能卖出，当天开的空单要到第二天才能平空）\n"
+                     "（平空 #序号 [股数] 只平这一笔；平空 <代码> [股数] 按先后顺序平）")
         self._sender.send_text(target, "\n".join(lines))
 
     # ==================== 盈亏排行 ====================
@@ -3039,7 +3107,7 @@ class CatStockPlugin:
             lots.append({"shares": shares, "price": round((cost + fee) / shares, 4),
                          "ts": time.time()})
             self._add_era_invest(st, comp["code"], cost)
-            self._log_trade(st, comp["code"], "buy", shares, price)
+            self._log_trade(st, comp["code"], "buy", shares, price, comp.get("name", ""))
             self._save_stock_players(players)
             new_balance = st["catnip"]
 
@@ -3135,7 +3203,7 @@ class CatStockPlugin:
             fee = int(round(proceeds * CAT_STOCK_SELL_FEE))
             net = proceeds - fee
             st["catnip"] = int(st.get("catnip", 0)) + net
-            self._log_trade(st, comp["code"], "sell", shares, price)
+            self._log_trade(st, comp["code"], "sell", shares, price, comp.get("name", ""))
             self._save_stock_players(players)
             new_balance = st["catnip"]
 
@@ -3196,8 +3264,101 @@ class CatStockPlugin:
             f"现在是休市时间，这笔操作会在 {CAT_STOCK_OPEN_HOUR:02d}:00 开盘时"
             f"按开盘价成交，相当于明天的{action}")
 
+    def _queue_cover(self, target: Target, qq: int, rest: List[str], lot_id=None) -> None:
+        """休市期间的平空挂到次日开盘，按开盘价成交"""
+        market = self._load_market()
+        companies = market["companies"]
+        code = rest[0] if rest else ""
+        pick_index = None
+        if code.startswith("#") and code[1:].isdigit():
+            pick_index = int(code[1:])
+            code = ""
+            if pick_index <= 0:
+                self._sender.send_text(target, "空单序号要大于 0 喵")
+                return
+        if code:
+            comp = self._resolve_company(market, code)
+            if not comp:
+                self._sender.send_text(target, f"没找到「{code}」这只股票喵")
+                return
+            code = comp["code"]
+
+        wanted = None
+        if len(rest) >= 2:
+            raw = rest[1].strip()
+            if not raw.isdigit() or int(raw) <= 0:
+                self._sender.send_text(target, "股数要填正整数喵")
+                return
+            wanted = int(raw)
+
+        with self._lock:
+            players = self._load_stock_players()
+            st = self._stock_player(qq, players)
+            _ensure_short_ids(st)
+            pending = st.setdefault("pending_orders", [])
+            if not isinstance(pending, list):
+                pending = []
+                st["pending_orders"] = pending
+            if len(pending) >= CAT_STOCK_PENDING_MAX:
+                self._save_stock_players(players)
+                self._sender.send_text(
+                    target, f"待成交挂单最多 {CAT_STOCK_PENDING_MAX} 笔喵～")
+                return
+
+            shorts = st.get("shorts") or []
+            pick = None
+            if lot_id not in (None, ""):
+                try:
+                    lot_key = int(lot_id)
+                except (TypeError, ValueError):
+                    lot_key = None
+                for short in shorts:
+                    if lot_key is not None and int(short.get("id", 0) or 0) == lot_key:
+                        pick = short
+                        break
+                if pick is None:
+                    self._save_stock_players(players)
+                    self._sender.send_text(target, "找不到这笔空单喵～可能已经平掉了")
+                    return
+            elif pick_index is not None:
+                if pick_index > len(shorts):
+                    self._save_stock_players(players)
+                    self._sender.send_text(target, f"你只有 {len(shorts)} 笔空单喵")
+                    return
+                pick = shorts[pick_index - 1]
+
+            if pick is not None:
+                code = pick.get("code")
+                available = int(pick.get("shares", 0) or 0)
+                lot_key = int(pick.get("id", 0) or 0)
+            else:
+                available = sum(int(s.get("shares", 0) or 0) for s in shorts
+                                if not code or s.get("code") == code)
+                lot_key = None
+            if available <= 0:
+                self._save_stock_players(players)
+                self._sender.send_text(target, "没有可平的空头仓位喵")
+                return
+            if wanted is not None and wanted > available:
+                self._save_stock_players(players)
+                self._sender.send_text(target, f"可平数量不足喵：最多能平 {available} 股")
+                return
+
+            name = (companies.get(code) or {}).get("name") or code
+            pending.append({"kind": "cover", "code": code, "name": name,
+                            "shares": int(wanted or 0), "lot_id": lot_key,
+                            "ts": time.time()})
+            self._save_stock_players(players)
+
+        amount = f"{wanted} 股" if wanted else "全部"
+        self._sender.send_text(
+            target,
+            f"已挂单：{code} {name} 平空 {amount}\n"
+            f"现在是休市时间，这笔操作会在次日 {CAT_STOCK_OPEN_HOUR:02d}:00 开盘时"
+            f"按开盘价成交")
+
     def _settle_pending_orders(self, market: dict, players: dict) -> List[Tuple[int, str]]:
-        """开市第一个整点：按开盘价执行休市期间挂下的买卖单"""
+        """开市第一个整点：按开盘价执行休市期间挂下的买卖与平空单"""
         companies = market.get("companies") or {}
         results: List[Tuple[int, str]] = []
         for key, st in players.items():
@@ -3210,8 +3371,10 @@ class CatStockPlugin:
                 code = str(order.get("code") or "")
                 comp = companies.get(code)
                 shares = int(order.get("shares", 0) or 0)
+                amount = f"{shares} 股" if shares else "全部"
                 if not comp:
-                    failed.append(f"{code} {order.get('name', '')} {shares} 股（已退市，挂单作废）")
+                    failed.append(f"{code} {order.get('name', '')} "
+                                  f"{amount}（已退市，挂单作废）")
                     continue
                 price = float(comp["price"])
                 if order.get("kind") == "buy":
@@ -3230,9 +3393,80 @@ class CatStockPlugin:
                         {"shares": shares,
                          "price": round((cost + fee) / shares, 4), "ts": time.time()})
                     self._add_era_invest(st, code, cost)
-                    self._log_trade(st, code, "buy", shares, price)
+                    self._log_trade(st, code, "buy", shares, price, comp.get("name", ""))
                     done.append(f"买入 {code} {comp.get('name', code)} {shares} 股"
                                 f"｜成交价 {self._fmt_price(price)}")
+                elif order.get("kind") == "cover":
+                    _ensure_short_ids(st)
+                    shorts = st.get("shorts") or []
+                    lot_id = order.get("lot_id")
+                    pick = None
+                    if lot_id not in (None, ""):
+                        try:
+                            lot_key = int(lot_id)
+                        except (TypeError, ValueError):
+                            lot_key = None
+                        for short in shorts:
+                            if lot_key is not None and int(short.get("id", 0) or 0) == lot_key:
+                                pick = short
+                                break
+                        if pick is None:
+                            failed.append(f"{code} 平空（空单已不存在，挂单作废）")
+                            continue
+                    if pick is not None:
+                        available = int(pick.get("shares", 0) or 0)
+                    else:
+                        available = sum(int(s.get("shares", 0) or 0) for s in shorts
+                                        if not code or s.get("code") == code)
+                    if available <= 0 or (shares > 0 and shares > available):
+                        failed.append(f"{code} 平空（可平数量不足，挂单作废）")
+                        continue
+                    remaining = available if shares <= 0 else shares
+                    closed_shares = 0
+                    total_return = 0
+                    total_pnl = 0.0
+                    kept_shorts = []
+                    short_log = st.setdefault("short_log", [])
+                    for short in shorts:
+                        lot_shares = int(short.get("shares", 0) or 0)
+                        take = min(remaining, lot_shares) if (lot_shares > 0 and remaining > 0
+                                and (pick is None or short is pick)
+                                and (not code or short.get("code") == code)) else 0
+                        if take <= 0:
+                            kept_shorts.append(short)
+                            continue
+                        remaining -= take
+                        closed_shares += take
+                        entry = float(short.get("entry", 0) or 0)
+                        margin = float(short.get("margin", 0) or 0)
+                        part_margin = margin * take / lot_shares if lot_shares else margin
+                        pnl = (entry - price) * take
+                        total_return += int(round(part_margin + pnl))
+                        total_pnl += pnl
+                        short_log.append({
+                            "code": short.get("code"),
+                            "name": comp.get("name", code),
+                            "shares": take,
+                            "entry": round(entry, 2),
+                            "close": round(price, 2),
+                            "pnl": int(round(pnl)),
+                            "at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                            "note": "开盘挂单",
+                        })
+                        self._log_history(st, "cover", short.get("code"),
+                                          comp.get("name", code), take, price, pnl,
+                                          "开盘挂单")
+                        if lot_shares > take:
+                            left = dict(short)
+                            left["shares"] = lot_shares - take
+                            left["margin"] = round(margin - part_margin, 2)
+                            kept_shorts.append(left)
+                    st["shorts"] = kept_shorts
+                    st["short_log"] = short_log[-20:]
+                    st["catnip"] = int(st.get("catnip", 0)) + total_return
+                    done.append(f"平空 {code} {comp.get('name', code)} {closed_shares} 股"
+                                f"｜成交价 {self._fmt_price(price)}"
+                                f"｜盈亏 {total_pnl:+.0f}｜返还 {total_return}")
                 else:
                     if self._war_for_code(market, code):
                         failed.append(f"{code} {shares} 股卖出（商战期间股份冻结，挂单作废）")
@@ -3269,7 +3503,7 @@ class CatStockPlugin:
                     fee = int(round(proceeds * CAT_STOCK_SELL_FEE))
                     net = proceeds - fee
                     st["catnip"] = int(st.get("catnip", 0)) + net
-                    self._log_trade(st, code, "sell", shares, price)
+                    self._log_trade(st, code, "sell", shares, price, comp.get("name", ""))
                     done.append(f"卖出 {code} {comp.get('name', code)} {shares} 股"
                                 f"｜成交价 {self._fmt_price(price)}｜到手 {net}")
             st["pending_orders"] = []
@@ -3343,7 +3577,10 @@ class CatStockPlugin:
                 )
                 return
             st["catnip"] = catnip - total
+            seq = int(st.get("short_seq", 0) or 0) + 1
+            st["short_seq"] = seq
             st.setdefault("shorts", []).append({
+                "id": seq,
                 "code": comp["code"],
                 "shares": shares,
                 "entry": round(price, 4),
@@ -3351,6 +3588,7 @@ class CatStockPlugin:
                 "opened": now.strftime("%Y-%m-%d %H:%M"),
                 "ts": time.time(),
             })
+            self._log_history(st, "short", comp["code"], comp.get("name", ""), shares, price)
             self._save_stock_players(players)
             new_balance = st["catnip"]
 
@@ -3362,15 +3600,22 @@ class CatStockPlugin:
             f"剩余猫薄荷 {new_balance}"
         )
 
-    def _cover(self, target: Target, qq: int, rest: List[str]) -> None:
-        """平空：不填代码则把可平的空单全部了结"""
+    def _cover(self, target: Target, qq: int, rest: List[str], lot_id=None) -> None:
+        """平空：不填则全部了结；#序号 或网页 lot_id 只平指定的一笔"""
         now = datetime.now()
         if not self._is_open(now):
-            self._sender.send_text(target, "现在是休市时间喵～ 股市每日 08:00~20:00 开市")
+            self._queue_cover(target, qq, rest, lot_id)
             return
         market = self._load_market()
         companies = market["companies"]
         code = rest[0] if rest else ""
+        pick_index = None
+        if code.startswith("#") and code[1:].isdigit():
+            pick_index = int(code[1:])
+            code = ""
+            if pick_index <= 0:
+                self._sender.send_text(target, "空单序号要大于 0 喵")
+                return
         if code:
             comp = self._resolve_company(market, code)
             if not comp:
@@ -3394,10 +3639,43 @@ class CatStockPlugin:
         with self._lock:
             players = self._load_stock_players()
             st = self._stock_player(qq, players)
+            _ensure_short_ids(st)
             shorts = st.get("shorts") or []
-            available = sum(
-                int(s.get("shares", 0) or 0) for s in shorts
-                if _short_coverable(s) and (not code or s.get("code") == code))
+
+            # 指定单笔平空：网页传 lot_id，指令用 #序号
+            pick = None
+            if lot_id not in (None, ""):
+                try:
+                    lot_key = int(lot_id)
+                except (TypeError, ValueError):
+                    lot_key = None
+                for short in shorts:
+                    if lot_key is not None and int(short.get("id", 0) or 0) == lot_key:
+                        pick = short
+                        break
+                if pick is None:
+                    self._save_stock_players(players)
+                    self._sender.send_text(target, "找不到这笔空单喵～可能已经平掉了")
+                    return
+            elif pick_index is not None:
+                if pick_index > len(shorts):
+                    self._save_stock_players(players)
+                    self._sender.send_text(target, f"你只有 {len(shorts)} 笔空单喵")
+                    return
+                pick = shorts[pick_index - 1]
+            if pick is not None:
+                if not _short_coverable(pick):
+                    self._save_stock_players(players)
+                    self._sender.send_text(target, "这笔空单要到第二天才能平喵～")
+                    return
+                code = pick.get("code")
+
+            if pick is not None:
+                available = int(pick.get("shares", 0) or 0)
+            else:
+                available = sum(
+                    int(s.get("shares", 0) or 0) for s in shorts
+                    if _short_coverable(s) and (not code or s.get("code") == code))
             if available <= 0:
                 self._save_stock_players(players)
                 same_day = any(not code or s.get("code") == code for s in shorts)
@@ -3408,10 +3686,12 @@ class CatStockPlugin:
                 return
             if wanted is not None and wanted > available:
                 self._save_stock_players(players)
-                self._sender.send_text(
-                    target,
-                    f"可平数量不足喵：现在只能平 {available} 股"
-                    f"（当天开的空单要到第二天才能平）")
+                if pick is not None:
+                    message = f"这笔空单只有 {available} 股喵"
+                else:
+                    message = (f"可平数量不足喵：现在只能平 {available} 股"
+                               f"（当天开的空单要到第二天才能平）")
+                self._sender.send_text(target, message)
                 return
 
             remaining = available if wanted is None else wanted
@@ -3424,6 +3704,7 @@ class CatStockPlugin:
                 shares = int(short.get("shares", 0) or 0)
                 take = min(remaining, shares) if shares > 0 and remaining > 0 \
                     and _short_coverable(short) \
+                    and (pick is None or short is pick) \
                     and (not code or short.get("code") == code) else 0
                 if take <= 0:
                     kept.append(short)
@@ -3443,6 +3724,8 @@ class CatStockPlugin:
                 log.append({"code": short.get("code"), "name": name, "shares": take,
                             "entry": round(entry, 2), "close": round(price, 2),
                             "pnl": int(round(pnl)), "at": stamp})
+                self._log_history(st, "cover", short.get("code"), name,
+                                  take, price, pnl)
                 closed.append(f"  {short.get('code')} {name} {take} 股｜"
                               f"{self._fmt_price(entry)} → {self._fmt_price(price)}｜"
                               f"盈亏 {pnl:+.0f}")
@@ -5601,6 +5884,7 @@ class CatStockPlugin:
         with self._lock:
             players = self._load_stock_players()
             st = self._stock_player(qq, players)
+            _ensure_short_ids(st)
             catnip = int(st.get("catnip", 0))
             raw = {code: list(lots) for code, lots in st.get("holdings", {}).items()}
             raw_bonds = {c: list(lots) for c, lots in st.get("bonds", {}).items()}
@@ -5653,7 +5937,8 @@ class CatStockPlugin:
                 rows.append({"code": code, "name": code, "shares": shares, "sellable": 0,
                              "locked": shares, "avg_cost": 0, "price": 0, "value": 0,
                              "pnl": 0, "delisted": True, "lots": lot_rows,
-                             "trades": trade_rows})
+                             "trades": trade_rows,
+                             "major": shares > CAT_STOCK_SMALL_HOLDING_MAX})
                 continue
             value = shares * comp["price"]
             total_value += value
@@ -5673,6 +5958,7 @@ class CatStockPlugin:
                 "delisted": False,
                 "lots": lot_rows,
                 "trades": trade_rows,
+                "major": shares > CAT_STOCK_SMALL_HOLDING_MAX,
             })
         rows.sort(key=lambda r: r["value"], reverse=True)
 
@@ -5721,6 +6007,7 @@ class CatStockPlugin:
             total_cost += margin
             total_short_pnl += pnl
             short_rows.append({
+                "id": int(short.get("id", 0) or 0),
                 "code": code,
                 "name": (comp or {}).get("name") or code,
                 "shares": shares,
@@ -5747,16 +6034,29 @@ class CatStockPlugin:
             "stone": int(player.get("eye_stones", 0)),
             "catnip_to_stone_est": catnip // CAT_STOCK_CATNIP_TO_STONE,
             "holdings": rows,
+            "major_count": sum(1 for r in rows if r.get("major")),
+            "major_companies_max": CAT_STOCK_MAJOR_COMPANIES_MAX,
+            "small_holding_max": CAT_STOCK_SMALL_HOLDING_MAX,
             "bonds": bond_rows,
             "shorts": short_rows,
             "pending": [{
-                "kind": "buy" if item.get("kind") == "buy" else "sell",
+                "kind": item.get("kind") if item.get("kind") in ("buy", "sell", "cover") else "sell",
                 "code": item.get("code", ""),
                 "name": item.get("name", ""),
                 "shares": int(item.get("shares", 0) or 0),
                 "time": (datetime.fromtimestamp(float(item.get("ts", 0))).strftime("%m-%d %H:%M")
                          if item.get("ts") else ""),
             } for item in raw_pending],
+            "history": [{
+                "time": (datetime.fromtimestamp(float(item.get("ts", 0))).strftime("%m-%d %H:%M")
+                         if item.get("ts") else ""),
+                "kind": item.get("kind", ""),
+                "code": item.get("code", ""),
+                "name": item.get("name", ""),
+                "shares": int(item.get("shares", 0) or 0),
+                "price": round(float(item.get("price", 0) or 0), 2),
+                "pnl": item.get("pnl"),
+            } for item in (st.get("history") or [])[-60:]][::-1],
             "short_pnl": round(total_short_pnl, 0),
             "total_value": round(total_value, 0),
             "total_pnl": round(total_value - total_cost, 0),
@@ -5778,7 +6078,7 @@ class CatStockPlugin:
             f"开市时间：每天 {CAT_STOCK_OPEN_HOUR:02d}:00 ~ {CAT_STOCK_CLOSE_HOUR:02d}:00，"
             "开盘那一小时不出新闻，其余整点交易所会发布世界快报并重新挂出价格；"
             f"{CAT_STOCK_CLOSE_HOUR:02d}:00 会发布当天的收盘盘点；"
-            "休市期间也可以买卖，挂单会在次日开盘按开盘价成交。\n"
+            "休市期间也可以买卖、平空，挂单会在次日开盘按开盘价成交。\n"
             f"入市资金：新开户赠送 {CAT_STOCK_INITIAL_CATNIP} 猫薄荷，也可用猫眼石换取；"
             f"「喵股市 充值 <猫眼石数>」按 1 猫眼石 = {CAT_STOCK_STONE_TO_CATNIP} 猫薄荷，"
             f"「喵股市 提现 <猫眼石数>」按 {CAT_STOCK_CATNIP_TO_STONE} 猫薄荷 = 1 猫眼石。\n"
@@ -5795,7 +6095,8 @@ class CatStockPlugin:
             "经营方向：企业可以同时做几门营生，最大股东在开市时段可「拓展」新方向或「改营」整体换向。\n"
             "买卖：喵股市 买 <代码> <股数>｜喵股市 卖 <代码> <股数>（休市期间下单会挂到次日开盘）\n"
             "　　　喵股市 做空 <代码> <股数>｜喵股市 平空 [代码] [股数]（不填则全部了结）\n"
-            "查看：喵股市 大盘 / 新闻 / 持仓 / 排行 / 国家 / 代码或名称\n"
+            "　　　平空 #序号 [股数] —— 只平空头仓位里的某一笔\n"
+            "查看：喵股市 大盘 / 新闻 / 持仓 / 排行 / 记录 / 国家 / 代码或名称\n"
             "国家：喵股市 国家 查看列国，喵股市 国家 <代码或国名> 查看制度、君主与起源。\n"
             "董事会：持股最多且股份够多时，可在网页召集股东大会，"
             "先讨论十分钟，再由大股东定稿一份方针、书记员汇总一份，连同旧方针一起交股东确认；"

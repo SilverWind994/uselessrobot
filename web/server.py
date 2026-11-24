@@ -1400,11 +1400,12 @@ def stock_short(payload: dict, cat_token: str = Cookie(default="")) -> JSONRespo
 
 @app.post("/api/stock/cover")
 def stock_cover(payload: dict, cat_token: str = Cookie(default="")) -> JSONResponse:
-    """平空：不填代码则全部了结"""
+    """平空：传 id 只平那一笔；不填则全部了结"""
     qq = _auth_qq(cat_token)
     if qq is None:
         return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
-    return _stock_action(stock_web.cover(qq, payload.get("code"), payload.get("shares")), qq)
+    return _stock_action(stock_web.cover(qq, payload.get("code"), payload.get("shares"),
+                                         payload.get("id")), qq)
 
 
 @app.post("/api/stock/sector")

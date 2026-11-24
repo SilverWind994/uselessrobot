@@ -455,11 +455,21 @@ def relic_info(qq: int) -> dict:
             "rarity_counts": {k: v for k, v in counts.items() if v},
             "projects": _relic_project_view(code, relics, state, logs),
         })
+    total_actual = sum(float(e.get("actual") or 0) for e in logs)
+    total_expected = sum(float(e.get("expected") or 0) for e in logs)
     return {
         "countries": countries,
         "rarity_names": CatConfig.CAT_RARITY_NAMES,
         "base_score": CatConfig.CAT_RELIC_BASE_SCORE,
         "final_remain": CatConfig.CAT_RELIC_FINAL_REMAIN,
+        "total": {
+            "actual": round(total_actual, 1),
+            "expected": round(total_expected, 1),
+            "rate": (round((total_actual - total_expected) / total_expected * 100, 1)
+                     if total_expected > 0 else None),
+            "count": len(logs),
+            "players": len({str(e.get("qq")) for e in logs if e.get("qq") is not None}),
+        },
         "used_today": player.get("relic_research_date") == today,
         "fish": player.get("fish", 0),
         "eye_stones": player.get("eye_stones", 0),
@@ -512,7 +522,11 @@ def relic_rank(code: str, tier: int) -> dict:
         stat["count"] += 1
 
     rows = []
+    total_actual = 0.0
+    total_expected = 0.0
     for key, stat in agg.items():
+        total_actual += stat["actual"]
+        total_expected += stat["expected"]
         rate = ((stat["actual"] - stat["expected"]) / stat["expected"] * 100
                 if stat["expected"] > 0 else None)
         rows.append({
@@ -540,6 +554,14 @@ def relic_rank(code: str, tier: int) -> dict:
         "kill_line": kill_line,
         "records": len(entries),
         "players": len(agg),
+        "total": {
+            "actual": round(total_actual, 1),
+            "expected": round(total_expected, 1),
+            "rate": (round((total_actual - total_expected) / total_expected * 100, 1)
+                     if total_expected > 0 else None),
+            "count": len(entries),
+            "players": len(agg),
+        },
         "rows": rows,
         "percent": percent,
     }

@@ -3867,9 +3867,12 @@ function renderRelic() {
   if (!relicData) return;
   const data = relicData;
   const used = data.used_today;
+  const total = data.total || {};
+  const luck = total.rate == null ? '—' : `${total.rate > 0 ? '+' : ''}${total.rate}%`;
   document.getElementById('relic-status').textContent =
     `全服共享进度 · 今日研究机会${used ? '已用完' : '可用'}`
-    + ` · 鱼干 ${data.fish} · 猫眼石 ${data.eye_stones}`;
+    + ` · 鱼干 ${data.fish} · 猫眼石 ${data.eye_stones}`
+    + ` · 全体实际 ${total.actual ?? 0} / 期望 ${total.expected ?? 0}（${luck}）`;
   relicCountriesEl.innerHTML = data.countries.map((c) => {
     const cur = c.projects.find((p) => p.status === 'current');
     const doneAll = c.unlocked >= c.total;
@@ -3954,7 +3957,14 @@ async function loadRelicRank(code, tier) {
         <span class="rank-reward">实际 ${r.actual}｜期望 ${r.expected}｜${r.count}次</span>
       </div>`).join('')
     : '<p class="room-empty">暂无足够数据</p>';
+  const total = data.total || {};
+  const totalRate = total.rate == null ? '—'
+    : `${total.rate > 0 ? '+' : ''}${total.rate}%`;
+  const totalLine = `<div class="relic-total">全体 ${total.players ?? 0} 人 / `
+    + `${total.count ?? 0} 次｜实际 ${total.actual ?? 0}｜期望 ${total.expected ?? 0}`
+    + `｜偏差 <b>${totalRate}</b></div>`;
   relicRankBody.innerHTML = `
+    ${totalLine}
     <div class="relic-section-title">实际进度</div>
     <div class="rank-list">${progressRows}</div>
     <div class="relic-section-title">高于期望</div>

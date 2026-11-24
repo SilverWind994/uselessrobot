@@ -2079,6 +2079,15 @@ class CatExpeditionPlugin:
                 else:
                     label = f"🔒 第{tier + 1}件·未开启"
                 lines.append(f"　{tier + 1}. {label}｜{stat}")
+        total_actual = sum(float(e.get("actual") or 0) for e in logs)
+        total_expected = sum(float(e.get("expected") or 0) for e in logs)
+        if logs:
+            if total_expected > 0:
+                luck = (total_actual - total_expected) / total_expected * 100
+                lines.append(f"全体合计：实际 {total_actual:.0f} / 期望 {total_expected:.1f}"
+                             f"（{luck:+.1f}%）")
+            else:
+                lines.append(f"全体合计：实际 {total_actual:.0f}")
         lines.append("研究排行 <国家> <序号> —— 查看该项目双榜")
         self._sender.reply(ctx, "\n".join(lines))
 
@@ -2122,6 +2131,15 @@ class CatExpeditionPlugin:
 
         def nick_of(key: str) -> str:
             return agg[key]["nick"] or f"玩家{key}"
+
+        total_actual = sum(stat["actual"] for stat in agg.values())
+        total_expected = sum(stat["expected"] for stat in agg.values())
+        if total_expected > 0:
+            total_rate = (total_actual - total_expected) / total_expected * 100
+            lines.append(f"全体合计：实际 {total_actual:.0f} / 期望 {total_expected:.1f}"
+                         f"（{total_rate:+.1f}%）")
+        else:
+            lines.append(f"全体合计：实际 {total_actual:.0f}")
 
         lines.append(f"—— 实际进度（{len(agg)} 人 / {len(entries)} 次）——")
         for index, (key, stat) in enumerate(

@@ -603,6 +603,16 @@ code { background: #120f0d; border: 1px solid var(--line); border-radius: 6px; p
 .relic-project.is-active { border-color: var(--gold); background: #241d18; }
 .relic-project:disabled { opacity: .55; cursor: default; }
 .relic-rec { color: var(--text-dim); font-size: 12px; }
+.relic-total {
+  margin-top: 4px;
+  padding: 10px 12px;
+  background: #171310;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+.relic-total b { color: var(--gold); }
 .relic-section-title { margin: 16px 0 8px; font-weight: 700; color: var(--gold); font-size: 14px; }
 .relic-section-title:first-child { margin-top: 0; }
 

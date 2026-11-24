@@ -2050,35 +2050,40 @@ class CatExpeditionPlugin:
         self._reply_relic_rank(ctx, code, tier)
 
     def _reply_relic_rank_overview(self, ctx: CommandContext) -> None:
-        """列出各国已完成与当前研究项目，以及各自的记录量"""
+        """列出各国全部研究项目与记录量（完整但不啰嗦）"""
         logs = self._load_relic_logs()
         data = self._load_relics()
-        lines = ["【遗物研究排行】每个研究项目分开统计"]
+        lines = ["【遗物研究排行】按项目分开统计"]
         for code, relics in CatConfig.CAT_RELICS.items():
             name = self._countries.get(code, code)
             state = self._relic_country_state(data, code)
             unlocked = state["unlocked"]
             by_id = {r["id"]: r for r in relics}
-            lines.append(f"{name}：")
-            for tier in range(min(len(unlocked) + 1, len(relics))):
-                if tier < len(unlocked):
-                    relic = by_id.get(unlocked[tier]) or {}
-                    label = f"第{tier + 1}件·{relic.get('name', '???')}"
-                else:
-                    label = f"第{tier + 1}件·研究中"
+            if len(unlocked) >= len(relics):
+                head = f"{name}（已解锁 {len(unlocked)}/{len(relics)}，全部完成）"
+            else:
+                need = CatConfig.CAT_RELIC_REQUIREMENTS[len(unlocked)]
+                head = (f"{name}（已解锁 {len(unlocked)}/{len(relics)}，"
+                        f"当前 {state['progress']}/{need}）")
+            lines.append(head)
+            for tier in range(len(relics)):
                 entries = [e for e in logs
                            if e.get("code") == code and e.get("tier") == tier]
-                if entries:
-                    people = {str(e.get("qq")) for e in entries if e.get("qq") is not None}
-                    lines.append(f"　{label}：{len(people)} 人 / {len(entries)} 次研究")
+                people = {str(e.get("qq")) for e in entries if e.get("qq") is not None}
+                stat = f"{len(people)}人/{len(entries)}次" if entries else "暂无记录"
+                if tier < len(unlocked):
+                    relic = by_id.get(unlocked[tier]) or {}
+                    label = f"✅ {relic.get('name', '???')}"
+                elif tier == len(unlocked):
+                    label = f"⏳ 第{tier + 1}件·研究中"
                 else:
-                    lines.append(f"　{label}：暂无记录")
-        lines.append("研究排行 <国家> <序号> —— 查看该项目进度榜与高于期望榜")
-        lines.append("记录从现在开始，之后每次研究都按研究瞬间的概率记账")
+                    label = f"🔒 第{tier + 1}件·未开启"
+                lines.append(f"　{tier + 1}. {label}｜{stat}")
+        lines.append("研究排行 <国家> <序号> —— 查看该项目双榜")
         self._sender.reply(ctx, "\n".join(lines))
 
     def _reply_relic_rank(self, ctx: CommandContext, code: str, tier: int) -> None:
-        """某个研究项目的两种榜单：实际进度、高于期望百分比"""
+        """某个研究项目的完整双榜：实际进度、高于期望百分比（文字从简）"""
         relics = CatConfig.CAT_RELICS.get(code) or []
         name = self._countries.get(code, code)
         state = self._relic_country_state(self._load_relics(), code)
@@ -2092,6 +2097,10 @@ class CatExpeditionPlugin:
         entries = [e for e in self._load_relic_logs()
                    if e.get("code") == code and e.get("tier") == tier]
         lines = [f"【遗物研究排行】{name} · {title}"]
+        if tier >= len(unlocked):
+            need = CatConfig.CAT_RELIC_REQUIREMENTS[tier]
+            kill_line = max(0, need - CatConfig.CAT_RELIC_FINAL_REMAIN)
+            lines.append(f"进度 {state['progress']}/{need}｜斩杀线 {kill_line}")
         if not entries:
             lines.append("这个项目还没有研究记录喵～（从现在开始记录）")
             self._sender.reply(ctx, "\n".join(lines))
@@ -2114,13 +2123,18 @@ class CatExpeditionPlugin:
         def nick_of(key: str) -> str:
             return agg[key]["nick"] or f"玩家{key}"
 
-        lines.append("—— 研究进度榜 ——")
+        lines.append(f"—— 实际进度（{len(agg)} 人 / {len(entries)} 次）——")
         for index, (key, stat) in enumerate(
-                sorted(agg.items(), key=lambda kv: (-kv[1]["actual"], kv[0]))[:10], 1):
-            lines.append(f"{index}. {nick_of(key)}：+{stat['actual']:.0f} 进度"
-                         f"（{stat['count']} 次）")
+                sorted(agg.items(), key=lambda kv: (-kv[1]["actual"], kv[0])), 1):
+            if stat["expected"] > 0:
+                rate = (stat["actual"] - stat["expected"]) / stat["expected"] * 100
+                rate_text = f"{rate:+.1f}%"
+            else:
+                rate_text = "—"
+            lines.append(f"{index}. {nick_of(key)} +{stat['actual']:.0f}"
+                         f"｜{stat['count']}次｜期望 {stat['expected']:.1f}｜{rate_text}")
 
-        lines.append("—— 高于期望榜 ——")
+        lines.append("—— 高于期望 ——")
         percent_rows = []
         for key, stat in agg.items():
             if stat["expected"] <= 0:
@@ -2130,11 +2144,11 @@ class CatExpeditionPlugin:
         percent_rows.sort(key=lambda row: (-row[2], row[0]))
         if not percent_rows:
             lines.append("暂无足够数据")
-        for index, (key, stat, rate) in enumerate(percent_rows[:10], 1):
-            lines.append(f"{index}. {nick_of(key)}：{rate:+.1f}%"
-                         f"（实际 {stat['actual']:.0f} / 期望 {stat['expected']:.1f}）")
-        lines.append("实际按每次研究的真实增量（尤里卡被削减也按实际）")
-        lines.append("斩杀阶段的期望与实际都按距离研究成功的数目计算")
+        for index, (key, stat, rate) in enumerate(percent_rows, 1):
+            lines.append(f"{index}. {nick_of(key)} {rate:+.1f}%"
+                         f"｜实际 {stat['actual']:.0f}｜期望 {stat['expected']:.1f}"
+                         f"｜{stat['count']}次")
+        lines.append("实际按真实增量，斩杀阶段按剩余距离计算")
         self._sender.reply(ctx, "\n".join(lines))
 
     def _reward_relic_completion(self, qq: int, player: dict) -> None:

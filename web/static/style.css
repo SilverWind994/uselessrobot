@@ -576,6 +576,36 @@ code { background: #120f0d; border: 1px solid var(--line); border-radius: 6px; p
 .rank-val { color: var(--blue); font-weight: 700; }
 .rank-reward { color: var(--text-dim); font-size: 12px; }
 
+/* ---------- 遗物研究 ---------- */
+
+.relic-country {
+  padding: 14px;
+  margin-top: 12px;
+  background: #120f0d;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+.relic-country-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+.relic-country-head b { font-size: 15px; color: var(--gold); }
+.relic-meta { color: var(--text-dim); font-size: 12px; flex: 1; }
+.relic-projects { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.relic-project {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 8px 12px;
+  background: #1a1512;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+}
+.relic-project:hover { border-color: var(--gold); }
+.relic-project.is-active { border-color: var(--gold); background: #241d18; }
+.relic-project:disabled { opacity: .55; cursor: default; }
+.relic-rec { color: var(--text-dim); font-size: 12px; }
+.relic-section-title { margin: 16px 0 8px; font-weight: 700; color: var(--gold); font-size: 14px; }
+.relic-section-title:first-child { margin-top: 0; }
+
 /* ---------- Farkle 骰组说明 ---------- */
 
 .loadout-list { display: flex; flex-direction: column; gap: 6px; }

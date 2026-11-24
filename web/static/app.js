@@ -3338,7 +3338,7 @@ mainNav.addEventListener('click', (event) => {
 // ==================== 喵喵远征队 · 子页（远征 / 远征队 / 图鉴 / 绘图） ====================
 
 const subtabsEl = document.querySelector('.subtabs');
-const SUB_NAMES = ['expedition', 'team', 'pedia', 'art'];
+const SUB_NAMES = ['expedition', 'team', 'pedia', 'relic', 'art'];
 let currentSub = 'expedition';
 
 function switchSub(name) {
@@ -3352,6 +3352,7 @@ function switchSub(name) {
   if (name === 'expedition') loadExpedition();
   if (name === 'team') loadTeam();
   if (name === 'pedia') loadPedia();
+  if (name === 'relic') loadRelic();
   if (name === 'art') loadArt();
 }
 
@@ -3830,6 +3831,165 @@ document.getElementById('btn-art-book').addEventListener('click', () => {
   artBook.onload = () => { artMsg.textContent = ''; };
   artBook.onerror = () => { artMsg.textContent = '图鉴生成失败喵'; };
   artBook.src = `/api/cat/book?code=${encodeURIComponent(code)}&t=${Date.now()}`;
+});
+
+// ==================== 喵喵远征队 · 遗物研究 ====================
+
+const relicCountriesEl = document.getElementById('relic-countries');
+const relicMsgEl = document.getElementById('relic-msg');
+const relicRankBody = document.getElementById('relic-rank-body');
+let relicData = null;
+let relicPick = null;
+
+async function loadRelic() {
+  relicMsgEl.textContent = '';
+  relicMsgEl.classList.remove('ok');
+  const { status, data } = await api('/api/relic/overview');
+  if (status === 401) { homePanel.classList.add('hidden'); showLogin(); return; }
+  if (status !== 200 || !data.ok) {
+    relicCountriesEl.innerHTML = `<p class="room-empty">${esc(data.msg || '加载失败喵')}</p>`;
+    return;
+  }
+  relicData = data;
+  if (!relicPick) {
+    // 默认选中第一个国家的当前研究项目
+    const country = data.countries.find((c) => c.projects.some((p) => p.status === 'current'));
+    if (country) {
+      const cur = country.projects.find((p) => p.status === 'current');
+      relicPick = { code: country.code, tier: cur.tier - 1 };
+    }
+  }
+  renderRelic();
+  if (relicPick) loadRelicRank(relicPick.code, relicPick.tier);
+}
+
+function renderRelic() {
+  if (!relicData) return;
+  const data = relicData;
+  const used = data.used_today;
+  document.getElementById('relic-status').textContent =
+    `全服共享进度 · 今日研究机会${used ? '已用完' : '可用'}`
+    + ` · 鱼干 ${data.fish} · 猫眼石 ${data.eye_stones}`;
+  relicCountriesEl.innerHTML = data.countries.map((c) => {
+    const cur = c.projects.find((p) => p.status === 'current');
+    const doneAll = c.unlocked >= c.total;
+    const bar = cur ? `
+      <div class="exp-hp">
+        <div class="exp-hp-label">
+          <span>第${cur.tier}件 进度</span>
+          <span>${cur.progress}/${cur.need} · 斩杀线 ${cur.kill_line}</span>
+        </div>
+        <div class="exp-hp-bar">
+          <div class="exp-hp-fill" style="width:${Math.min(100, cur.progress / cur.need * 100).toFixed(1)}%"></div>
+        </div>
+      </div>` : '';
+    const btn = doneAll
+      ? '<span class="hint">已全部解锁</span>'
+      : `<button class="btn btn-primary btn-sm" data-relic-run="${esc(c.code)}" type="button"${used ? ' disabled' : ''}>研究</button>`;
+    const picks = c.projects.map((p) => {
+      const active = relicPick && relicPick.code === c.code && relicPick.tier === p.tier - 1;
+      let label;
+      if (p.status === 'done') label = `✅ ${esc(p.name)}`;
+      else if (p.status === 'current') label = `⏳ 第${p.tier}件·研究中`;
+      else label = `🔒 第${p.tier}件`;
+      return `<button class="relic-project${active ? ' is-active' : ''}"`
+        + ` data-relic-code="${esc(c.code)}" data-relic-tier="${p.tier - 1}" type="button">`
+        + `${label}<span class="relic-rec">${p.people}人/${p.records}次</span></button>`;
+    }).join('');
+    const rar = Object.keys(c.rarity_counts).length
+      ? Object.entries(c.rarity_counts)
+        .map(([r, n]) => `${esc(data.rarity_names[r] || r)}×${n}`).join(' ')
+      : '无该国喵喵';
+    return `<div class="relic-country">
+      <div class="relic-country-head">
+        <b>${esc(c.name)}</b>
+        <span class="relic-meta">研究力 ${c.total_score}（${data.base_score}+${c.score}，${rar}）`
+        + ` · 成功率 ${(c.chance * 100).toFixed(2)}%`
+        + ` · 尤里卡 ${(c.eureka * 100).toFixed(2)}%</span>
+        ${btn}
+      </div>
+      ${bar}
+      <div class="relic-projects">${picks}</div>
+    </div>`;
+  }).join('');
+}
+
+async function loadRelicRank(code, tier) {
+  relicPick = { code, tier };
+  renderRelic();
+  const { status, data } = await api(
+    `/api/relic/rank?code=${encodeURIComponent(code)}&tier=${tier}`);
+  const titleEl = document.getElementById('relic-rank-title');
+  const subEl = document.getElementById('relic-rank-sub');
+  if (status !== 200 || !data.ok) {
+    titleEl.textContent = '研究排行';
+    subEl.textContent = '';
+    relicRankBody.innerHTML = `<p class="msg">${esc(data.msg || '加载失败喵')}</p>`;
+    return;
+  }
+  titleEl.textContent = `研究排行 · ${data.country} · ${data.title}`;
+  subEl.textContent = data.status === 'current'
+    ? `进度 ${data.progress}/${data.need}｜斩杀线 ${data.kill_line}｜${data.players} 人 / ${data.records} 次`
+    : `已完成｜${data.players} 人 / ${data.records} 次`;
+  if (!data.rows.length) {
+    relicRankBody.innerHTML = '<p class="room-empty">这个项目还没有研究记录喵～</p>';
+    return;
+  }
+  const progressRows = data.rows.map((r, i) => `
+    <div class="rank-row">
+      <span class="rank-no">${i + 1}</span>
+      ${avatarHtml(r)}
+      <span class="rank-name">${esc(r.name)}</span>
+      <span class="rank-val">+${r.actual}</span>
+      <span class="rank-reward">${r.count}次｜期望 ${r.expected}｜`
+      + `${r.rate == null ? '—' : `${r.rate > 0 ? '+' : ''}${r.rate}%`}</span>
+    </div>`).join('');
+  const percentRows = data.percent.length
+    ? data.percent.map((r, i) => `
+      <div class="rank-row">
+        <span class="rank-no">${i + 1}</span>
+        ${avatarHtml(r)}
+        <span class="rank-name">${esc(r.name)}</span>
+        <span class="rank-val">${r.rate > 0 ? '+' : ''}${r.rate}%</span>
+        <span class="rank-reward">实际 ${r.actual}｜期望 ${r.expected}｜${r.count}次</span>
+      </div>`).join('')
+    : '<p class="room-empty">暂无足够数据</p>';
+  relicRankBody.innerHTML = `
+    <div class="relic-section-title">实际进度</div>
+    <div class="rank-list">${progressRows}</div>
+    <div class="relic-section-title">高于期望</div>
+    <div class="rank-list">${percentRows}</div>`;
+}
+
+async function runRelicResearch(code) {
+  relicMsgEl.classList.remove('ok');
+  relicMsgEl.textContent = '研究中…';
+  const { status, data } = await api('/api/relic/research', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code }),
+  });
+  if (status === 401) { homePanel.classList.add('hidden'); showLogin(); return; }
+  if (status !== 200 || !data.ok) {
+    relicMsgEl.textContent = data.msg || '研究失败喵';
+    return;
+  }
+  relicMsgEl.classList.add('ok');
+  relicMsgEl.style.whiteSpace = 'pre-line';
+  relicMsgEl.textContent = (data.lines || []).join('\n');
+  relicData = data.state;
+  renderRelic();
+  if (relicPick) loadRelicRank(relicPick.code, relicPick.tier);
+}
+
+relicCountriesEl.addEventListener('click', (event) => {
+  const pick = event.target.closest('[data-relic-code]');
+  if (pick) {
+    loadRelicRank(pick.dataset.relicCode, Number(pick.dataset.relicTier));
+    return;
+  }
+  const run = event.target.closest('[data-relic-run]');
+  if (run) runRelicResearch(run.dataset.relicRun);
 });
 
 // ---------- 喵喵详情弹层 ----------

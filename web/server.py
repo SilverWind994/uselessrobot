@@ -1018,6 +1018,43 @@ def expedition_run(cat_token: str = Cookie(default="")) -> JSONResponse:
     return JSONResponse({"ok": True, "lines": lines, "state": cat_web.expedition_state(qq)})
 
 
+# ==================== 遗物研究 ====================
+
+@app.get("/api/relic/overview")
+def relic_overview(cat_token: str = Cookie(default="")) -> JSONResponse:
+    """遗物研究总览：各国项目状态、个人研究力、今日机会"""
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    return JSONResponse({"ok": True, **cat_web.relic_info(qq)})
+
+
+@app.get("/api/relic/rank")
+def relic_rank(code: str = "", tier: int = 0,
+               cat_token: str = Cookie(default="")) -> JSONResponse:
+    """某个研究项目的完整双榜（tier 从 0 开始）"""
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    data = cat_web.relic_rank(code.strip(), tier)
+    if not data.get("ok"):
+        return JSONResponse(data, status_code=404)
+    return JSONResponse(data)
+
+
+@app.post("/api/relic/research")
+def relic_research(payload: dict,
+                   cat_token: str = Cookie(default="")) -> JSONResponse:
+    """执行一次遗物研究（每人每天一次）"""
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    msg, data = cat_web.relic_research(qq, payload.get("code", ""))
+    if msg:
+        return JSONResponse({"ok": False, "msg": msg}, status_code=400)
+    return JSONResponse({"ok": True, **data})
+
+
 @app.post("/api/cat/signin")
 def cat_signin(cat_token: str = Cookie(default="")) -> JSONResponse:
     """每日签到（复用插件签到逻辑）"""

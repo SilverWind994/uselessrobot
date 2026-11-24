@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>串子小车 · 网页端</title>
-  <link rel="stylesheet" href="/static/style.css?v=37">
+  <link rel="stylesheet" href="/static/style.css?v=38">
 </head>
 <body>
   <div class="bg-glow"></div>
@@ -89,6 +89,7 @@
           <button class="subtab is-active" data-sub="expedition" type="button">远征</button>
           <button class="subtab" data-sub="team" type="button">远征队</button>
           <button class="subtab" data-sub="pedia" type="button">图鉴</button>
+          <button class="subtab" data-sub="relic" type="button">遗物</button>
           <button class="subtab" data-sub="art" type="button">绘图</button>
         </div>
 
@@ -214,6 +215,30 @@
             <div id="art-book-wrap" class="hidden" style="margin-top: 14px;">
               <img id="art-book" class="art-img" alt="国家图鉴">
             </div>
+          </div>
+        </div>
+
+        <!-- 遗物研究 -->
+        <div id="sub-relic" class="sub-pane hidden">
+          <div class="card">
+            <div class="panel-head">
+              <div>
+                <div class="panel-title">遗物研究</div>
+                <div class="panel-sub" id="relic-status">全服共享进度 · 每人每天一次研究机会</div>
+              </div>
+            </div>
+            <p id="relic-msg" class="msg"></p>
+            <div id="relic-countries"><p class="room-empty">加载中…</p></div>
+          </div>
+
+          <div class="card">
+            <div class="panel-head">
+              <div>
+                <div class="panel-title" id="relic-rank-title">研究排行</div>
+                <div class="panel-sub" id="relic-rank-sub">点上面的研究项目查看该项目的双榜</div>
+              </div>
+            </div>
+            <div id="relic-rank-body"><p class="room-empty">尚未选择项目</p></div>
           </div>
         </div>
       </section>
@@ -1125,6 +1150,6 @@
 
   <footer class="foot">串子小车 · 网页端</footer>
 
-  <script src="/static/app.js?v=61"></script>
+  <script src="/static/app.js?v=62"></script>
 </body>
 </html>

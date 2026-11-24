@@ -396,6 +396,173 @@ def insurance_buy(qq: int, tier: str):
     }
 
 
+# ==================== 遗物研究 ====================
+
+def _relic_project_view(code: str, relics: list, state: dict, logs: list) -> list:
+    """把某国研究项目整理成前端视图：状态、进度、记录量"""
+    unlocked = state.get("unlocked", [])
+    by_id = {r["id"]: r for r in relics}
+    projects = []
+    for tier in range(len(relics)):
+        entries = [e for e in logs if e.get("code") == code and e.get("tier") == tier]
+        people = {str(e.get("qq")) for e in entries if e.get("qq") is not None}
+        item = {
+            "tier": tier + 1,
+            "records": len(entries),
+            "people": len(people),
+            "name": "",
+            "effect": "",
+        }
+        if tier < len(unlocked):
+            done = by_id.get(unlocked[tier]) or {}
+            item.update({"status": "done", "name": done.get("name", "???"),
+                         "effect": done.get("effect", "")})
+        elif tier == len(unlocked):
+            need = CatConfig.CAT_RELIC_REQUIREMENTS[tier]
+            item.update({
+                "status": "current",
+                "need": need,
+                "progress": int(state.get("progress", 0)),
+                "kill_line": max(0, need - CatConfig.CAT_RELIC_FINAL_REMAIN),
+            })
+        else:
+            item.update({"status": "locked"})
+        projects.append(item)
+    return projects
+
+
+def relic_info(qq: int) -> dict:
+    """遗物研究总览：各国项目状态、个人研究力、今日机会"""
+    data = _plugin._load_relics()
+    logs = _plugin._load_relic_logs()
+    player = _player(qq)
+    today = _today()
+    countries = []
+    for code, relics in CatConfig.CAT_RELICS.items():
+        state = _plugin._relic_country_state(data, code)
+        score, counts = _plugin._relic_cat_score(player, code)
+        total_score = CatConfig.CAT_RELIC_BASE_SCORE + score
+        countries.append({
+            "code": code,
+            "name": _plugin._countries.get(code, code),
+            "unlocked": len(state.get("unlocked", [])),
+            "total": len(relics),
+            "progress": int(state.get("progress", 0)),
+            "score": score,
+            "total_score": total_score,
+            "chance": total_score / CatConfig.CAT_RELIC_DIVISOR,
+            "eureka": score / CatConfig.CAT_RELIC_EUREKA_DIVISOR,
+            "rarity_counts": {k: v for k, v in counts.items() if v},
+            "projects": _relic_project_view(code, relics, state, logs),
+        })
+    return {
+        "countries": countries,
+        "rarity_names": CatConfig.CAT_RARITY_NAMES,
+        "base_score": CatConfig.CAT_RELIC_BASE_SCORE,
+        "final_remain": CatConfig.CAT_RELIC_FINAL_REMAIN,
+        "used_today": player.get("relic_research_date") == today,
+        "fish": player.get("fish", 0),
+        "eye_stones": player.get("eye_stones", 0),
+    }
+
+
+def relic_rank(code: str, tier: int) -> dict:
+    """某个研究项目的完整双榜：实际进度、高于期望百分比（tier 从 0 开始）"""
+    relics = CatConfig.CAT_RELICS.get(code) or []
+    if not relics:
+        return {"ok": False, "msg": "这个国家还没有遗物喵"}
+    try:
+        tier = int(tier)
+    except (TypeError, ValueError):
+        tier = 0
+    tier = max(0, min(tier, len(relics) - 1))
+
+    state = _plugin._relic_country_state(_plugin._load_relics(), code)
+    unlocked = state.get("unlocked", [])
+    if tier > len(unlocked):
+        return {"ok": False, "msg": f"第{tier + 1}件还没开始研究喵"}
+
+    by_id = {r["id"]: r for r in relics}
+    if tier < len(unlocked):
+        relic = by_id.get(unlocked[tier]) or {}
+        title = f"第{tier + 1}件（{relic.get('name', '???')}）"
+        status = "done"
+        need = progress = kill_line = None
+    else:
+        title = f"第{tier + 1}件（研究中）"
+        status = "current"
+        need = CatConfig.CAT_RELIC_REQUIREMENTS[tier]
+        progress = int(state.get("progress", 0))
+        kill_line = max(0, need - CatConfig.CAT_RELIC_FINAL_REMAIN)
+
+    entries = [e for e in _plugin._load_relic_logs()
+               if e.get("code") == code and e.get("tier") == tier]
+    players = _plugin._load_players()
+    agg = {}
+    for entry in entries:
+        key = str(entry.get("qq"))
+        stat = agg.get(key)
+        if stat is None:
+            stat = agg[key] = {"name": "", "actual": 0.0, "expected": 0.0, "count": 0}
+        nick = (players.get(key) or {}).get("nick") or entry.get("nick") or ""
+        if nick:
+            stat["name"] = nick
+        stat["actual"] += float(entry.get("actual") or 0)
+        stat["expected"] += float(entry.get("expected") or 0)
+        stat["count"] += 1
+
+    rows = []
+    for key, stat in agg.items():
+        rate = ((stat["actual"] - stat["expected"]) / stat["expected"] * 100
+                if stat["expected"] > 0 else None)
+        rows.append({
+            "qq": key,
+            "name": stat["name"] or f"玩家{key}",
+            "avatar": avatar_web.avatar_url(key),
+            "count": stat["count"],
+            "actual": round(stat["actual"], 1),
+            "expected": round(stat["expected"], 1),
+            "rate": round(rate, 1) if rate is not None else None,
+        })
+    rows.sort(key=lambda r: (-r["actual"], r["qq"]))
+    percent = sorted([r for r in rows if r["rate"] is not None],
+                     key=lambda r: (-r["rate"], r["qq"]))
+
+    return {
+        "ok": True,
+        "code": code,
+        "tier": tier,
+        "country": _plugin._countries.get(code, code),
+        "title": title,
+        "status": status,
+        "need": need,
+        "progress": progress,
+        "kill_line": kill_line,
+        "records": len(entries),
+        "players": len(agg),
+        "rows": rows,
+        "percent": percent,
+    }
+
+
+def relic_research(qq: int, code: str):
+    """执行一次遗物研究，返回 (错误信息, 结果)"""
+    resolved = _plugin._resolve_relic_country(code or "")
+    if not resolved:
+        return "没找到这个国家喵", None
+    player = _plugin._get_player(qq)
+    before = player.get("relic_research_date")
+    lines = _plugin._relic_research_core(qq, player, resolved)
+    used = before != _today() and player.get("relic_research_date") == _today()
+    return None, {
+        "lines": lines,
+        "used": used,
+        "fish": player.get("fish", 0),
+        "eye_stones": player.get("eye_stones", 0),
+        "state": relic_info(qq),
+    }
+
+
 # ==================== 绘图（PIL 合成图） ====================
 
 def render_book(qq: int, code: str):

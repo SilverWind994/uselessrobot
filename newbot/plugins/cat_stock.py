@@ -6533,11 +6533,12 @@ class CatStockPlugin:
 
             stamp_ts = now.timestamp()
             news_entries = []
-            for item in ai_news:
+            # 退市、上市、时代、亡国等事件新闻优先，避免被 AI 时事新闻挤出整点快报
+            for item in pressure_news + event_news:
                 news_entries.append({"time": stamp, "ts": stamp_ts,
                                      "title": item.get("title", ""),
                                      "detail": item.get("detail", "")})
-            for item in pressure_news + event_news:
+            for item in ai_news:
                 news_entries.append({"time": stamp, "ts": stamp_ts,
                                      "title": item.get("title", ""),
                                      "detail": item.get("detail", "")})
@@ -8123,35 +8124,54 @@ class CatStockPlugin:
                    if c["price"] == c.get("prev_close", c["price"]))
         down = len(comps) - up - flat
 
-        lines = [f"【喵股市 · {now.strftime('%H:%M')} {head}】"]
+        head_line = f"【喵股市 · {now.strftime('%H:%M')} {head}】"
         era = market.get("era") or {}
-        if era:
-            lines.append(f"纪元 · 第 {int(era.get('index', 0)) + 1} 时代"
-                         f"「{era.get('name', '')}」")
-        for item in news[:4]:
-            lines.append(f"📰 {item.get('title', '')}")
+        era_line = (f"纪元 · 第 {int(era.get('index', 0)) + 1} 时代"
+                    f"「{era.get('name', '')}」") if era else ""
+
+        # 新闻全部发出：太长就分批续发，不再只取前 4 条
+        blocks = []
+        for item in news:
+            block = f"📰 {item.get('title', '')}"
             if item.get("detail"):
-                lines.append(f"  {item['detail']}")
-        lines.append("")
+                block += f"\n  {item['detail']}"
+            blocks.append(block)
+        if not blocks:
+            blocks = ["📰 本小时没有新的消息"]
+
+        tail = [""]
         breadth = f"盘面：在市 {len(comps)} 家｜上涨 {up}｜下跌 {down}"
         if flat:
             breadth += f"｜平盘 {flat}"
-        lines.append(breadth)
+        tail.append(breadth)
         world = market.get("world") or {}
         arc = str(world.get("arc") or "").strip()
         if arc:
-            lines.append(f"🌍 世界局势：{arc}")
+            tail.append(f"🌍 世界局势：{arc}")
 
         movers = sorted(moved, key=lambda x: x[1], reverse=True)
         hottest = [m for m in movers if m[1] > 3][:3]
         worst = [m for m in movers[::-1] if m[1] < -3][:3]
         if hottest:
-            lines.append("领涨：" + "，".join(
+            tail.append("领涨：" + "，".join(
                 f"{c['code']} {c['name']} {self._fmt_pct(p)} → {self._fmt_price(c['price'])}"
                 for c, p in hottest))
         if worst:
-            lines.append("领跌：" + "，".join(
+            tail.append("领跌：" + "，".join(
                 f"{c['code']} {c['name']} {self._fmt_pct(p)} → {self._fmt_price(c['price'])}"
                 for c, p in worst))
-        lines.append("发送「喵股市 大盘」查看全部行情")
-        self._sender.send_text(target, "\n".join(lines))
+        tail.append("发送「喵股市 大盘」查看全部行情")
+
+        per_msg = 4
+        chunks = [blocks[i:i + per_msg] for i in range(0, len(blocks), per_msg)]
+        for index, chunk in enumerate(chunks):
+            if index == 0:
+                lines = [head_line]
+                if era_line:
+                    lines.append(era_line)
+            else:
+                lines = [f"{head_line[:-1]} · 新闻续 {index + 1}】"]
+            lines.extend(chunk)
+            if index == len(chunks) - 1:
+                lines.extend(tail)
+            self._sender.send_text(target, "\n".join(lines))

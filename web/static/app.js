@@ -4540,6 +4540,18 @@ const stockEraPathsEl = document.getElementById('stock-era-paths');
 const stockEraCountriesEl = document.getElementById('stock-era-countries');
 const stockEraMapWrapEl = document.getElementById('stock-era-map-wrap');
 const stockEraMapEl = document.getElementById('stock-era-map');
+
+// 世界地图会随亡国、商战重绘：停留在股票页时每分钟检查一次新图
+setInterval(async () => {
+  if (currentTab !== 'stock' || !stockEraMapEl) return;
+  try {
+    const r = await fetch('/api/stock/map');
+    const d = await r.json();
+    if (d.ok && d.map && !stockEraMapEl.src.includes(d.map)) {
+      stockEraMapEl.src = d.map;
+    }
+  } catch (e) { /* 网络抖动时下次再试 */ }
+}, 60000);
 const stockRulesEl = document.getElementById('stock-rules');
 const stockExchangeEl = document.getElementById('stock-exchange-hint');
 const stockMsgEl = document.getElementById('stock-msg');
@@ -4736,7 +4748,8 @@ function renderStock(data) {
       ${fallen.length ? `<span class="era-country era-country-fallen">已亡：${fallen.map((c) => esc(c.name)).join('、')}</span>` : ''}`;
     if (stockEraMapWrapEl && stockEraMapEl) {
       if (era.map) {
-        stockEraMapEl.src = `${era.map}?v=${encodeURIComponent(era.started || '')}`;
+        // 图片地址自带 mtime 版本号，亡国/商战重绘后会自动换成新图
+        stockEraMapEl.src = era.map;
         stockEraMapWrapEl.classList.remove('hidden');
       } else {
         stockEraMapWrapEl.classList.add('hidden');

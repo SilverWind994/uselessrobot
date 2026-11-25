@@ -62,6 +62,11 @@ def overview(qq: int) -> dict:
     return data
 
 
+def map_url() -> str:
+    """世界地图地址：亡国、商战重绘后版本号会变化，前端据此换图"""
+    return _plugin.era_map_url(_plugin._load_market())
+
+
 def buy(qq: int, code, shares) -> str:
     return _run(_plugin._buy, qq, [str(code or "").strip(), str(shares).strip()])
 

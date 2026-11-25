@@ -1339,6 +1339,15 @@ def _stock_admin(qq: int) -> bool:
     return Config.is_admin(qq) or stock_web.is_world_admin(qq)
 
 
+@app.get("/api/stock/map")
+def stock_map(cat_token: str = Cookie(default="")) -> JSONResponse:
+    """世界地图地址（股票页轮询用，亡国/商战重绘后自动换图）"""
+    qq = _auth_qq(cat_token)
+    if qq is None:
+        return JSONResponse({"ok": False, "msg": "未登录喵"}, status_code=401)
+    return JSONResponse({"ok": True, "map": stock_web.map_url()})
+
+
 @app.get("/api/stock/overview")
 def stock_overview(cat_token: str = Cookie(default="")) -> JSONResponse:
     """大盘行情 + 新闻 + 本人持仓（规则与 QQ 端完全同源）"""

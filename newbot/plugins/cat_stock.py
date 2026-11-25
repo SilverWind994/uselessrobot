@@ -1186,13 +1186,40 @@ class CatStockPlugin:
                 item.get("intro") or "", item.get("tags")))
         return catalog
 
-    def _ensure_era_map(self, codes: Optional[List[str]] = None) -> str:
-        """随机绘制大陆地图，首次生成后固定；参与的国家变多时重新铺图"""
+    def era_map_url(self, market: dict) -> str:
+        """当前世界地图地址：亡国、商战变化时重绘，并用文件修改时间做版本号"""
+        countries = market.get("countries") or {}
+        companies = market.get("companies") or {}
+        dead = [code for code, info in countries.items() if not info.get("alive", True)]
+        wars = []
+        for war in (market.get("trade_wars") or {}).values():
+            if war.get("status") != "active":
+                continue
+            ca = (companies.get(war.get("a")) or {}).get("country")
+            cb = (companies.get(war.get("b")) or {}).get("country")
+            if ca and cb:
+                wars.append({"a": ca, "b": cb})
+        path = self._ensure_era_map(list(countries.keys()), dead, wars)
+        if not path or not os.path.exists(path):
+            return ""
+        return f"/stock-assets/era_map.png?v={int(os.path.getmtime(path))}"
+
+    def _ensure_era_map(self, codes: Optional[List[str]] = None,
+                        dead: Optional[List[str]] = None,
+                        wars: Optional[List[dict]] = None) -> str:
+        """随机绘制大陆地图：地理轮廓首次生成后固定，亡国与商战变化时重绘叠层"""
         codes = [str(c) for c in (codes or _ERA0_COUNTRIES)]
-        if os.path.exists(CAT_STOCK_ERA_MAP_PATH):
-            meta = _load_json(CAT_STOCK_ERA_MAP_META)
-            if list(meta.get("codes") or []) == codes:
-                return CAT_STOCK_ERA_MAP_PATH
+        dead = [str(c) for c in (dead or [])]
+        dead_set = set(dead)
+        wars = list(wars or [])
+        dead_sig = sorted(dead)
+        war_sig = sorted(f"{w.get('a', '')}-{w.get('b', '')}" for w in wars)
+        meta = _load_json(CAT_STOCK_ERA_MAP_META) if os.path.exists(CAT_STOCK_ERA_MAP_META) else {}
+        if (os.path.exists(CAT_STOCK_ERA_MAP_PATH)
+                and list(meta.get("codes") or []) == codes
+                and list(meta.get("dead") or []) == dead_sig
+                and list(meta.get("wars") or []) == war_sig):
+            return CAT_STOCK_ERA_MAP_PATH
         if Image is None:
             return ""
         os.makedirs(STOCK_DIR, exist_ok=True)
@@ -1200,10 +1227,19 @@ class CatStockPlugin:
         width, height = 900, 600
         sw, sh = 450, 300            # 先在小图上算轮廓，再放大，省时间
 
+        # 固定种子：亡国、商战只改叠层，海岸与山川保持原样
+        try:
+            seed = int(meta.get("seed") or 0)
+        except (TypeError, ValueError):
+            seed = 0
+        if seed <= 0:
+            seed = random.randint(1, 99999999)
+        rng = random.Random(seed)
+
         # 大陆外轮廓：以画布中心为原点，半径由几条正弦叠加，长出海湾与半岛
-        base_r = random.uniform(0.27, 0.30)
+        base_r = rng.uniform(0.27, 0.30)
         harmonics = ((3, 0.050), (5, 0.030), (7, 0.020), (9, 0.013), (13, 0.009), (19, 0.006))
-        phases = [random.uniform(0, math.tau) for _ in harmonics]
+        phases = [rng.uniform(0, math.tau) for _ in harmonics]
 
         def coast_r(theta: float) -> float:
             radius = base_r
@@ -1214,7 +1250,6 @@ class CatStockPlugin:
         ocean_dark = (26, 50, 78)
         ocean_light = (54, 94, 128)
         coast = (74, 108, 140)
-        rng = random.Random(random.randint(0, 99999))
         palette = {
             "vo": (196, 224, 238),
             "du": (168, 156, 128),
@@ -1238,8 +1273,8 @@ class CatStockPlugin:
         for _ in range(8000):
             if len(seeds) >= len(codes):
                 break
-            sx = random.uniform(0.22, 0.78)
-            sy = random.uniform(0.22, 0.78)
+            sx = rng.uniform(0.22, 0.78)
+            sy = rng.uniform(0.22, 0.78)
             if not is_land(sx, sy):
                 continue
             if any((sx - ax) ** 2 + (sy - ay) ** 2 < gap ** 2 for ax, ay in seeds):
@@ -1273,19 +1308,22 @@ class CatStockPlugin:
                                           + ((ny - seeds[i][1]) * 0.86) ** 2))
                 owners[y][x] = best
                 base_color = palette[codes[best]]
+                if codes[best] in dead_set:
+                    # 亡国：整块陆沉为灰土，与仍在交易的国家区分开
+                    base_color = (100, 96, 92)
                 # 内陆亮、沿海暗，再叠一点岩层噪点
                 edge = min(1.0, radius / max(limit, 0.01))
                 shade = 0.98 - 0.16 * edge + rng.uniform(-0.03, 0.03)
                 pix[x, y] = tuple(max(0, min(255, int(c * shade))) for c in base_color)
 
         # 海面上撒几座无人小岛，让画面不那么空
-        for _ in range(random.randint(2, 4)):
-            ang = random.uniform(0, math.tau)
-            dist = coast_r(ang) + random.uniform(0.07, 0.12)
+        for _ in range(rng.randint(2, 4)):
+            ang = rng.uniform(0, math.tau)
+            dist = coast_r(ang) + rng.uniform(0.07, 0.12)
             if dist > 0.44:
                 continue
             ix, iy = 0.5 + dist * math.cos(ang), 0.5 + dist * math.sin(ang)
-            isle_r = random.uniform(0.012, 0.020)
+            isle_r = rng.uniform(0.012, 0.020)
             for y in range(sh):
                 ny = (y + 0.5) / sh
                 if abs(ny - iy) > isle_r:
@@ -1415,6 +1453,9 @@ class CatStockPlugin:
             else:
                 x, y = int(seeds[idx][0] * width), int(seeds[idx][1] * height)
             label = _ERA0_SHORT_NAMES.get(code) or self._country_name(code) or code
+            gone = code in dead_set
+            if gone:
+                label = f"{label}（亡）"
             if font is not None:
                 # 与已有标签重叠时上下让位，避免挤成一团
                 for shift in (0, 42, -42, 84, -84, 126, -126):
@@ -1428,17 +1469,54 @@ class CatStockPlugin:
                         break
                 box = draw.textbbox((x, y), label, font=font, anchor="mm")
                 rect = (box[0] - 12, box[1] - 8, box[2] + 12, box[3] + 8)
-                draw.rectangle(rect, fill=(30, 32, 34))
-                draw.text((x, y), label, font=font, anchor="mm", fill=(236, 232, 220))
+                if gone:
+                    draw.rectangle(rect, fill=(62, 42, 42))
+                    draw.line([(rect[0], rect[3]), (rect[2], rect[1])],
+                              fill=(168, 96, 96), width=2)
+                    draw.text((x, y), label, font=font, anchor="mm", fill=(214, 188, 188))
+                else:
+                    draw.rectangle(rect, fill=(30, 32, 34))
+                    draw.text((x, y), label, font=font, anchor="mm", fill=(236, 232, 220))
                 placed.append(rect)
             else:
                 draw.rectangle((x - 30, y - 18, x + 30, y + 18), outline=(30, 32, 34), width=2)
                 draw.text((x - 20, y - 10), code, fill=(236, 232, 220))
+        # 商战：在交战双方国都之间打一个红叉，提醒这里正在打仗
+        if wars:
+            index_of = {code: i for i, code in enumerate(codes)}
+            small = None
+            for path in ("C:/Windows/Fonts/msyh.ttc", "C:/Windows/Fonts/simhei.ttf"):
+                try:
+                    small = ImageFont.truetype(path, 20)
+                    break
+                except (OSError, ValueError):
+                    continue
+            for war in wars:
+                ia = index_of.get(str(war.get("a", "")))
+                ib = index_of.get(str(war.get("b", "")))
+                if ia is None or ib is None:
+                    continue
+                ax, ay = seeds[ia]
+                bx, by = seeds[ib]
+                cx = int((ax + bx) / 2 * width)
+                cy = int((ay + by) / 2 * height)
+                size = 15
+                draw.line([(cx - size, cy - size), (cx + size, cy + size)],
+                          fill=(178, 44, 44), width=5)
+                draw.line([(cx - size, cy + size), (cx + size, cy - size)],
+                          fill=(178, 44, 44), width=5)
+                if small is not None and cy - size - 26 >= 0:
+                    draw.rectangle((cx - 26, cy - size - 26, cx + 26, cy - size - 4),
+                                   fill=(32, 20, 20))
+                    draw.text((cx, cy - size - 15), "商战", font=small,
+                              anchor="mm", fill=(236, 132, 132))
+
         # 四角压暗，做成旧羊皮卷的边框
         draw.rectangle((2, 2, width - 3, height - 3), outline=(24, 24, 24), width=4)
         try:
             img.save(CAT_STOCK_ERA_MAP_PATH, format="PNG")
-            _save_json(CAT_STOCK_ERA_MAP_META, {"codes": codes})
+            _save_json(CAT_STOCK_ERA_MAP_META, {"codes": codes, "seed": seed,
+                                                "dead": dead_sig, "wars": war_sig})
         except OSError:
             return ""
         return CAT_STOCK_ERA_MAP_PATH
@@ -5752,15 +5830,16 @@ class CatStockPlugin:
         era_paths = list(era_data.get("paths") or [])
         era_weights = self._path_weights(market, players, era_paths)
         era_weight_total = sum(era_weights) or 1.0
+
+        # 地图跟着世界状态走：亡国变灰、交战双方之间打红叉
+        era_map_url = self.era_map_url(market)
         era_view = {
             "index": era_index,
             "total": len(_ERAS),
             "name": era.get("name") or era_data["name"],
             "theme": era.get("theme") or era_data["theme"],
             "parent": era_data.get("parent"),
-            "map": ("/stock-assets/era_map.png"
-                    if self._ensure_era_map(list((market.get("countries") or {}).keys()))
-                    else ""),
+            "map": era_map_url,
             "started": era.get("started", ""),
             "ends": era.get("ends", ""),
             "cycle": int(era.get("cycle", 0) or 0),

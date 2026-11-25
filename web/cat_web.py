@@ -451,7 +451,7 @@ def relic_info(qq: int) -> dict:
             "score": score,
             "total_score": total_score,
             "chance": total_score / CatConfig.CAT_RELIC_DIVISOR,
-            "eureka": score / CatConfig.CAT_RELIC_EUREKA_DIVISOR,
+            "eureka": (total_score / CatConfig.CAT_RELIC_DIVISOR) ** 2,
             "rarity_counts": {k: v for k, v in counts.items() if v},
             "projects": _relic_project_view(code, relics, state, logs),
         })

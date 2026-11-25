@@ -41,7 +41,7 @@ class CatConfig:
     CAT_SIGNIN_BONUS_CAP = 2000    # 累计奖励上限
     CAT_SIGNIN_HIDDEN_MILESTONES = (50, 70, 90, 110, 130)  # 累计签到送隐秘喵喵的天数
     CAT_SIGNIN_HIDDEN_CAT_ID = "mah01"                    # 隐秘喵喵「优衣喵(H)」
-    CAT_WELCOME_FISH = 1000        # 新玩家初始
+    CAT_WELCOME_FISH = 1000        # 新玩家初始鱼干数
     CAT_DUP_REFUND_BY_RARITY = {"normal": 20, "rare": 50, "epic": 100,
                                 "legend": 500, "hidden": 1000}
 
@@ -102,8 +102,8 @@ class CatConfig:
     CAT_RELIC_RARITY_SCORE = {"normal": 2, "rare": 3, "epic": 4, "legend": 5, "hidden": 8}
     # 成功率 = (基础值 + 该国猫猫折算) ÷ 1000（无论是否进入斩杀线）
     CAT_RELIC_DIVISOR = 1000
-    # 尤里卡概率 = 该国猫猫折算 ÷ 10000；斩杀线前 +10 进度（最多到斩杀线），斩杀线后直接完成
-    CAT_RELIC_EUREKA_DIVISOR = 10000
+    # 尤里卡概率 = 成功率 × 成功率（成功后再用同样的成功率判定一次）；
+    # 斩杀线前 +10 进度（最多到斩杀线），斩杀线后直接完成
     CAT_RELIC_EUREKA_GAIN = 10        # 斩杀线前的尤里卡进度
     CAT_RELIC_FINAL_REMAIN = 100      # 斩杀线：距离完成还剩 100 进度
     CAT_RELIC_COMPLETE_FISH = 10000   # 完成者奖励

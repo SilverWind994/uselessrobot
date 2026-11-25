@@ -1877,7 +1877,8 @@ class CatExpeditionPlugin:
         kill_line = max(0, target - CatConfig.CAT_RELIC_FINAL_REMAIN)
         in_kill = progress >= kill_line
         chance = total_score / CatConfig.CAT_RELIC_DIVISOR
-        eureka_chance = score / CatConfig.CAT_RELIC_EUREKA_DIVISOR
+        # 尤里卡 = 成功后再用同样的成功率判定一次，两次都成功才触发
+        eureka_chance = chance * chance
         # 期望进度按本次研究瞬间的概率计算；斩杀阶段按「距离研究成功」的实际剩余数计算
         expected_gain = self._relic_expected_gain(
             chance, eureka_chance, progress, target, kill_line)
@@ -1907,8 +1908,8 @@ class CatExpeditionPlugin:
         progress += 1
         lines.append("研究成功！进度 +1")
 
-        # 尤里卡任何阶段都能触发；斩杀线前最多推到斩杀线，斩杀线后直接完成研究
-        if random.random() < eureka_chance:
+        # 尤里卡 = 再按同样的成功率判定一次；任何阶段都能触发，斩杀线前最多推到斩杀线
+        if random.random() < chance:
             if progress >= kill_line:
                 progress = max(progress, target)
                 lines.append("⚡ 尤里卡！灵感迸发，直接完成本次研究")
@@ -1956,14 +1957,17 @@ class CatExpeditionPlugin:
     @staticmethod
     def _relic_expected_gain(chance: float, eureka_chance: float,
                              progress: int, target: int, kill_line: int) -> float:
-        """一次研究的期望进度；斩杀阶段尤里卡直接完成，增量按实际剩余距离计算"""
+        """一次研究的期望进度；斩杀阶段尤里卡直接完成，增量按实际剩余距离计算
+
+        eureka_chance 是「一次研究触发尤里卡」的无条件概率（成功率平方）。
+        """
         chance = max(0.0, min(1.0, chance))
         after = progress + 1
         if after >= kill_line:
             eureka_gain = max(0, target - after)
         else:
             eureka_gain = min(CatConfig.CAT_RELIC_EUREKA_GAIN, kill_line - after)
-        expected = chance * (1 + eureka_chance * eureka_gain)
+        expected = chance + eureka_chance * eureka_gain
         return min(expected, float(max(0, target - progress)))
 
     def _append_relic_log(self, qq, player: dict, code: str, tier: int,

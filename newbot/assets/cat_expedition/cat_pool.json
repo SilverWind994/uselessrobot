@@ -1807,6 +1807,244 @@
             "weather": "雷暴",
             "terrain": "天空"
           }
+        },
+        {
+          "id": "aul05",
+          "name": "半吨喵",
+          "rarity": "legend",
+          "country": "au",
+          "job_path": [
+            "工匠学徒",
+            "铸匠",
+            "城垣卫"
+          ],
+          "trait_desc": "元素乱流·水晶矿脉",
+          "intro": "庭院里最沉的守卫，往门口一坐，整扇门就算封死了。不速之客试过很多次，最后都是被压扁着退回去的。",
+          "trait_affinity": {
+            "weather": "元素乱流",
+            "terrain": "水晶矿脉"
+          }
+        },
+        {
+          "id": "aul06",
+          "name": "小熊喵",
+          "rarity": "legend",
+          "country": "au",
+          "job_path": [
+            "工匠学徒",
+            "铸匠",
+            "鳞甲宗师"
+          ],
+          "trait_desc": "严寒·雪原",
+          "intro": "披着熊皮的老守夜人，毛厚得能挡刀。它把庭院的雪扫出一条路，好让半夜迷路的旅人也能敲到门。",
+          "trait_affinity": {
+            "weather": "严寒",
+            "terrain": "雪原"
+          }
+        },
+        {
+          "id": "aue08",
+          "name": "小叶子喵",
+          "rarity": "epic",
+          "country": "au",
+          "job_path": [
+            "法师学徒",
+            "理法师",
+            "森灵术士"
+          ],
+          "trait_desc": "暴雨·妖精之森",
+          "intro": "庭院里唯一的园丁。她让花在旧神的注视下照常开，也让人在长夜里照常睡。",
+          "trait_affinity": {
+            "weather": "暴雨",
+            "terrain": "妖精之森"
+          }
+        },
+        {
+          "id": "aue09",
+          "name": "喵露零",
+          "rarity": "epic",
+          "country": "au",
+          "job_path": [
+            "法师学徒",
+            "理法师",
+            "沧澜术士"
+          ],
+          "trait_desc": "暴雨·水域",
+          "intro": "雨落下来的时候她才出现，把庭院的积水一点点引回海里。有人说她本身就是一场还没停的雨。",
+          "trait_affinity": {
+            "weather": "暴雨",
+            "terrain": "水域"
+          }
+        },
+        {
+          "id": "aue10",
+          "name": "喵芙娜",
+          "rarity": "epic",
+          "country": "au",
+          "job_path": [
+            "法师学徒",
+            "光法师",
+            "圣光祭司"
+          ],
+          "trait_desc": "极光·龙巢",
+          "intro": "守在地下圣坛的圣女，龙巢上方的光是她点的。她相信再深的地方，也该有一盏灯。",
+          "trait_affinity": {
+            "weather": "极光",
+            "terrain": "龙巢"
+          }
+        },
+        {
+          "id": "aue11",
+          "name": "喵莉波卡",
+          "rarity": "epic",
+          "country": "au",
+          "job_path": [
+            "法师学徒",
+            "暗法师",
+            "死灵法师"
+          ],
+          "trait_desc": "月蚀·深渊裂隙",
+          "intro": "她替庭院收殓所有没等到天亮的东西。低语从地底渗上来，她就一句句把它们哄回去。",
+          "trait_affinity": {
+            "weather": "月蚀",
+            "terrain": "深渊裂隙"
+          }
+        },
+        {
+          "id": "aur15",
+          "name": "喵林之子",
+          "rarity": "rare",
+          "country": "au",
+          "job_path": [
+            "武者学徒",
+            "弓箭手",
+            "穿林猎手"
+          ],
+          "trait_desc": "元素乱流·沼泽",
+          "intro": "在后山沼泽里长大的猎手，箭上总带着湿泥。他不问来客是谁，只问要不要吃点什么。",
+          "trait_affinity": {
+            "weather": "元素乱流",
+            "terrain": "沼泽"
+          }
+        },
+        {
+          "id": "aur16",
+          "name": "僵尸喵",
+          "rarity": "rare",
+          "country": "au",
+          "job_path": [
+            "法师学徒",
+            "暗法师",
+            "疫源法师"
+          ],
+          "trait_desc": "阴·沼泽",
+          "intro": "半埋在沼泽里的老住客，早不记得自己是什么时候住进来的。它走得慢，它经过的地方更慢。",
+          "trait_affinity": {
+            "weather": "阴",
+            "terrain": "沼泽"
+          }
+        },
+        {
+          "id": "aur17",
+          "name": "喵格斯？",
+          "rarity": "rare",
+          "country": "au",
+          "job_path": [
+            "法师学徒",
+            "暗法师",
+            "暗蚀法师"
+          ],
+          "trait_desc": "魔力风暴·深渊裂隙",
+          "intro": "总站在最深那扇门后，替庭院记着不该被记起的名字。你若听见有人喊你，别回头。",
+          "trait_affinity": {
+            "weather": "魔力风暴",
+            "terrain": "深渊裂隙"
+          }
+        },
+        {
+          "id": "aur18",
+          "name": "喵潜者",
+          "rarity": "rare",
+          "country": "au",
+          "job_path": [
+            "法师学徒",
+            "理法师",
+            "沧澜术士"
+          ],
+          "trait_desc": "冰雹·深海",
+          "intro": "顺着潮水从深海爬上来的访客，鳞片里还夹着冰碴。它对庭院的茶很感兴趣，对你的名字也是。",
+          "trait_affinity": {
+            "weather": "冰雹",
+            "terrain": "深海"
+          }
+        },
+        {
+          "id": "aur19",
+          "name": "达贡喵",
+          "rarity": "rare",
+          "country": "au",
+          "job_path": [
+            "工匠学徒",
+            "铸匠",
+            "鳞甲宗师"
+          ],
+          "trait_desc": "魔力风暴·深海",
+          "intro": "深潜者的族老，披着一身旧甲。它在等一场涨潮，顺手替庭院挡着水底下的东西。",
+          "trait_affinity": {
+            "weather": "魔力风暴",
+            "terrain": "深海"
+          }
+        },
+        {
+          "id": "aur20",
+          "name": "法老喵",
+          "rarity": "rare",
+          "country": "au",
+          "job_path": [
+            "工匠学徒",
+            "铸匠",
+            "符文宗师"
+          ],
+          "trait_desc": "沙暴·沙漠",
+          "intro": "沙暴里走出来的旧王，身上的符咒比庭院还老。它不认字条，只认刻在骨头上的规矩。",
+          "trait_affinity": {
+            "weather": "沙暴",
+            "terrain": "沙漠"
+          }
+        },
+        {
+          "id": "aur21",
+          "name": "精灵喵(Y)",
+          "rarity": "rare",
+          "country": "au",
+          "job_path": [
+            "法师学徒",
+            "理法师",
+            "森灵术士"
+          ],
+          "trait_desc": "极光·妖精之森",
+          "intro": "从极光下的妖精之森来的小精灵，胆子很小，箭法很好。它把整个庭院当成一棵特别大的树。",
+          "trait_affinity": {
+            "weather": "极光",
+            "terrain": "妖精之森"
+          }
+        },
+        {
+          "id": "aur22",
+          "name": "星野喵",
+          "rarity": "rare",
+          "country": "au",
+          "job_path": [
+            "工匠学徒",
+            "技师",
+            "天翼卫"
+          ],
+          "trait_desc": "星陨·天空",
+          "intro": "夜里飞在屋顶上的守望者，把星星当成庭院的坐标。它记得每一颗星落下来的位置。",
+          "trait_affinity": {
+            "weather": "星陨",
+            "terrain": "天空"
+          }
         }
       ]
     },
@@ -1918,6 +2156,26 @@
         "mar09",
         "mar10",
         "mar11"
+      ]
+    },
+    "yog": {
+      "name": "庭院旧神",
+      "desc": "庭院旧神：这些喵喵来自「犹格索托斯的庭院」，在圣辉教国·奥雷利亚的庭院里接待不该被接待的客人。传说喵喵：半吨喵、小熊喵；史诗喵喵：小叶子喵、喵露零、喵芙娜、喵莉波卡。",
+      "cat_ids": [
+        "aul05",
+        "aul06",
+        "aue08",
+        "aue09",
+        "aue10",
+        "aue11",
+        "aur15",
+        "aur16",
+        "aur17",
+        "aur18",
+        "aur19",
+        "aur20",
+        "aur21",
+        "aur22"
       ]
     }
   }

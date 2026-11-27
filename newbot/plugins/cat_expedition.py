@@ -2092,8 +2092,21 @@ class CatExpeditionPlugin:
                              f"（{luck:+.1f}%）")
             else:
                 lines.append(f"全体合计：实际 {total_actual:.0f}")
-        lines.append("研究排行 <国家> <序号> —— 查看该项目双榜")
-        self._sender.reply(ctx, "\n".join(lines))
+        lines.append("研究排行 <国家> <序号> —— 查看该项目排行")
+        self._reply_lines(ctx, lines)
+
+    def _reply_lines(self, ctx: CommandContext, lines: list, limit: int = 1500) -> None:
+        """分段发送长文本：群消息过长会发送失败，也会让人看不过来"""
+        buf, size = [], 0
+        for line in lines:
+            length = len(line) + 1
+            if buf and size + length > limit:
+                self._sender.reply(ctx, "\n".join(buf))
+                buf, size = [], 0
+            buf.append(line)
+            size += length
+        if buf:
+            self._sender.reply(ctx, "\n".join(buf))
 
     def _reply_relic_rank(self, ctx: CommandContext, code: str, tier: int) -> None:
         """某个研究项目的完整双榜：实际进度、高于期望百分比（文字从简）"""
@@ -2116,7 +2129,7 @@ class CatExpeditionPlugin:
             lines.append(f"进度 {state['progress']}/{need}｜斩杀线 {kill_line}")
         if not entries:
             lines.append("这个项目还没有研究记录喵～（从现在开始记录）")
-            self._sender.reply(ctx, "\n".join(lines))
+            self._reply_lines(ctx, lines)
             return
 
         players = self._load_players()
@@ -2145,33 +2158,19 @@ class CatExpeditionPlugin:
         else:
             lines.append(f"全体合计：实际 {total_actual:.0f}")
 
-        lines.append(f"—— 实际进度（{len(agg)} 人 / {len(entries)} 次）——")
+        lines.append(f"—— 按期望排序（{len(agg)} 人 / {len(entries)} 次）——")
         for index, (key, stat) in enumerate(
-                sorted(agg.items(), key=lambda kv: (-kv[1]["actual"], kv[0])), 1):
+                sorted(agg.items(),
+                       key=lambda kv: (-kv[1]["expected"], -kv[1]["actual"], kv[0])), 1):
             if stat["expected"] > 0:
                 rate = (stat["actual"] - stat["expected"]) / stat["expected"] * 100
                 rate_text = f"{rate:+.1f}%"
             else:
                 rate_text = "—"
-            lines.append(f"{index}. {nick_of(key)} +{stat['actual']:.0f}"
-                         f"｜{stat['count']}次｜期望 {stat['expected']:.1f}｜{rate_text}")
-
-        lines.append("—— 高于期望 ——")
-        percent_rows = []
-        for key, stat in agg.items():
-            if stat["expected"] <= 0:
-                continue
-            rate = (stat["actual"] - stat["expected"]) / stat["expected"] * 100
-            percent_rows.append((key, stat, rate))
-        percent_rows.sort(key=lambda row: (-row[2], row[0]))
-        if not percent_rows:
-            lines.append("暂无足够数据")
-        for index, (key, stat, rate) in enumerate(percent_rows, 1):
-            lines.append(f"{index}. {nick_of(key)} {rate:+.1f}%"
-                         f"｜实际 {stat['actual']:.0f}｜期望 {stat['expected']:.1f}"
-                         f"｜{stat['count']}次")
+            lines.append(f"{index}. {nick_of(key)} 期望 {stat['expected']:.1f}"
+                         f"｜实际 {stat['actual']:.0f}｜{stat['count']}次｜{rate_text}")
         lines.append("实际按真实增量，斩杀阶段按剩余距离计算")
-        self._sender.reply(ctx, "\n".join(lines))
+        self._reply_lines(ctx, lines)
 
     def _reward_relic_completion(self, qq: int, player: dict) -> None:
         """研究完成：完成者拿全额奖励，其他玩家拿参与奖励"""

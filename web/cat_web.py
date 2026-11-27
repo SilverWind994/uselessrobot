@@ -538,9 +538,7 @@ def relic_rank(code: str, tier: int) -> dict:
             "expected": round(stat["expected"], 1),
             "rate": round(rate, 1) if rate is not None else None,
         })
-    rows.sort(key=lambda r: (-r["actual"], r["qq"]))
-    percent = sorted([r for r in rows if r["rate"] is not None],
-                     key=lambda r: (-r["rate"], r["qq"]))
+    rows.sort(key=lambda r: (-r["expected"], -r["actual"], r["qq"]))
 
     return {
         "ok": True,
@@ -563,7 +561,6 @@ def relic_rank(code: str, tier: int) -> dict:
             "players": len(agg),
         },
         "rows": rows,
-        "percent": percent,
     }
 
 

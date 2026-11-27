@@ -3943,20 +3943,10 @@ async function loadRelicRank(code, tier) {
       <span class="rank-no">${i + 1}</span>
       ${avatarHtml(r)}
       <span class="rank-name">${esc(r.name)}</span>
-      <span class="rank-val">+${r.actual}</span>
-      <span class="rank-reward">${r.count}次｜期望 ${r.expected}｜`
+      <span class="rank-val">期望 ${r.expected}</span>
+      <span class="rank-reward">实际 ${r.actual}｜${r.count}次｜`
       + `${r.rate == null ? '—' : `${r.rate > 0 ? '+' : ''}${r.rate}%`}</span>
     </div>`).join('');
-  const percentRows = data.percent.length
-    ? data.percent.map((r, i) => `
-      <div class="rank-row">
-        <span class="rank-no">${i + 1}</span>
-        ${avatarHtml(r)}
-        <span class="rank-name">${esc(r.name)}</span>
-        <span class="rank-val">${r.rate > 0 ? '+' : ''}${r.rate}%</span>
-        <span class="rank-reward">实际 ${r.actual}｜期望 ${r.expected}｜${r.count}次</span>
-      </div>`).join('')
-    : '<p class="room-empty">暂无足够数据</p>';
   const total = data.total || {};
   const totalRate = total.rate == null ? '—'
     : `${total.rate > 0 ? '+' : ''}${total.rate}%`;
@@ -3965,10 +3955,8 @@ async function loadRelicRank(code, tier) {
     + `｜偏差 <b>${totalRate}</b></div>`;
   relicRankBody.innerHTML = `
     ${totalLine}
-    <div class="relic-section-title">实际进度</div>
-    <div class="rank-list">${progressRows}</div>
-    <div class="relic-section-title">高于期望</div>
-    <div class="rank-list">${percentRows}</div>`;
+    <div class="relic-section-title">按期望排序</div>
+    <div class="rank-list">${progressRows}</div>`;
 }
 
 async function runRelicResearch(code) {

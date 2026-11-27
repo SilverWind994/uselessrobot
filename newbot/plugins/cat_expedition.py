@@ -2158,17 +2158,23 @@ class CatExpeditionPlugin:
         else:
             lines.append(f"全体合计：实际 {total_actual:.0f}")
 
-        lines.append(f"—— 按期望排序（{len(agg)} 人 / {len(entries)} 次）——")
-        for index, (key, stat) in enumerate(
-                sorted(agg.items(),
-                       key=lambda kv: (-kv[1]["expected"], -kv[1]["actual"], kv[0])), 1):
-            if stat["expected"] > 0:
-                rate = (stat["actual"] - stat["expected"]) / stat["expected"] * 100
-                rate_text = f"{rate:+.1f}%"
-            else:
-                rate_text = "—"
-            lines.append(f"{index}. {nick_of(key)} 期望 {stat['expected']:.1f}"
-                         f"｜实际 {stat['actual']:.0f}｜{stat['count']}次｜{rate_text}")
+        lines.append(f"—— {len(agg)} 人 / {len(entries)} 次 ——")
+
+        def rate_of(stat: dict):
+            return ((stat["actual"] - stat["expected"]) / stat["expected"] * 100
+                    if stat["expected"] > 0 else None)
+
+        # 高于期望越多排越前；没有期望数据的排在最后
+        ordered = sorted(agg.items(),
+                         key=lambda kv: (rate_of(kv[1]) is None,
+                                         -(rate_of(kv[1]) or 0),
+                                         -kv[1]["actual"], kv[0]))
+        for index, (key, stat) in enumerate(ordered, 1):
+            rate = rate_of(stat)
+            rate_text = "—" if rate is None else f"{rate:+.1f}%"
+            lines.append(f"{index}. {nick_of(key)} {rate_text}"
+                         f"｜期望 {stat['expected']:.1f}｜实际 {stat['actual']:.0f}"
+                         f"｜{stat['count']}次")
         lines.append("实际按真实增量，斩杀阶段按剩余距离计算")
         self._reply_lines(ctx, lines)
 

@@ -3943,9 +3943,8 @@ async function loadRelicRank(code, tier) {
       <span class="rank-no">${i + 1}</span>
       ${avatarHtml(r)}
       <span class="rank-name">${esc(r.name)}</span>
-      <span class="rank-val">期望 ${r.expected}</span>
-      <span class="rank-reward">实际 ${r.actual}｜${r.count}次｜`
-      + `${r.rate == null ? '—' : `${r.rate > 0 ? '+' : ''}${r.rate}%`}</span>
+      <span class="rank-val">${r.rate == null ? '—' : `${r.rate > 0 ? '+' : ''}${r.rate}%`}</span>
+      <span class="rank-reward">期望 ${r.expected}｜实际 ${r.actual}｜${r.count}次</span>
     </div>`).join('');
   const total = data.total || {};
   const totalRate = total.rate == null ? '—'
@@ -3955,7 +3954,6 @@ async function loadRelicRank(code, tier) {
     + `｜偏差 <b>${totalRate}</b></div>`;
   relicRankBody.innerHTML = `
     ${totalLine}
-    <div class="relic-section-title">按期望排序</div>
     <div class="rank-list">${progressRows}</div>`;
 }
 

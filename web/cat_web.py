@@ -477,7 +477,7 @@ def relic_info(qq: int) -> dict:
 
 
 def relic_rank(code: str, tier: int) -> dict:
-    """某个研究项目的完整双榜：实际进度、高于期望百分比（tier 从 0 开始）"""
+    """某个研究项目的完整排行：高于期望越多排越前（tier 从 0 开始）"""
     relics = CatConfig.CAT_RELICS.get(code) or []
     if not relics:
         return {"ok": False, "msg": "这个国家还没有遗物喵"}
@@ -538,7 +538,9 @@ def relic_rank(code: str, tier: int) -> dict:
             "expected": round(stat["expected"], 1),
             "rate": round(rate, 1) if rate is not None else None,
         })
-    rows.sort(key=lambda r: (-r["expected"], -r["actual"], r["qq"]))
+    # 高于期望越多排越前；没有期望数据的排在最后
+    rows.sort(key=lambda r: (r["rate"] is None, -(r["rate"] or 0),
+                             -r["actual"], r["qq"]))
 
     return {
         "ok": True,

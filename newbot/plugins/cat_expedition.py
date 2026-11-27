@@ -1049,21 +1049,22 @@ class CatExpeditionPlugin:
 
     # ==================== 猫眼石兑换 ====================
 
+    @staticmethod
+    def _redeem_cost(rarity: str) -> int:
+        """按稀有度取兑换价，表里没有的（传说等）用基础价"""
+        return int(CatConfig.CAT_EYE_STONE_COST_BY_RARITY.get(
+            rarity, CatConfig.CAT_EYE_STONE_COST))
+
     def cmd_redeem(self, ctx: CommandContext) -> None:
         args = ctx.get_args().strip()
         if not args:
+            prices = []
+            for rar in ("normal", "rare", "epic", "legend"):
+                prices.append(f"{CatConfig.CAT_RARITY_NAMES[rar]}"
+                              f" {self._redeem_cost(rar)}")
             self._sender.reply(
-                ctx, f"用法：兑换喵 <名字>\n需要 {CatConfig.CAT_EYE_STONE_COST} 个猫眼石兑换指定喵喵"
-            )
-            return
-
-        player = self._get_player(ctx.user_id)
-        stones = player.get("eye_stones", 0)
-
-        if stones < CatConfig.CAT_EYE_STONE_COST:
-            need = CatConfig.CAT_EYE_STONE_COST - stones
-            self._sender.reply(
-                ctx, f"猫眼石不够啦！需要 {CatConfig.CAT_EYE_STONE_COST}，还差 {need} 个"
+                ctx, "用法：兑换喵 <名字>\n"
+                     f"兑换价：{' / '.join(prices)} 猫眼石"
             )
             return
 
@@ -1083,9 +1084,20 @@ class CatExpeditionPlugin:
             self._sender.reply(ctx, "隐秘喵喵只能用累计签到获得，不能兑换喵")
             return
 
+        cost = self._redeem_cost(target.get("rarity"))
+        player = self._get_player(ctx.user_id)
+        stones = player.get("eye_stones", 0)
+
+        if stones < cost:
+            need = cost - stones
+            self._sender.reply(
+                ctx, f"猫眼石不够啦！兑换这只需要 {cost}，还差 {need} 个"
+            )
+            return
+
         # 扣猫眼石，直接grant给玩家（不走概率，固定这只）
         self._change_currency(ctx.user_id, player, "eye_stones",
-                              -CatConfig.CAT_EYE_STONE_COST,
+                              -cost,
                               f"图鉴兑换·{target['name']}")
         result = self._grant_cat(player, target, ctx.user_id)
         self._update_player(ctx.user_id, player)

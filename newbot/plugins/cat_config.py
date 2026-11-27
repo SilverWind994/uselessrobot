@@ -45,9 +45,11 @@ class CatConfig:
     CAT_DUP_REFUND_BY_RARITY = {"normal": 20, "rare": 50, "epic": 100,
                                 "legend": 500, "hidden": 1000}
 
-    # 猫眼石（抽卡积累，100换一只指定猫。仅由抽卡动作产生）
+    # 猫眼石（抽卡积累，按稀有度换指定猫。仅由抽卡动作产生）
     CAT_EYE_STONE_PER_SUMMON = 1
-    CAT_EYE_STONE_COST = 100
+    # 按稀有度的兑换价（隐秘喵不可兑换）
+    CAT_EYE_STONE_COST_BY_RARITY = {"normal": 10, "rare": 30, "epic": 60}
+    CAT_EYE_STONE_COST = 100          # 传说及以上
 
     # ==================== 喵保险 ====================
     # 购买后，接下来 10 次付费抽卡全部为普通（normal）才触发赔付；
